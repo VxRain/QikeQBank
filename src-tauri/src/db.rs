@@ -920,7 +920,7 @@ pub fn questions_get(id: String, state: State<'_, AppState>) -> Result<Value, St
 #[tauri::command]
 pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    questions_create_impl(&conn, data)
+    ok(questions_create_impl(&conn, data)?)
 }
 
 fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<Value, String> {
@@ -982,7 +982,7 @@ pub fn questions_update(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    questions_update_impl(&conn, &id, data)
+    ok(questions_update_impl(&conn, &id, data)?)
 }
 
 fn questions_update_impl(conn: &Connection, id: &str, data: Value) -> Result<Value, String> {
@@ -1182,7 +1182,7 @@ fn review_due_impl(
 #[tauri::command]
 pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    review_stats_impl(&conn, bank_id)
+    ok(review_stats_impl(&conn, bank_id)?)
 }
 
 fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value, String> {
@@ -2135,6 +2135,24 @@ mod tests {
         let counting = banks_list_impl(&conn).unwrap();
         let eb = counting.iter().find(|b| b["id"] == bid).unwrap();
         assert_eq!(eb["question_count"], 2);
+    }
+
+    #[test]
+    fn command_envelopes_wrap_impl_results() {
+        // 回归：wrapper 必须包 {success,data} 信封（曾因 impl 重构漏包导致前端 res.data=undefined）
+        let conn = test_conn();
+        let st = review_stats_impl(&conn, None).unwrap();
+        assert!(st.get("total").is_some());
+        assert!(st.get("by_type").is_some());
+        assert!(st.get("records_7d").is_some());
+        let wrapped = ok(st).unwrap();
+        assert_eq!(wrapped["success"], json!(true));
+        assert!(wrapped.get("data").is_some());
+
+        let q = sample_question();
+        let created = ok(questions_create_impl(&conn, q).unwrap()).unwrap();
+        assert_eq!(created["success"], json!(true));
+        assert!(created["data"]["id"].is_string());
     }
 }
 
