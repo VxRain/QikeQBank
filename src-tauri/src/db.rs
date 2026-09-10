@@ -1,0 +1,1306 @@
+use chrono::{DateTime, Duration, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager, State};
+
+// ---------------------------------------------------------------------------
+// SQLite DDL — must match PLAN §3 character-for-character
+// ---------------------------------------------------------------------------
+pub const MIGRATIONS: &str = r#"CREATE TABLE IF NOT EXISTS questions (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('single','multi','judge','fill','short','material')),
+  version INTEGER NOT NULL DEFAULT 2,
+  difficulty INTEGER NOT NULL DEFAULT 2,
+  score REAL,
+  status TEXT NOT NULL DEFAULT 'published',
+  stem_json TEXT NOT NULL,
+  options_json TEXT,
+  answer_json TEXT,
+  analysis_json TEXT,
+  children_json TEXT,
+  plain_text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
+CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
+CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
+
+CREATE TABLE IF NOT EXISTS practice_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
+  grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),
+  correct INTEGER NOT NULL,
+  answered_at TEXT NOT NULL,
+  elapsed_ms INTEGER,
+  detail_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
+CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
+
+CREATE TABLE IF NOT EXISTS review_state (
+  question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+  ease REAL NOT NULL DEFAULT 2.5,
+  interval_days REAL NOT NULL DEFAULT 0,
+  reps INTEGER NOT NULL DEFAULT 0,
+  lapses INTEGER NOT NULL DEFAULT 0,
+  due_at TEXT NOT NULL,
+  last_result TEXT,
+  last_reviewed_at TEXT
+);"#;
+
+// ---------------------------------------------------------------------------
+// AppState & connection setup
+// ---------------------------------------------------------------------------
+/// rusqlite::Connection is not Sync, so it lives behind a Mutex; commands take
+/// a short lock per call.
+pub struct AppState(pub Mutex<Connection>);
+
+pub fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(p) = std::env::var("QKEBANK_DB") {
+        if !p.trim().is_empty() {
+            return Ok(PathBuf::from(p));
+        }
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app_data_dir failed: {e}"))?;
+    Ok(dir.join("qbank.db"))
+}
+
+fn open_connection(path: &PathBuf) -> Result<Connection, String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create db dir failed: {e}"))?;
+    }
+    let conn = Connection::open(path).map_err(|e| format!("open db failed: {e}"))?;
+    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")
+        .map_err(|e| format!("db pragma failed: {e}"))?;
+    Ok(conn)
+}
+
+/// Called from setup: resolve db path, run the DDL, and publish AppState.
+pub fn ensure_schema(app: &AppHandle) -> Result<(), String> {
+    let path = resolve_db_path(app)?;
+    let conn = open_connection(&path)?;
+    conn.execute_batch(MIGRATIONS)
+        .map_err(|e| format!("schema init failed: {e}"))?;
+    app.manage(AppState(Mutex::new(conn)));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+fn to_str<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
+
+fn fmt_iso(dt: DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+fn now_iso() -> String {
+    fmt_iso(Utc::now())
+}
+
+fn ok(data: Value) -> Result<Value, String> {
+    Ok(json!({ "success": true, "data": data }))
+}
+
+static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// q_{unixms}_{4hex}
+fn generate_id() -> String {
+    let ms = Utc::now().timestamp_millis();
+    let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let mix = (nanos as u64)
+        .wrapping_mul(0x9E37_79B9)
+        .wrapping_add((std::process::id() as u64) << 16)
+        .wrapping_add(n << 8);
+    format!("q_{}_{:04x}", ms, mix & 0xFFFF)
+}
+
+// ---------------------------------------------------------------------------
+// plain_text extraction — mirrors server/routes/questions.js getPlainText /
+// getAggregatedPlainText
+// ---------------------------------------------------------------------------
+fn plain_text_of_doc(doc: &Value) -> String {
+    if !doc.is_object() {
+        return String::new();
+    }
+    let has_content = doc.get("content").map_or(false, Value::is_array);
+    if !has_content {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(content) = doc.get("content").and_then(Value::as_array) {
+        for node in content {
+            let t = node.get("type").and_then(Value::as_str).unwrap_or("");
+            match t {
+                "paragraph" => {
+                    let mut s = String::new();
+                    if let Some(inner) = node.get("content").and_then(Value::as_array) {
+                        for c in inner {
+                            let ct = c.get("type").and_then(Value::as_str).unwrap_or("");
+                            match ct {
+                                "text" => s.push_str(
+                                    c.get("text").and_then(Value::as_str).unwrap_or(""),
+                                ),
+                                "inlineMath" => {
+                                    s.push(' ');
+                                    s.push_str(
+                                        c.get("attrs")
+                                            .and_then(|a| a.get("latex"))
+                                            .and_then(Value::as_str)
+                                            .unwrap_or(""),
+                                    );
+                                    s.push(' ');
+                                }
+                                "blank" => s.push_str(" ___ "),
+                                _ => {}
+                            }
+                        }
+                    }
+                    parts.push(s);
+                }
+                "imageBlock" => parts.push(" [图] ".to_string()),
+                "mathBlock" => {
+                    let latex = node
+                        .get("attrs")
+                        .and_then(|a| a.get("latex"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    parts.push(format!(" {latex} "));
+                }
+                _ => {}
+            }
+        }
+    }
+    parts.join(" ").trim().to_string()
+}
+
+fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_space = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+            }
+            prev_space = true;
+        } else {
+            out.push(ch);
+            prev_space = false;
+        }
+    }
+    out
+}
+
+/// Aggregates full text of a question: for material questions this includes
+/// the stems/options/reference/analysis of all children.
+fn aggregated_plain_text(q: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(plain_text_of_doc(q.get("stem").unwrap_or(&Value::Null)));
+
+    let is_material = q.get("type").and_then(Value::as_str) == Some("material");
+    let children: Vec<&Value> = if is_material {
+        q.get("children")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    for c in &children {
+        parts.push(plain_text_of_doc(c.get("stem").unwrap_or(&Value::Null)));
+        if let Some(opts) = c.get("options").and_then(Value::as_array) {
+            for o in opts {
+                parts.push(plain_text_of_doc(o.get("content").unwrap_or(&Value::Null)));
+            }
+        }
+        if let Some(answer) = c.get("answer") {
+            if let Some(reference) = answer.get("reference") {
+                if !reference.is_null() {
+                    parts.push(plain_text_of_doc(reference));
+                }
+            }
+        }
+        if let Some(analysis) = c.get("analysis") {
+            if !analysis.is_null() {
+                parts.push(plain_text_of_doc(analysis));
+            }
+        }
+    }
+
+    if children.is_empty() {
+        if let Some(opts) = q.get("options").and_then(Value::as_array) {
+            for o in opts {
+                parts.push(plain_text_of_doc(o.get("content").unwrap_or(&Value::Null)));
+            }
+        }
+    }
+    if let Some(answer) = q.get("answer") {
+        if let Some(reference) = answer.get("reference") {
+            if !reference.is_null() {
+                parts.push(plain_text_of_doc(reference));
+            }
+        }
+    }
+    if let Some(analysis) = q.get("analysis") {
+        if !analysis.is_null() {
+            parts.push(plain_text_of_doc(analysis));
+        }
+    }
+
+    collapse_whitespace(&parts.join(" ")).trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// SM-2 spaced repetition (PLAN §5)
+// ---------------------------------------------------------------------------
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewSnapshot {
+    pub ease: f64,
+    pub interval_days: f64,
+    pub reps: i64,
+    pub lapses: i64,
+    pub due_at: String,
+}
+
+impl Default for ReviewSnapshot {
+    fn default() -> Self {
+        ReviewSnapshot {
+            ease: 2.5,
+            interval_days: 0.0,
+            reps: 0,
+            lapses: 0,
+            due_at: String::new(),
+        }
+    }
+}
+
+const DAY_MS: f64 = 86_400_000.0;
+
+/// Applies one SM-2 grade on top of `current` state.
+pub fn sm2_next(current: &ReviewSnapshot, grade: &str, now: DateTime<Utc>) -> ReviewSnapshot {
+    let mut ease = current.ease;
+    let mut interval = current.interval_days;
+    let mut reps = current.reps;
+    let mut lapses = current.lapses;
+
+    let due = match grade {
+        "again" => {
+            lapses += 1;
+            reps = 0;
+            ease = (ease - 0.20).max(1.3);
+            interval = 0.0;
+            now
+        }
+        "hard" => {
+            reps += 1;
+            ease = (ease - 0.15).max(1.3);
+            interval = ((interval * 1.2).round()).max(1.0);
+            now + Duration::milliseconds((interval * DAY_MS) as i64)
+        }
+        "good" => {
+            reps += 1;
+            ease = (ease + 0.10).min(3.0);
+            interval = if reps == 1 {
+                1.0
+            } else if reps == 2 {
+                6.0
+            } else {
+                (interval * ease).round()
+            };
+            now + Duration::milliseconds((interval * DAY_MS) as i64)
+        }
+        "easy" => {
+            reps += 1;
+            ease = (ease + 0.15).min(3.0);
+            interval = if interval == 0.0 {
+                2.0
+            } else {
+                (interval * 2.0).round()
+            };
+            interval = interval.max(2.0);
+            now + Duration::milliseconds((interval * DAY_MS) as i64)
+        }
+        _ => {
+            return current.clone();
+        }
+    };
+
+    ReviewSnapshot {
+        ease,
+        interval_days: interval,
+        reps,
+        lapses,
+        due_at: fmt_iso(due),
+    }
+}
+
+fn sm2_update(conn: &Connection, question_id: &str, grade: &str, now: DateTime<Utc>) -> Result<(), String> {
+    let existing: Option<(f64, f64, i64, i64)> = conn
+        .query_row(
+            "SELECT ease, interval_days, reps, lapses FROM review_state WHERE question_id = ?1",
+            params![question_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(to_str)?;
+
+    let base = match existing {
+        Some((e, i, r, l)) => ReviewSnapshot {
+            ease: e,
+            interval_days: i,
+            reps: r,
+            lapses: l,
+            due_at: String::new(),
+        },
+        None => ReviewSnapshot::default(),
+    };
+    let next = sm2_next(&base, grade, now);
+    let reviewed_at = fmt_iso(now);
+
+    conn.execute(
+        "INSERT INTO review_state (question_id, ease, interval_days, reps, lapses, due_at, last_result, last_reviewed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(question_id) DO UPDATE SET
+           ease = excluded.ease,
+           interval_days = excluded.interval_days,
+           reps = excluded.reps,
+           lapses = excluded.lapses,
+           due_at = excluded.due_at,
+           last_result = excluded.last_result,
+           last_reviewed_at = excluded.last_reviewed_at",
+        params![
+            question_id,
+            next.ease,
+            next.interval_days,
+            next.reps,
+            next.lapses,
+            next.due_at,
+            grade,
+            reviewed_at
+        ],
+    )
+    .map_err(to_str)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Question row read/write helpers
+// ---------------------------------------------------------------------------
+const SELECT_FIELDS: &str = "id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at";
+const SELECT_FIELDS_Q: &str = "q.id, q.type, q.version, q.difficulty, q.score, q.status, q.stem_json, q.options_json, q.answer_json, q.analysis_json, q.children_json, q.plain_text, q.created_at, q.updated_at";
+
+fn parse_json_opt(s: Option<String>) -> Value {
+    match s {
+        None => Value::Null,
+        Some(s) => serde_json::from_str(&s).unwrap_or(Value::Null),
+    }
+}
+
+fn row_to_question(row: &rusqlite::Row) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "id": row.get::<_, String>("id")?,
+        "type": row.get::<_, String>("type")?,
+        "version": row.get::<_, i64>("version")?,
+        "difficulty": row.get::<_, i64>("difficulty")?,
+        "score": row.get::<_, Option<f64>>("score")?,
+        "status": row.get::<_, String>("status")?,
+        "stem": parse_json_opt(row.get::<_, Option<String>>("stem_json")?),
+        "options": parse_json_opt(row.get::<_, Option<String>>("options_json")?),
+        "answer": parse_json_opt(row.get::<_, Option<String>>("answer_json")?),
+        "analysis": parse_json_opt(row.get::<_, Option<String>>("analysis_json")?),
+        "children": parse_json_opt(row.get::<_, Option<String>>("children_json")?),
+        "plain_text": row.get::<_, String>("plain_text")?,
+        "created_at": row.get::<_, String>("created_at")?,
+        "updated_at": row.get::<_, String>("updated_at")?,
+    }))
+}
+
+fn query_questions(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Value>, String> {
+    let mut stmt = conn.prepare(sql).map_err(to_str)?;
+    let mut rows = stmt.query(p).map_err(to_str)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        out.push(row_to_question(row).map_err(to_str)?);
+    }
+    Ok(out)
+}
+
+fn fetch_question(conn: &Connection, id: &str) -> Result<Option<Value>, String> {
+    let sql = format!("SELECT {SELECT_FIELDS} FROM questions WHERE id = ?1");
+    let rows = query_questions(conn, &sql, params![id])?;
+    Ok(rows.into_iter().next())
+}
+
+struct QuestionFields {
+    id: String,
+    typ: String,
+    version: i64,
+    difficulty: i64,
+    score: Option<f64>,
+    status: String,
+    stem_json: String,
+    options_json: Option<String>,
+    answer_json: Option<String>,
+    analysis_json: Option<String>,
+    children_json: Option<String>,
+    plain_text: String,
+    created_at: String,
+    updated_at: String,
+}
+
+fn extract_fields(q: &Value) -> Result<QuestionFields, String> {
+    if !q.is_object() {
+        return Err("question data must be a JSON object".into());
+    }
+    let ser = |key: &str| -> Result<Option<String>, String> {
+        match q.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => Ok(Some(serde_json::to_string(v).map_err(to_str)?)),
+        }
+    };
+    let get_str = |key: &str| -> Option<String> {
+        q.get(key).and_then(Value::as_str).map(|s| s.to_string())
+    };
+    Ok(QuestionFields {
+        id: q.get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or("missing id")?
+            .to_string(),
+        typ: get_str("type").ok_or("missing type")?,
+        version: q.get("version").and_then(Value::as_i64).unwrap_or(2),
+        difficulty: q
+            .get("difficulty")
+            .and_then(Value::as_i64)
+            .unwrap_or(2),
+        score: q.get("score").and_then(Value::as_f64),
+        status: get_str("status")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "published".to_string()),
+        stem_json: serde_json::to_string(q.get("stem").unwrap_or(&Value::Null)).map_err(to_str)?,
+        options_json: ser("options")?,
+        answer_json: ser("answer")?,
+        analysis_json: ser("analysis")?,
+        children_json: ser("children")?,
+        plain_text: get_str("plain_text").unwrap_or_default(),
+        created_at: get_str("created_at").ok_or("missing created_at")?,
+        updated_at: get_str("updated_at").ok_or("missing updated_at")?,
+    })
+}
+
+fn insert_question(conn: &Connection, q: &Value) -> Result<(), String> {
+    let f = extract_fields(q)?;
+    conn.execute(
+        "INSERT INTO questions (id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            f.id, f.typ, f.version, f.difficulty, f.score, f.status, f.stem_json, f.options_json,
+            f.answer_json, f.analysis_json, f.children_json, f.plain_text, f.created_at, f.updated_at
+        ],
+    )
+    .map_err(|e| format!("insert question failed: {e}"))?;
+    Ok(())
+}
+
+fn upsert_question(conn: &Connection, q: &Value) -> Result<(), String> {
+    let f = extract_fields(q)?;
+    conn.execute(
+        "INSERT INTO questions (id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT(id) DO UPDATE SET
+           type = excluded.type,
+           version = excluded.version,
+           difficulty = excluded.difficulty,
+           score = excluded.score,
+           status = excluded.status,
+           stem_json = excluded.stem_json,
+           options_json = excluded.options_json,
+           answer_json = excluded.answer_json,
+           analysis_json = excluded.analysis_json,
+           children_json = excluded.children_json,
+           plain_text = excluded.plain_text,
+           created_at = questions.created_at,
+           updated_at = excluded.updated_at",
+        params![
+            f.id, f.typ, f.version, f.difficulty, f.score, f.status, f.stem_json, f.options_json,
+            f.answer_json, f.analysis_json, f.children_json, f.plain_text, f.created_at, f.updated_at
+        ],
+    )
+    .map_err(|e| format!("upsert question failed: {e}"))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Commands (PLAN §4)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn questions_list(
+    query: Option<String>,
+    type_filter: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let query = query.filter(|s| !s.trim().is_empty());
+    let type_filter = type_filter.filter(|s| !s.is_empty());
+    let sql = format!(
+        "SELECT {SELECT_FIELDS} FROM questions
+         WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%' OR id LIKE '%'||?1||'%')
+           AND (?2 IS NULL OR type = ?2)
+         ORDER BY created_at DESC"
+    );
+    let rows = query_questions(&conn, &sql, params![query, type_filter])?;
+    ok(json!(rows))
+}
+
+#[tauri::command]
+pub fn questions_get(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    match fetch_question(&conn, &id)? {
+        Some(q) => ok(q),
+        None => Err("Not Found".into()),
+    }
+}
+
+#[tauri::command]
+pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value, String> {
+    let mut q = data;
+    if !q.is_object() {
+        return Err("data must be a JSON object".into());
+    }
+    let id = match q.get("id").and_then(Value::as_str) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => generate_id(),
+    };
+    let now = now_iso();
+    q["id"] = json!(id);
+    if q.get("created_at")
+        .and_then(Value::as_str)
+        .map_or(true, |s| s.is_empty())
+    {
+        q["created_at"] = json!(now.clone());
+    }
+    if q.get("updated_at")
+        .and_then(Value::as_str)
+        .map_or(true, |s| s.is_empty())
+    {
+        q["updated_at"] = json!(now);
+    }
+    if q.get("version").and_then(Value::as_i64).is_none() {
+        q["version"] = json!(2);
+    }
+    if q.get("status").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+        q["status"] = json!("published");
+    }
+    q["plain_text"] = json!(aggregated_plain_text(&q));
+
+    let conn = state.0.lock().map_err(to_str)?;
+    let stored_id = q["id"].as_str().unwrap_or("").to_string();
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM questions WHERE id = ?1",
+            params![stored_id],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(to_str)?
+        .unwrap_or(false);
+    if exists {
+        return Err("ID 已存在".into());
+    }
+    insert_question(&conn, &q)?;
+    let stored = fetch_question(&conn, &stored_id)?.ok_or("stored question missing")?;
+    ok(stored)
+}
+
+#[tauri::command]
+pub fn questions_update(
+    id: String,
+    data: Value,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if !data.is_object() {
+        return Err("data must be a JSON object".into());
+    }
+    let conn = state.0.lock().map_err(to_str)?;
+    let old = fetch_question(&conn, &id)?;
+
+    let mut merged = data;
+    if let Some(old) = old {
+        if let Some(om) = old.as_object() {
+            if let Some(mm) = merged.as_object_mut() {
+                for (k, v) in om {
+                    // body wins for present keys; fill missing ones from old
+                    // (created_at preserved here; id/plain_text forced below)
+                    if k != "plain_text" && !mm.contains_key(k) {
+                        mm.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+    let now = now_iso();
+    merged["id"] = json!(id.clone());
+    merged["updated_at"] = json!(now.clone());
+    if merged
+        .get("created_at")
+        .and_then(Value::as_str)
+        .map_or(true, |s| s.is_empty())
+    {
+        merged["created_at"] = json!(now);
+    }
+    if merged.get("version").and_then(Value::as_i64).is_none() {
+        merged["version"] = json!(2);
+    }
+    if merged
+        .get("status")
+        .and_then(Value::as_str)
+        .map_or(true, |s| s.is_empty())
+    {
+        merged["status"] = json!("published");
+    }
+    merged["plain_text"] = json!(aggregated_plain_text(&merged));
+
+    upsert_question(&conn, &merged)?;
+    let stored = fetch_question(&conn, &id)?.ok_or("stored question missing")?;
+    ok(stored)
+}
+
+#[tauri::command]
+pub fn questions_remove(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let n = conn
+        .execute("DELETE FROM questions WHERE id = ?1", params![id])
+        .map_err(to_str)?;
+    if n == 0 {
+        return Err("Not Found".into());
+    }
+    ok(json!({ "id": id }))
+}
+
+#[tauri::command]
+pub fn practice_pool(
+    limit: Option<u64>,
+    type_filter: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let limit = limit.unwrap_or(20).min(500) as i64;
+    let type_filter = type_filter.filter(|s| !s.is_empty());
+    let sql = format!(
+        "SELECT {SELECT_FIELDS} FROM questions
+         WHERE (?1 IS NULL OR type = ?1)
+         ORDER BY RANDOM() LIMIT ?2"
+    );
+    let rows = query_questions(&conn, &sql, params![type_filter, limit])?;
+    ok(json!(rows))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RecordItem {
+    pub question_id: String,
+    pub mode: String,
+    pub grade: Option<String>,
+    pub correct: Option<bool>,
+    pub elapsed_ms: Option<i64>,
+    pub detail: Option<Value>,
+}
+
+#[tauri::command]
+pub fn record_answer(
+    items: Vec<RecordItem>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let mut conn = state.0.lock().map_err(to_str)?;
+    let tx = conn.transaction().map_err(to_str)?;
+    let now = Utc::now();
+    let now_str = fmt_iso(now);
+    let mut inserted: i64 = 0;
+
+    for item in &items {
+        if !matches!(item.mode.as_str(), "practice" | "review" | "exam") {
+            return Err(format!("invalid mode: {}", item.mode));
+        }
+        let grade = match item.mode.as_str() {
+            "practice" => {
+                if item.correct.unwrap_or(false) {
+                    "good".to_string()
+                } else {
+                    "again".to_string()
+                }
+            }
+            _ => {
+                let g = item
+                    .grade
+                    .clone()
+                    .ok_or_else(|| "grade is required for review/exam mode".to_string())?;
+                if !["again", "hard", "good", "easy"].contains(&g.as_str()) {
+                    return Err(format!("invalid grade: {g}"));
+                }
+                g
+            }
+        };
+        // correct lands as grade ∈ {good, easy}; frontend's correct field is
+        // only redundant reference.
+        let correct: i64 = if matches!(grade.as_str(), "good" | "easy") {
+            1
+        } else {
+            0
+        };
+        let detail_opt: Option<String> = match &item.detail {
+            Some(v) => Some(serde_json::to_string(v).map_err(to_str)?),
+            None => None,
+        };
+
+        tx.execute(
+            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                item.question_id,
+                item.mode,
+                grade,
+                correct,
+                now_str,
+                item.elapsed_ms,
+                detail_opt
+            ],
+        )
+        .map_err(to_str)?;
+        inserted += 1;
+        sm2_update(&tx, &item.question_id, &grade, now).map_err(to_str)?;
+    }
+
+    tx.commit().map_err(to_str)?;
+    ok(json!({ "inserted": inserted }))
+}
+
+#[tauri::command]
+pub fn review_due(limit: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let limit = limit.unwrap_or(20).min(500) as i64;
+    let now = now_iso();
+    let sql = format!(
+        "SELECT {SELECT_FIELDS_Q} FROM questions q
+         JOIN review_state r ON r.question_id = q.id
+         WHERE r.due_at <= ?1
+         ORDER BY r.due_at ASC
+         LIMIT ?2"
+    );
+    let rows = query_questions(&conn, &sql, params![now, limit])?;
+    ok(json!(rows))
+}
+
+#[tauri::command]
+pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let now = Utc::now();
+    let start_today = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|d| d.and_utc())
+        .ok_or("invalid date")?;
+    let end_today = start_today + Duration::days(1);
+    let start_7d = start_today - Duration::days(6);
+
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM questions", [], |r| r.get(0))
+        .map_err(to_str)?;
+
+    let mut by_type = json!({
+        "single": 0, "multi": 0, "judge": 0, "fill": 0, "short": 0, "material": 0
+    });
+    {
+        let mut stmt = conn
+            .prepare("SELECT type, COUNT(*) FROM questions GROUP BY type")
+            .map_err(to_str)?;
+        let mut rows = stmt.query([]).map_err(to_str)?;
+        while let Some(row) = rows.next().map_err(to_str)? {
+            let t: String = row.get(0).map_err(to_str)?;
+            let c: i64 = row.get(1).map_err(to_str)?;
+            if let Some(v) = by_type.get_mut(t.as_str()) {
+                *v = json!(c);
+            }
+        }
+    }
+
+    let due_total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM review_state WHERE due_at <= ?1",
+            params![fmt_iso(now)],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
+    let due_today: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM review_state WHERE due_at <= ?1",
+            params![fmt_iso(end_today)],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
+
+    let practiced_total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM practice_records", [], |r| r.get(0))
+        .map_err(to_str)?;
+    let practiced_today: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM practice_records WHERE answered_at >= ?1",
+            params![fmt_iso(start_today)],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
+
+    let (rec_total, rec_correct): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(correct), 0) FROM practice_records",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(to_str)?;
+    let correct_rate: Value = if rec_total > 0 {
+        json!(((rec_correct as f64 * 100.0 / rec_total as f64) * 10.0).round() / 10.0)
+    } else {
+        Value::Null
+    };
+
+    let mut day_map: HashMap<String, (i64, i64)> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT substr(answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(correct), 0)
+                 FROM practice_records WHERE answered_at >= ?1 GROUP BY d ORDER BY d",
+            )
+            .map_err(to_str)?;
+        let mut rows = stmt.query(params![fmt_iso(start_7d)]).map_err(to_str)?;
+        while let Some(row) = rows.next().map_err(to_str)? {
+            let d: String = row.get(0).map_err(to_str)?;
+            let cnt: i64 = row.get(1).map_err(to_str)?;
+            let cok: i64 = row.get(2).map_err(to_str)?;
+            day_map.insert(d, (cnt, cok));
+        }
+    }
+    let mut records_7d = Vec::new();
+    for i in 0..7 {
+        let day = start_today + Duration::days(i);
+        let key = day.format("%Y-%m-%d").to_string();
+        let (cnt, cok) = day_map.get(&key).copied().unwrap_or((0, 0));
+        records_7d.push(json!({ "date": key, "count": cnt, "correct": cok }));
+    }
+
+    ok(json!({
+        "total": total,
+        "by_type": by_type,
+        "due_total": due_total,
+        "due_today": due_today,
+        "practiced_total": practiced_total,
+        "practiced_today": practiced_today,
+        "correct_rate": correct_rate,
+        "records_7d": records_7d
+    }))
+}
+
+#[tauri::command]
+pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let sql = format!("SELECT {SELECT_FIELDS} FROM questions ORDER BY created_at ASC");
+    let questions = query_questions(&conn, &sql, params![])?;
+    let doc = json!({ "version": 2, "questions": questions });
+
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(to_str)?
+        .join("export");
+    fs::create_dir_all(&dir).map_err(to_str)?;
+    let ts = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let path = dir.join(format!("DB-{ts}.json"));
+    let text = serde_json::to_string_pretty(&doc).map_err(to_str)?;
+    fs::write(&path, text).map_err(to_str)?;
+    ok(json!({ "path": path.to_string_lossy().to_string() }))
+}
+
+#[tauri::command]
+pub fn import_dbjson(path: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let text = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {e}", path))?;
+    let root: Value = serde_json::from_str(&text).map_err(to_str)?;
+    let questions: Vec<Value> = match root.get("questions") {
+        Some(Value::Array(a)) => a.clone(),
+        _ => match root {
+            Value::Array(a) => a,
+            _ => {
+                return Err(
+                    "invalid dbjson: expected {\"version\":2,\"questions\":[...]} or an array"
+                        .into(),
+                );
+            }
+        },
+    };
+
+    let mut conn = state.0.lock().map_err(to_str)?;
+    let tx = conn.transaction().map_err(to_str)?;
+    let mut imported: i64 = 0;
+    for mut q in questions {
+        if !q.is_object() {
+            return Err("dbjson: question entry is not an object".into());
+        }
+        if q.get("id").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+            q["id"] = json!(generate_id());
+        }
+        let now = now_iso();
+        if q.get("created_at")
+            .and_then(Value::as_str)
+            .map_or(true, |s| s.is_empty())
+        {
+            q["created_at"] = json!(now.clone());
+        }
+        if q.get("updated_at")
+            .and_then(Value::as_str)
+            .map_or(true, |s| s.is_empty())
+        {
+            q["updated_at"] = json!(now);
+        }
+        if q.get("version").and_then(Value::as_i64).is_none() {
+            q["version"] = json!(2);
+        }
+        q["plain_text"] = json!(aggregated_plain_text(&q));
+        upsert_question(&tx, &q)?;
+        imported += 1;
+    }
+    tx.commit().map_err(to_str)?;
+    ok(json!({ "imported": imported }))
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (PLAN §5 SM-2 + plain_text extraction, ≥ 4 cases)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn t0() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0)
+            .single()
+            .unwrap()
+    }
+
+    #[test]
+    fn plain_text_extracts_doc_blocks() {
+        let doc = json!({
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "求 "},
+                    {"type": "inlineMath", "attrs": {"latex": "x=10"}},
+                    {"type": "text", "text": " 的值 "},
+                    {"type": "blank", "attrs": {"id": "b1"}}
+                ]},
+                {"type": "imageBlock", "attrs": {"src": "data:image/png;base64,xxx"}},
+                {"type": "mathBlock", "attrs": {"latex": "E=mc^2"}}
+            ]
+        });
+        assert_eq!(
+            plain_text_of_doc(&doc),
+            "求  x=10  的值  ___   [图]   E=mc^2"
+        );
+        // null / missing content → empty
+        assert_eq!(plain_text_of_doc(&Value::Null), "");
+        assert_eq!(plain_text_of_doc(&json!({"type": "doc"})), "");
+    }
+
+    #[test]
+    fn plain_text_aggregates_material_with_children() {
+        let q = json!({
+            "id": "m1", "type": "material", "difficulty": 3,
+            "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "材料题干"}]}]},
+            "children": [
+                {"type": "single", "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "子题1"}]}]},
+                 "options": [{"content": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "选项A"}]}]}}],
+                 "answer": {"ids": ["o1"]},
+                 "analysis": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "解析1"}]}]}},
+                {"type": "short", "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "子题2"}]}]},
+                 "answer": {"reference": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "参考答案2"}]}]}}}
+            ],
+            "options": [{"content": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "顶层选项不应出现"}]}]}}],
+            "analysis": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "顶层解析"}]}]}
+        });
+        let s = aggregated_plain_text(&q);
+        assert!(s.contains("材料题干"));
+        assert!(s.contains("子题1"));
+        assert!(s.contains("选项A"));
+        assert!(s.contains("解析1"));
+        assert!(s.contains("子题2"));
+        assert!(s.contains("参考答案2"));
+        assert!(s.contains("顶层解析"));
+        assert!(!s.contains("顶层选项不应出现"));
+        // whitespace collapsed
+        assert!(s.chars().all(|c| !c.is_whitespace() || c == ' '));
+    }
+
+    #[test]
+    fn plain_text_aggregates_non_material() {
+        let q = json!({
+            "id": "s1", "type": "short",
+            "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "题干"}]}]},
+            "options": null,
+            "answer": {"reference": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "参考答案"}]}]}},
+            "analysis": null
+        });
+        assert_eq!(aggregated_plain_text(&q), "题干 参考答案");
+        // totally empty question → ""
+        assert_eq!(aggregated_plain_text(&json!({"type": "single"})), "");
+    }
+
+    #[test]
+    fn sm2_again_resets_and_penalizes() {
+        let s = sm2_next(&ReviewSnapshot::default(), "again", t0());
+        assert_eq!(s.reps, 0);
+        assert_eq!(s.lapses, 1);
+        assert!((s.ease - 2.3).abs() < 1e-9);
+        assert!((s.interval_days - 0.0).abs() < 1e-9);
+        assert_eq!(s.due_at, fmt_iso(t0()));
+        // following a reset with good → back to interval 1, ease rises from 2.3
+        let s2 = sm2_next(&s, "good", t0());
+        assert_eq!(s2.reps, 1);
+        assert_eq!(s2.lapses, 1);
+        assert!((s2.ease - 2.4).abs() < 1e-9);
+        assert!((s2.interval_days - 1.0).abs() < 1e-9);
+        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(1)));
+    }
+
+    #[test]
+    fn sm2_hard_evolution() {
+        let s = sm2_next(&ReviewSnapshot::default(), "hard", t0());
+        assert_eq!(s.reps, 1);
+        assert_eq!(s.lapses, 0);
+        assert!((s.ease - 2.35).abs() < 1e-9);
+        assert!((s.interval_days - 1.0).abs() < 1e-9);
+        assert_eq!(s.due_at, fmt_iso(t0() + Duration::days(1)));
+        // second hard: interval = max(1, round(1*1.2)) = 1
+        let s2 = sm2_next(&s, "hard", t0() + Duration::days(1));
+        assert_eq!(s2.reps, 2);
+        assert!((s2.ease - 2.2).abs() < 1e-9);
+        assert!((s2.interval_days - 1.0).abs() < 1e-9);
+        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(2)));
+    }
+
+    #[test]
+    fn sm2_good_evolution() {
+        let s0 = ReviewSnapshot::default();
+        let s1 = sm2_next(&s0, "good", t0());
+        assert_eq!(s1.reps, 1);
+        assert!((s1.ease - 2.6).abs() < 1e-9);
+        assert!((s1.interval_days - 1.0).abs() < 1e-9);
+        assert_eq!(s1.due_at, fmt_iso(t0() + Duration::days(1)));
+
+        let s2 = sm2_next(&s1, "good", t0() + Duration::days(1));
+        assert_eq!(s2.reps, 2);
+        assert!((s2.ease - 2.7).abs() < 1e-9);
+        assert!((s2.interval_days - 6.0).abs() < 1e-9);
+        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(7)));
+
+        let s3 = sm2_next(&s2, "good", t0() + Duration::days(7));
+        assert_eq!(s3.reps, 3);
+        assert!((s3.ease - 2.8).abs() < 1e-9);
+        // round(6 * 2.8) = round(16.8) = 17
+        assert!((s3.interval_days - 17.0).abs() < 1e-9);
+        assert_eq!(s3.due_at, fmt_iso(t0() + Duration::days(24)));
+    }
+
+    #[test]
+    fn sm2_easy_evolution() {
+        let s0 = ReviewSnapshot::default();
+        let s1 = sm2_next(&s0, "easy", t0());
+        assert_eq!(s1.reps, 1);
+        assert!((s1.ease - 2.65).abs() < 1e-9);
+        assert!((s1.interval_days - 2.0).abs() < 1e-9);
+        assert_eq!(s1.due_at, fmt_iso(t0() + Duration::days(2)));
+
+        let s2 = sm2_next(&s1, "easy", t0() + Duration::days(2));
+        assert_eq!(s2.reps, 2);
+        assert!((s2.ease - 2.8).abs() < 1e-9);
+        assert!((s2.interval_days - 4.0).abs() < 1e-9);
+        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(6)));
+    }
+
+    #[test]
+    fn sm2_ease_clamping() {
+        let mut s = ReviewSnapshot::default();
+        for _ in 0..10 {
+            s = sm2_next(&s, "again", t0());
+        }
+        assert!((s.ease - 1.3).abs() < 1e-9);
+
+        let mut s2 = ReviewSnapshot::default();
+        for _ in 0..10 {
+            s2 = sm2_next(&s2, "easy", t0());
+        }
+        assert!((s2.ease - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn generate_id_shape() {
+        let id = generate_id();
+        assert!(id.starts_with("q_"));
+        let _parts: Vec<&str> = id.split('_').collect();
+        assert!(id.len() > 5);
+        let id2 = generate_id();
+        assert_ne!(id, id2);
+    }
+
+    fn sample_question() -> Value {
+        json!({
+            "id": "q_test_1",
+            "type": "single",
+            "version": 2,
+            "difficulty": 2,
+            "score": 5,
+            "status": "published",
+            "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "1+1=?"}]}]},
+            "options": [
+                {"id": "o1", "content": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "2"}]}]}},
+                {"id": "o2", "content": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "3"}]}]}}
+            ],
+            "answer": {"ids": ["o1"]},
+            "analysis": null,
+            "plain_text": "1+1=? 2 3",
+            "created_at": "2026-09-10T12:00:00.000Z",
+            "updated_at": "2026-09-10T12:00:00.000Z"
+        })
+    }
+
+    #[test]
+    fn db_schema_insert_fetch_and_upsert() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch(MIGRATIONS).unwrap();
+
+        let q = sample_question();
+        insert_question(&conn, &q).unwrap();
+
+        let fetched = fetch_question(&conn, "q_test_1").unwrap().unwrap();
+        assert_eq!(fetched["id"], "q_test_1");
+        assert_eq!(fetched["score"], json!(5.0));
+        assert_eq!(fetched["analysis"], Value::Null);
+        assert_eq!(fetched["options"][0]["id"], "o1");
+        assert_eq!(
+            fetched["stem"]["content"][0]["content"][0]["text"],
+            "1+1=?"
+        );
+
+        // upsert keeps original created_at even if the body supplies another
+        let mut upd = q.clone();
+        upd["score"] = json!(10);
+        upd["created_at"] = json!("2000-01-01T00:00:00.000Z");
+        upd["updated_at"] = json!("2026-09-11T00:00:00.000Z");
+        upsert_question(&conn, &upd).unwrap();
+        let after = fetch_question(&conn, "q_test_1").unwrap().unwrap();
+        assert_eq!(after["created_at"], "2026-09-10T12:00:00.000Z");
+        assert_eq!(after["updated_at"], "2026-09-11T00:00:00.000Z");
+        assert_eq!(after["score"], json!(10.0));
+
+        // list SQL template (questions_list) with/without filters
+        let sql = format!(
+            "SELECT {SELECT_FIELDS} FROM questions WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%' OR id LIKE '%'||?1||'%') AND (?2 IS NULL OR type = ?2) ORDER BY created_at DESC"
+        );
+        let all = query_questions(&conn, &sql, params![Option::<String>::None, Option::<String>::None]).unwrap();
+        assert_eq!(all.len(), 1);
+        let hit = query_questions(
+            &conn,
+            &sql,
+            params![Some("1+1".to_string()), Some("single".to_string())],
+        )
+        .unwrap();
+        assert_eq!(hit.len(), 1);
+        let miss = query_questions(&conn, &sql, params![Some("zzz".to_string()), Option::<String>::None]).unwrap();
+        assert_eq!(miss.len(), 0);
+
+        // practice_pool SQL template
+        let pool_sql = format!(
+            "SELECT {SELECT_FIELDS} FROM questions WHERE (?1 IS NULL OR type = ?1) ORDER BY RANDOM() LIMIT ?2"
+        );
+        let pool = query_questions(&conn, &pool_sql, params![Some("single".to_string()), 10i64]).unwrap();
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn db_sm2_persistence_and_cascade() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch(MIGRATIONS).unwrap();
+
+        let q = sample_question();
+        insert_question(&conn, &q).unwrap();
+
+        let now = t0();
+        sm2_update(&conn, "q_test_1", "good", now).unwrap();
+        sm2_update(&conn, "q_test_1", "good", now + Duration::days(1)).unwrap();
+        let (ease, interval, reps, lapses, due_at): (f64, f64, i64, i64, String) = conn
+            .query_row(
+                "SELECT ease, interval_days, reps, lapses, due_at FROM review_state WHERE question_id = 'q_test_1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(reps, 2);
+        assert_eq!(lapses, 0);
+        assert!((ease - 2.7).abs() < 1e-9);
+        assert!((interval - 6.0).abs() < 1e-9);
+        assert_eq!(due_at, "2026-09-17T12:00:00.000Z");
+
+        // review_due SQL template: not due at review time, due later
+        let due_sql = format!(
+            "SELECT {SELECT_FIELDS_Q} FROM questions q JOIN review_state r ON r.question_id = q.id WHERE r.due_at <= ?1 ORDER BY r.due_at ASC LIMIT ?2"
+        );
+        let not_due = query_questions(&conn, &due_sql, params!["2026-09-10T12:00:00.000Z", 20i64]).unwrap();
+        assert_eq!(not_due.len(), 0);
+        let due = query_questions(&conn, &due_sql, params!["2026-09-20T00:00:00.000Z", 20i64]).unwrap();
+        assert_eq!(due.len(), 1);
+
+        // records_7d group SQL
+        conn.execute(
+            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES ('q_test_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT substr(answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(correct), 0) FROM practice_records WHERE answered_at >= ?1 GROUP BY d ORDER BY d",
+            )
+            .unwrap();
+        let mut rows = stmt.query(params!["2026-09-04T00:00:00.000Z"]).unwrap();
+        let mut got: Vec<(String, i64, i64)> = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            got.push((row.get(0).unwrap(), row.get(1).unwrap(), row.get(2).unwrap()));
+        }
+        assert_eq!(got, vec![("2026-09-10".to_string(), 1, 1)]);
+
+        // ON DELETE CASCADE removes records + review state
+        conn.execute("DELETE FROM questions WHERE id = 'q_test_1'", []).unwrap();
+        let recs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM practice_records", [], |r| r.get(0))
+            .unwrap();
+        let revs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM review_state", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recs, 0);
+        assert_eq!(revs, 0);
+    }
+}
