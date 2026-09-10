@@ -8,7 +8,7 @@
           <span class="badge">所属题库：{{ bankBadgeText }}</span>
         </h2>
         <div class="row">
-          <button class="btn" @click="$router.push('/')">返回列表</button>
+          <button class="btn" @click="goBack">返回列表</button>
           <button class="btn primary" @click="onSave" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
         </div>
       </div>
@@ -41,7 +41,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { get, create, update } from '@/api/questions.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
-import { bankStore } from '@/stores/bank.js'
+import { bankStore, setCurrentBank } from '@/stores/bank.js'
 import QuestionEditor from '@/components/QuestionEditor.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { validateQuestion } from '@/utils/validate.js'
@@ -84,7 +84,13 @@ const prettyJSON = computed(()=> JSON.stringify(form.value, null, 2))
 
 // 卡头「所属题库」徽章文案
 // 编辑：显示该题 bank_id 对应的库名，找不到则回退显示 bank_id 原文
-// 新建：显示新题将存入的库名（currentBankId 优先，空回退 banks[0]）
+// 新建：优先 ?bank= 路由参数，其次 currentBankId，均无回退 banks[0]
+const targetBankId = computed(()=>{
+  if(isEdit.value) return form.value?.bank_id || ''
+  const qb = route.query.bank
+  if (typeof qb === 'string' && qb) return qb
+  return bankStore.currentBankId || bankStore.banks[0]?.id || ''
+})
 const bankBadgeText = computed(()=>{
   if(isEdit.value){
     const bid = form.value?.bank_id
@@ -92,12 +98,28 @@ const bankBadgeText = computed(()=>{
     const bank = bankStore.banks.find(b=> b.id === bid)
     return bank ? bank.name : bid
   }
-  const targetId = bankStore.currentBankId || bankStore.banks[0]?.id
-  const bank = bankStore.banks.find(b=> b.id === targetId)
-  return (bank ? bank.name : (targetId || '未选择')) + '（新题将存入）'
+  const bank = bankStore.banks.find(b=> b.id === targetBankId.value)
+  return (bank ? bank.name : (targetBankId.value || '未选择')) + '（新题将存入）'
 })
 
+// 返回目标：从题库语境进入则回到该库列表，否则回首页
+function backTarget(){
+  if(isEdit.value){
+    const bid = form.value?.bank_id
+    return bid ? `/library?bank=${bid}` : '/library'
+  }
+  const qb = route.query.bank
+  if (typeof qb === 'string' && qb) return `/library?bank=${qb}`
+  return '/'
+}
+function goBack(){ router.push(backTarget()) }
+
 onMounted(async ()=>{
+  // 从题库语境进入（/create?bank=xxx）：同步当前库，让归属与返回路径一致
+  if(!isEdit.value){
+    const qb = route.query.bank
+    if (typeof qb === 'string' && qb) setCurrentBank(qb)
+  }
   if(isEdit.value){
     loading.value=true
     try{
@@ -117,8 +139,8 @@ async function onSave(){
     const payload = isEdit.value ? form.value : { ...form.value }
     if(!isEdit.value){
       delete payload.id   // id 留空由后端生成
-      // 新建：归属当前题库（空回退第一个题库，都无则由后端兜底 bank_default）
-      payload.bank_id = bankStore.currentBankId || bankStore.banks[0]?.id
+      // 新建：归属优先 ?bank=，其次当前题库，空回退第一个（后端再兜底 bank_default）
+      payload.bank_id = targetBankId.value || bankStore.banks[0]?.id
     }
     normalizeQuestion(payload)
     payload.plain_text = getAggregatedPlainText(payload)
@@ -127,7 +149,7 @@ async function onSave(){
     } else {
       await create(payload)
     }
-    router.push('/')
+    router.push(backTarget())
   } catch(e){
     error.value = e.response?.data?.error || e.message
   } finally{ saving.value=false }

@@ -36,6 +36,12 @@
         </select>
         <button class="btn primary" @click="fetchList">搜索</button>
         <button class="btn" @click="reset">重置</button>
+        <button
+          class="btn primary add-btn"
+          :disabled="!bankStore.loaded || !bankStore.currentBankId"
+          :title="bankStore.currentBankId ? '新增到当前题库' : '请先选择一个题库'"
+          @click="onAdd"
+        >＋ 新增试题</button>
       </div>
 
       <div v-if="loading" class="muted" style="padding: 16px 0">加载中...</div>
@@ -49,7 +55,7 @@
               <th style="width: 80px">类型</th>
               <th>题干</th>
               <th style="width: 70px">分值</th>
-              <th style="width: 140px">操作</th>
+              <th style="width: 240px">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -64,6 +70,10 @@
               <td>
                 <div class="actions">
                   <router-link :to="`/edit/${q.id}`" class="btn small">编辑</router-link>
+                  <select class="select mini" :value="''" title="移动题库" @change="onMove(q.id, $event.target.value)">
+                    <option value="" disabled>移动题库…</option>
+                    <option v-for="b in otherBanks(q.bank_id)" :key="b.id" :value="b.id">{{ b.name }}</option>
+                  </select>
                   <button class="btn small danger" @click="onDelete(q.id)">删除</button>
                 </div>
               </td>
@@ -77,11 +87,12 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { list, remove } from '@/api/questions.js'
-import { bankStore, setCurrentBank } from '@/stores/bank.js'
+import { useRoute, useRouter } from 'vue-router'
+import { list, remove, update } from '@/api/questions.js'
+import { bankStore, setCurrentBank, loadBanks } from '@/stores/bank.js'
 
 const route = useRoute()
+const router = useRouter()
 const query = ref('')
 const type = ref('')
 const questions = ref([])
@@ -190,6 +201,30 @@ async function fetchList() {
   }
 }
 
+function onAdd() {
+  const bid = bankStore.currentBankId
+  if (!bid) {
+    alert('新增试题需要先选择一个题库')
+    return
+  }
+  router.push(`/create?bank=${bid}`)
+}
+
+function otherBanks(bankId) {
+  return bankStore.banks.filter((b) => b.id !== bankId)
+}
+
+async function onMove(id, bankId) {
+  if (!bankId) return
+  try {
+    await update(id, { bank_id: bankId })
+    await fetchList()
+    await loadBanks()
+  } catch (e) {
+    alert('移动失败：' + (e?.response?.data?.error || e?.message || e))
+  }
+}
+
 function reset() {
   query.value = ''
   type.value = ''
@@ -291,6 +326,8 @@ watch(type, () => {
 .btn.small { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
 .btn.danger { border-color: #fecaca; color: var(--danger); background: #fff; }
 .btn.danger:hover { background: var(--danger-bg); border-color: #fca5a5; }
+.select.mini { padding: 5px 6px; font-size: 11px; width: 104px; min-width: 0; }
+.add-btn { margin-left: auto; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 .table {
   width: 100%;

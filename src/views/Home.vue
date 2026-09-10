@@ -95,9 +95,13 @@
         <div class="entry-title">浏览试题</div>
         <div class="entry-desc">按题库查看 / 编辑 / 删除试题</div>
       </router-link>
-      <router-link to="/create" class="card entry">
+      <router-link v-if="currentBank" :to="`/create?bank=${currentBank.id}`" class="card entry">
+        <div class="entry-title">在「{{ currentBank.name }}」新增</div>
+        <div class="entry-desc">创建并保存到当前题库</div>
+      </router-link>
+      <router-link v-else to="/banks" class="card entry">
         <div class="entry-title">新增试题</div>
-        <div class="entry-desc">存入当前题库</div>
+        <div class="entry-desc">请先创建题库</div>
       </router-link>
       <button type="button" class="card entry" @click="onImport">
         <div class="entry-title">导入数据</div>
