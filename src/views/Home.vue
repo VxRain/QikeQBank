@@ -119,6 +119,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { stats as fetchStats, exportData, importData } from '@/api/practice.js'
 import { bankStore, loadBanks } from '@/stores/bank.js'
+import { toast, promptDialog } from '@/stores/ui.js'
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
 const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '简答', material: '材料' }
@@ -167,23 +168,27 @@ async function load() {
 async function onExport() {
   try {
     const res = await exportData()
-    alert('导出成功：' + (res?.path || '未知路径'))
+    toast('已导出：' + (res?.path || '未知路径'), 'success', 6000)
   } catch (e) {
     console.error(e)
-    alert('导出失败：' + (e?.message || e))
+    toast('导出失败：' + (e?.message || e), 'error')
   }
 }
 
 async function onImport() {
-  const p = prompt('请输入 DB JSON 文件路径（如 C:/path/to/DB.json）')
-  if (p == null || !p.trim()) return
+  const p = await promptDialog({
+    title: '导入数据',
+    message: '请输入 DB JSON 文件路径（v2/v3 或历史 DB.json）：',
+    placeholder: 'C:/path/to/DB.json'
+  })
+  if (p == null) return
   try {
-    const res = await importData(p.trim())
-    alert(`导入成功：${res?.imported ?? 0} 道题，${res?.banks_imported ?? 0} 个题库`)
+    const res = await importData(p)
+    toast(`导入成功：${res?.imported ?? 0} 道题，${res?.banks_imported ?? 0} 个题库`, 'success')
     await Promise.allSettled([loadBanks(), load()])
   } catch (e) {
     console.error(e)
-    alert('导入失败：' + (e?.message || e))
+    toast('导入失败：' + (e?.message || e), 'error', 5000)
   }
 }
 

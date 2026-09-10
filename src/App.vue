@@ -17,12 +17,16 @@
     <main class="main">
       <router-view />
     </main>
+    <DialogHost />
+    <ToastHost />
   </div>
 </template>
 
 <script setup>
 import { onMounted } from 'vue'
 import { loadBanks } from '@/stores/bank.js'
+import DialogHost from '@/components/ui/DialogHost.vue'
+import ToastHost from '@/components/ui/ToastHost.vue'
 
 onMounted(loadBanks)
 </script>
@@ -65,6 +69,42 @@ body {
 }
 a { color: var(--primary); text-decoration: none; }
 a:hover { color: var(--primary-hover); }
+
+/* ── 原生感 UI 全局规范（防 WebView 套壳感）── */
+/* 表单控件继承字体，避免默认系统控件视觉 */
+button, input, select, textarea { font-family: inherit; }
+button { user-select: none; -webkit-user-select: none; }
+
+/* 自定义滚动条（WebKit/Blink，Windows WebView2 生效） */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--muted-light); }
+
+/* 键盘焦点态：统一主色光环 */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* 选区颜色 */
+::selection { background: var(--primary-bg); color: var(--text); }
+
+/* select 去掉原生箭头 → 自定义 chevron（全局统一下拉观感） */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px;
+  padding-right: 30px;
+}
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 .topbar {
   position: sticky;

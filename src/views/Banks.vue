@@ -62,6 +62,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { bankStore, loadBanks, setCurrentBank } from '@/stores/bank.js'
 import { createBank, updateBank, removeBank } from '@/api/banks.js'
+import { toast, confirmDialog, promptDialog } from '@/stores/ui.js'
 
 const newBankName = ref('')
 const creating = ref(false)
@@ -86,38 +87,51 @@ async function onCreateBank() {
     if (created?.id) setCurrentBank(created.id)
   } catch (e) {
     console.error(e)
-    alert('新建题库失败：' + (e?.message || e))
+    toast('新建题库失败：' + (e?.message || e), 'error')
   } finally {
     creating.value = false
   }
 }
 
 async function onRenameBank(b) {
-  const name = prompt('新名称', b.name)
+  const name = await promptDialog({
+    title: '重命名题库',
+    message: `请输入「${b.name}」的新名称：`,
+    initial: b.name,
+    placeholder: '题库名称'
+  })
   if (name == null) return
   const trimmed = name.trim()
   if (!trimmed || trimmed === b.name) return
   try {
     await updateBank(b.id, { name: trimmed })
     await loadBanks()
+    toast('题库已重命名', 'success')
   } catch (e) {
     console.error(e)
-    alert('重命名失败：' + (e?.message || e))
+    toast('重命名失败：' + (e?.message || e), 'error')
   }
 }
 
 async function onRemoveBank(b) {
   if (bankStore.banks.length <= 1) {
-    alert('至少保留一个题库')
+    toast('至少保留一个题库', 'info')
     return
   }
-  if (!confirm(`确定删除题库「${b.name}」及其全部试题？`)) return
+  const ok = await confirmDialog({
+    title: '删除题库',
+    message: `确定删除题库「${b.name}」及其全部试题？此操作不可撤销。`,
+    okText: '删除',
+    danger: true
+  })
+  if (!ok) return
   try {
     await removeBank(b.id)
     await loadBanks()
+    toast(`题库「${b.name}」已删除`, 'success')
   } catch (e) {
     console.error(e)
-    alert('删除失败：' + (e?.message || e))
+    toast('删除失败：' + (e?.message || e), 'error')
   }
 }
 
@@ -127,7 +141,7 @@ onMounted(async () => {
       await loadBanks()
     } catch (e) {
       console.error(e)
-      alert('加载题库失败：' + (e?.message || e))
+      toast('加载题库失败：' + (e?.message || e), 'error')
     }
   }
 })

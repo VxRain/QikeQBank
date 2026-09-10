@@ -90,6 +90,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { list, remove, update } from '@/api/questions.js'
 import { bankStore, setCurrentBank, loadBanks } from '@/stores/bank.js'
+import { toast, confirmDialog } from '@/stores/ui.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -204,7 +205,7 @@ async function fetchList() {
 function onAdd() {
   const bid = bankStore.currentBankId
   if (!bid) {
-    alert('新增试题需要先选择一个题库')
+    toast('新增试题需要先选择一个题库', 'info')
     return
   }
   router.push(`/create?bank=${bid}`)
@@ -221,7 +222,7 @@ async function onMove(id, bankId) {
     await fetchList()
     await loadBanks()
   } catch (e) {
-    alert('移动失败：' + (e?.response?.data?.error || e?.message || e))
+    toast('移动失败：' + (e?.response?.data?.error || e?.message || e), 'error')
   }
 }
 
@@ -232,12 +233,19 @@ function reset() {
 }
 
 async function onDelete(id) {
-  if (!confirm(`确定删除 ${id} ?`)) return
+  const ok = await confirmDialog({
+    title: '删除试题',
+    message: `确定删除 ${id} ？此操作不可撤销。`,
+    okText: '删除',
+    danger: true
+  })
+  if (!ok) return
   try {
     await remove(id)
     await fetchList()
+    toast('试题已删除', 'success')
   } catch (e) {
-    alert(e?.response?.data?.error || e.message || '删除失败')
+    toast(e?.response?.data?.error || e.message || '删除失败', 'error')
   }
 }
 
