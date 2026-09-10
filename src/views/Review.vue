@@ -12,6 +12,15 @@
         当前待复习 <b>{{ dueTotal }}</b> 题，今日到期 <b>{{ dueToday }}</b> 题。
         按遗忘曲线安排，每次最多复习 20 题。
       </p>
+
+      <div class="field">
+        <div class="label">题库</div>
+        <select v-model="bankId" class="select">
+          <option value="">全部题库</option>
+          <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
+        </select>
+      </div>
+
       <div class="start-row">
         <button
           type="button"
@@ -180,12 +189,14 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
+import { bankStore } from '@/stores/bank.js'
 
 const TYPE_LABELS = {
   single: '单选题', multi: '多选题', judge: '判断题', fill: '填空题', short: '简答题', material: '材料题'
 }
 
 const phase = ref('due') // due | loading | card | done
+const bankId = ref(bankStore.currentBankId || '')
 const error = ref('')
 const recordError = ref('')
 const dueLoading = ref(false)
@@ -331,7 +342,7 @@ async function start() {
   dueLoading.value = true
   phase.value = 'loading'
   try {
-    const questions = await reviewDue({ limit: 20 })
+    const questions = await reviewDue({ limit: 20, bankId: bankId.value })
     pool.value = buildItems(questions)
     if (!pool.value.length) {
       phase.value = 'due'
@@ -487,6 +498,15 @@ onMounted(refreshDue)
 .due { max-width: 640px; }
 .due-desc { color: var(--text-secondary); font-size: 14px; line-height: 1.8; margin: 0 0 18px; }
 .due-desc b { color: var(--primary); font-size: 18px; }
+.field { margin-bottom: 18px; }
+.label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.select {
+  width: 100%; max-width: 320px; padding: 9px 12px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  font-size: 14px; color: var(--text); background: var(--card);
+  outline: none; box-shadow: var(--shadow-sm); font-family: inherit; cursor: pointer;
+}
+.select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
 .start-row { display: flex; }
 .loading { display: flex; align-items: center; gap: 12px; }
 .loading-text { color: var(--muted); }

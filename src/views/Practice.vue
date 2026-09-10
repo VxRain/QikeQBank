@@ -10,6 +10,14 @@
       </div>
 
       <div class="field">
+        <div class="label">题库</div>
+        <select v-model="bankId" class="select">
+          <option value="">全部题库</option>
+          <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
+        </select>
+      </div>
+
+      <div class="field">
         <div class="label">题型（多选）</div>
         <div class="type-grid">
           <label
@@ -202,6 +210,7 @@
 import { ref, reactive, computed } from 'vue'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
+import { bankStore } from '@/stores/bank.js'
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
 const TYPE_LABELS = {
@@ -222,6 +231,7 @@ const fetching = ref(false)
 
 const selectedTypes = ref([...ALL_TYPES])
 const count = ref(5)
+const bankId = ref(bankStore.currentBankId || '')
 
 const pool = ref([]) // 子题队列：普通题=1 项，material=每子题 1 项
 const curIdx = ref(0)
@@ -385,12 +395,12 @@ async function start() {
     }
     let questions
     if (types.length === ALL_TYPES.length) {
-      questions = await practicePool({ limit, type: '' })
+      questions = await practicePool({ limit, type: '', bankId: bankId.value })
     } else {
       const per = Math.ceil(limit / types.length)
       const merged = []
       for (const t of types) {
-        const part = await practicePool({ limit: per, type: t })
+        const part = await practicePool({ limit: per, type: t, bankId: bankId.value })
         merged.push(...(part || []))
       }
       questions = dedupeShuffle(merged)
@@ -552,6 +562,13 @@ function fmtMs(ms) {
 
 .field { margin-bottom: 20px; }
 .label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.select {
+  width: 100%; max-width: 320px; padding: 9px 12px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  font-size: 14px; color: var(--text); background: var(--card);
+  outline: none; box-shadow: var(--shadow-sm); font-family: inherit; cursor: pointer;
+}
+.select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
 .type-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px;

@@ -6,6 +6,7 @@ export function list(params = {}) {
   if (params.query) args.query = params.query
   const tf = params.typeFilter ?? params.type
   if (tf) args.typeFilter = tf
+  if (params.bankId) args.bankId = params.bankId
   return cmd('questions_list', args)
 }
 

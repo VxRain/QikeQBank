@@ -1,9 +1,10 @@
 import { cmd } from './bridge.js'
 
 // 以下全部取 .data 返回给调用方（W3 只依赖本模块）
-export async function practicePool({ limit = 20, type = '' } = {}) {
+export async function practicePool({ limit = 20, type = '', bankId } = {}) {
   const args = { limit }
   if (type) args.typeFilter = type
+  if (bankId) args.bankId = bankId
   const res = await cmd('practice_pool', args)
   return res?.data
 }
@@ -13,13 +14,17 @@ export async function recordAnswer(items) {
   return res?.data
 }
 
-export async function reviewDue({ limit = 20 } = {}) {
-  const res = await cmd('review_due', { limit })
+export async function reviewDue({ limit = 20, bankId } = {}) {
+  const args = { limit }
+  if (bankId) args.bankId = bankId
+  const res = await cmd('review_due', args)
   return res?.data
 }
 
-export async function stats() {
-  const res = await cmd('review_stats')
+export async function stats(bankId) {
+  const args = {}
+  if (bankId) args.bankId = bankId
+  const res = await cmd('review_stats', args)
   return res?.data
 }
 

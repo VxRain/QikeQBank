@@ -2,7 +2,11 @@
   <div class="form-page">
     <div class="card">
       <div class="card-head">
-        <h2>{{ isEdit ? '编辑试题' : '新增试题' }} <span class="badge">{{ form.type }}</span></h2>
+        <h2>
+          {{ isEdit ? '编辑试题' : '新增试题' }}
+          <span class="badge">{{ form.type }}</span>
+          <span class="badge">所属题库：{{ bankBadgeText }}</span>
+        </h2>
         <div class="row">
           <button class="btn" @click="$router.push('/')">返回列表</button>
           <button class="btn primary" @click="onSave" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
@@ -37,6 +41,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { get, create, update } from '@/api/questions.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
+import { bankStore } from '@/stores/bank.js'
 import QuestionEditor from '@/components/QuestionEditor.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { validateQuestion } from '@/utils/validate.js'
@@ -77,6 +82,21 @@ const validation = computed(()=>{
 })
 const prettyJSON = computed(()=> JSON.stringify(form.value, null, 2))
 
+// 卡头「所属题库」徽章文案
+// 编辑：显示该题 bank_id 对应的库名，找不到则回退显示 bank_id 原文
+// 新建：显示新题将存入的库名（currentBankId 优先，空回退 banks[0]）
+const bankBadgeText = computed(()=>{
+  if(isEdit.value){
+    const bid = form.value?.bank_id
+    if(!bid) return '未归属'
+    const bank = bankStore.banks.find(b=> b.id === bid)
+    return bank ? bank.name : bid
+  }
+  const targetId = bankStore.currentBankId || bankStore.banks[0]?.id
+  const bank = bankStore.banks.find(b=> b.id === targetId)
+  return (bank ? bank.name : (targetId || '未选择')) + '（新题将存入）'
+})
+
 onMounted(async ()=>{
   if(isEdit.value){
     loading.value=true
@@ -95,7 +115,11 @@ async function onSave(){
   saving.value=true
   try{
     const payload = isEdit.value ? form.value : { ...form.value }
-    if(!isEdit.value) delete payload.id   // id 留空由后端生成
+    if(!isEdit.value){
+      delete payload.id   // id 留空由后端生成
+      // 新建：归属当前题库（空回退第一个题库，都无则由后端兜底 bank_default）
+      payload.bank_id = bankStore.currentBankId || bankStore.banks[0]?.id
+    }
     normalizeQuestion(payload)
     payload.plain_text = getAggregatedPlainText(payload)
     if(isEdit.value){

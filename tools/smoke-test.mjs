@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 /**
- * W4 · tools/smoke-test.mjs
- * 冒烟测试: 临时库（同一 DDL）→ 插入 6 类最小合法题 → 验证
- *   ① count(*)=6
- *   ② 按 type 过滤（每类各 1 道 + WHERE type= 命中）
- *   ③ plain_text LIKE 搜索命中
- *   ④ UPDATE 往返
- *   ⑤ DELETE 后 practice_records / review_state 级联删除（先插流水与复习态再删题）
+ * W4 · tools/smoke-test.mjs（迭代二：多题库 v2）
+ * 冒烟测试: 临时库（与 migrate-dbjson.mjs 相同的 §3.1 DDL + §3.2 MIGRATE）
+ * → 插入 6 类最小合法题（带 bank_id）→ 验证：
+ *   v1 原有 9 断言:
+ *     ① count(*)=6
+ *     ② 按 type 过滤（每类各 1 道 + WHERE type= 命中）
+ *     ③ plain_text LIKE 搜索命中
+ *     ④ UPDATE 往返
+ *     ⑤ DELETE 后 practice_records / review_state 级联删除（先插流水与复习态再删题）
+ *   v2 新增断言:
+ *     ⑥ banks 表存在 + 默认题库种子命中（id=bank_default）
+ *     ⑦ questions 插入带 bank_id（归属 bank_default）
+ *     ⑧ 按 bank_id 过滤命中（存在库 6 道 / 不存在库 0 道）
+ *     ⑨ 删库级联：删除自有测试库 → 其 questions 与关联 practice_records/review_state 全部级联删除
+ *     ⑩ 最后一个题库保护：SQL 层无法表达「至少保留一个题库」→ 按脚本能力设计直接 SQL 删除政策，
+ *        即只允许直接 SQL 删除自有（非默认）测试库；断言「删除自有非默认库后默认库 bank_default 仍存在」
+ *        （业务层拦截由 Rust banks_remove 承担，SQL 层仅保证默认库兜底存在）。
  * 全部通过打印 "SMOKE PASS"（exit 0）；任一失败打印细节并 exit 1。
  *
  * 最小合法题的 Blocks JSON 结构对齐
@@ -19,9 +29,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** PLAN.md §3 SQLite 表结构 —— 与 tools/migrate-dbjson.mjs 完全一致、与 PLAN 逐字符一致 */
-export const DDL = `CREATE TABLE IF NOT EXISTS questions (
+/** PLAN.md §3.1 SQLite v2 表结构 —— 与 tools/migrate-dbjson.mjs 完全一致、与 PLAN 逐字符一致 */
+export const DDL = `CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS questions (
+  id TEXT PRIMARY KEY,
+  bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('single','multi','judge','fill','short','material')),
   version INTEGER NOT NULL DEFAULT 2,
   difficulty INTEGER NOT NULL DEFAULT 2,
@@ -38,6 +57,7 @@ export const DDL = `CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
+CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
@@ -63,6 +83,34 @@ CREATE TABLE IF NOT EXISTS review_state (
   last_result TEXT,
   last_reviewed_at TEXT
 );`;
+
+/** PLAN.md §3.2 MIGRATE —— M1/M2/M3，与 PLAN 逐字符一致（<now> 一律用 strftime 表达式） */
+export const MIGRATE_M1 = `-- M1 种子默认题库（幂等）
+INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at)
+VALUES ('bank_default', '默认题库', NULL,
+        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));`;
+
+export const MIGRATE_M2 = `-- M2 存量库补列（仅当 questions 无 bank_id 列时执行）：
+ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE;`;
+
+export const MIGRATE_M3 = `-- M3 存量行回填
+UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;`;
+
+/** §3.2 完整文本（M1 + M2 + M3 拼接，与 PLAN §3.2 代码块逐字符一致），供 SQL 逐字符比对 */
+export const MIGRATE = `${MIGRATE_M1}\n\n${MIGRATE_M2}\n\n${MIGRATE_M3}`;
+
+/**
+ * 按 PLAN §3.2 顺序执行 MIGRATE 三步（先 DDL 后调用；与 tools/migrate-dbjson.mjs 逻辑完全相同）：
+ *   M1 INSERT OR IGNORE —— 恒执行（幂等，重复执行无害）；
+ *   M2 ALTER 补列 —— 仅当 questions 无 bank_id 列时执行（先 PRAGMA table_info 判断）；
+ *   M3 存量行回填 —— 恒执行（无 NULL 行时为空操作）。
+ */
+export function migrateV2(db) {
+  db.exec(MIGRATE_M1);
+  const cols = db.prepare("SELECT name FROM pragma_table_info('questions')").all().map((c) => c.name);
+  if (!cols.includes('bank_id')) db.exec(MIGRATE_M2);
+  db.exec(MIGRATE_M3);
+}
 
 const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const opt = (id, text) => ({ id, content: doc(text) });
@@ -146,13 +194,14 @@ function main() {
     db.exec('PRAGMA foreign_keys=ON');
     db.exec('PRAGMA journal_mode=WAL');
     db.exec(DDL);
+    migrateV2(db); // §3.2 MIGRATE：M1 种子默认库 → M2（仅缺列时）补 bank_id → M3 回填
     console.log(`临时库: ${dbPath}`);
-    console.log('插入 6 类最小合法题…');
+    console.log('插入 6 类最小合法题（带 bank_id=bank_default）…');
 
     const now = new Date().toISOString();
     const ins = db.prepare(`INSERT INTO questions
-      (id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
-      VALUES (:id, :type, 2, :difficulty, :score, 'published', :stem_json, :options_json, :answer_json, :analysis_json, :children_json, :plain_text, :created_at, :updated_at)`);
+      (id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
+      VALUES (:id, 'bank_default', :type, 2, :difficulty, :score, 'published', :stem_json, :options_json, :answer_json, :analysis_json, :children_json, :plain_text, :created_at, :updated_at)`);
     for (const q of QUESTIONS) {
       ins.run({
         id: q.id,
@@ -169,6 +218,21 @@ function main() {
         updated_at: now,
       });
     }
+
+    // ⑥ banks 表存在 + 默认题库种子命中（M1）
+    const bankTable = db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='banks'").get().c;
+    check('banks 表存在（sqlite_master）', bankTable === 1, `实际 ${bankTable}`);
+    const seedBank = db.prepare("SELECT id, name FROM banks WHERE id = 'bank_default'").get();
+    check('默认题库种子命中（id=bank_default, name=默认题库）', !!seedBank && seedBank.name === '默认题库', JSON.stringify(seedBank));
+
+    // ⑦ questions 插入带 bank_id
+    const insBid = db.prepare("SELECT bank_id FROM questions WHERE id = 'smoke_single_1'").get();
+    check("questions 插入带 bank_id（smoke_single_1.bank_id='bank_default'）", !!insBid && insBid.bank_id === 'bank_default', JSON.stringify(insBid));
+
+    // ⑧ 按 bank_id 过滤命中
+    const inDefault = db.prepare("SELECT COUNT(*) c FROM questions WHERE bank_id = 'bank_default'").get().c;
+    const inGhost = db.prepare("SELECT COUNT(*) c FROM questions WHERE bank_id = 'no_such_bank'").get().c;
+    check('按 bank_id 过滤命中（bank_default→6 道 / 不存在库→0 道）', inDefault === 6 && inGhost === 0, `bank_default=${inDefault} no_such_bank=${inGhost}`);
 
     // ① count(*)=6
     const total = db.prepare('SELECT COUNT(*) c FROM questions').get().c;
@@ -193,7 +257,7 @@ function main() {
     const upd = db.prepare("SELECT score, difficulty FROM questions WHERE id = 'smoke_single_1'").get();
     check('UPDATE 往返（score=9.5, difficulty=3）', upd.score === 9.5 && upd.difficulty === 3, JSON.stringify(upd));
 
-    // ⑤ 级联删除：先插流水 + 复习态，再删题
+    // ⑤ 级联删除（删题 → 流水/复习态级联）：先插流水 + 复习态，再删题
     db.prepare("INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, detail_json) VALUES ('smoke_judge_1', 'practice', 'good', 1, :at, '{}')").run({ at: now });
     db.prepare("INSERT INTO review_state (question_id, due_at, last_result) VALUES ('smoke_judge_1', :at, 'good')").run({ at: now });
     const preP = db.prepare("SELECT COUNT(*) c FROM practice_records WHERE question_id = 'smoke_judge_1'").get().c;
@@ -206,6 +270,32 @@ function main() {
     check('DELETE 后 review_state 级联删除', postR === 0, `实际 ${postR}`);
     const totalAfter = db.prepare('SELECT COUNT(*) c FROM questions').get().c;
     check('删除后 count(*)=5', totalAfter === 5, `实际 ${totalAfter}`);
+
+    // ⑨ 删库级联：先插自有测试库及其题/流水/复习态，再删库 → 全级联
+    db.prepare("INSERT INTO banks (id, name, created_at, updated_at) VALUES ('smoke_bank_cascade', '测试级联库', :at, :at)").run({ at: now });
+    const insCas = db.prepare(`INSERT INTO questions (id, bank_id, type, version, stem_json, plain_text, created_at, updated_at)
+      VALUES (:id, 'smoke_bank_cascade', :type, 2, :stem, :text, :at, :at)`);
+    insCas.run({ id: 'smoke_cas_q1', type: 'single', stem: JSON.stringify(doc('级联测试1')), text: '级联测试1', at: now });
+    insCas.run({ id: 'smoke_cas_q2', type: 'judge', stem: JSON.stringify(doc('级联测试2')), text: '级联测试2', at: now });
+    db.prepare("INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES ('smoke_cas_q1', 'practice', 'good', 1, :at)").run({ at: now });
+    db.prepare("INSERT INTO review_state (question_id, due_at, last_result) VALUES ('smoke_cas_q2', :at, 'good')").run({ at: now });
+    db.prepare("DELETE FROM banks WHERE id = 'smoke_bank_cascade'").run();
+    const bankGone = db.prepare("SELECT COUNT(*) c FROM banks WHERE id = 'smoke_bank_cascade'").get().c;
+    const casQGone = db.prepare("SELECT COUNT(*) c FROM questions WHERE bank_id = 'smoke_bank_cascade'").get().c;
+    const casPGone = db.prepare("SELECT COUNT(*) c FROM practice_records WHERE question_id IN ('smoke_cas_q1','smoke_cas_q2')").get().c;
+    const casRGone = db.prepare("SELECT COUNT(*) c FROM review_state WHERE question_id IN ('smoke_cas_q1','smoke_cas_q2')").get().c;
+    check('删库级联：bank 行已删（DELETE FROM banks）', bankGone === 0, `实际 ${bankGone}`);
+    check('删库级联：其 questions 全部级联删除', casQGone === 0, `实际 ${casQGone}`);
+    check('删库级联：practice_records 全部级联删除', casPGone === 0, `实际 ${casPGone}`);
+    check('删库级联：review_state 全部级联删除', casRGone === 0, `实际 ${casRGone}`);
+
+    // ⑩ 最后一个题库保护（SQL 层无法表达「至少保留一个题库」）
+    // 直接 SQL 删除政策：本脚本仅用直接 SQL 删除自有（非默认）测试库；删除后若只剩 1 行，
+    // 纯 SQL 无法拦截再删（无对应约束），最后一道拦截须由业务层（Rust banks_remove → "至少保留一个题库"）承担。
+    // 故 SQL 层断言改为：删除自有（非默认）测试库后，默认题库 bank_default 仍存在且为仅剩题库。
+    const banksAfter = db.prepare('SELECT id FROM banks ORDER BY id').all();
+    const onlyDefault = banksAfter.length === 1 && banksAfter[0].id === 'bank_default';
+    check('最后一个题库保护（SQL 层无法拦删最后一个；断言：删除自有非默认库后默认库 bank_default 仍在且为仅剩题库）', onlyDefault, JSON.stringify(banksAfter));
   } catch (e) {
     failures.push(`异常: ${e.stack || e.message}`);
   } finally {

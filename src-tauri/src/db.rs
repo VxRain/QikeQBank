@@ -12,8 +12,17 @@ use tauri::{AppHandle, Manager, State};
 // ---------------------------------------------------------------------------
 // SQLite DDL — must match PLAN §3 character-for-character
 // ---------------------------------------------------------------------------
-pub const MIGRATIONS: &str = r#"CREATE TABLE IF NOT EXISTS questions (
+pub const MIGRATIONS: &str = r#"CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS questions (
+  id TEXT PRIMARY KEY,
+  bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('single','multi','judge','fill','short','material')),
   version INTEGER NOT NULL DEFAULT 2,
   difficulty INTEGER NOT NULL DEFAULT 2,
@@ -30,6 +39,7 @@ pub const MIGRATIONS: &str = r#"CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
+CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
@@ -55,6 +65,13 @@ CREATE TABLE IF NOT EXISTS review_state (
   last_result TEXT,
   last_reviewed_at TEXT
 );"#;
+
+// Migration statements (PLAN §3.2). `<now>` uses the SQL strftime expression.
+const SEED_DEFAULT_BANK: &str =
+    "INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at)\nVALUES ('bank_default', '默认题库', NULL,\n        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));";
+const ADD_BANK_ID_COLUMN: &str =
+    "ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE;";
+const BACKFILL_BANK_ID: &str = "UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;";
 
 // ---------------------------------------------------------------------------
 // AppState & connection setup
@@ -86,12 +103,66 @@ fn open_connection(path: &PathBuf) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// Called from setup: resolve db path, run the DDL, and publish AppState.
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            params![name],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
+    Ok(n > 0)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+    let mut rows = stmt.query([]).map_err(to_str)?;
+    while let Some(row) = rows.next().map_err(to_str)? {
+        let name: String = row.get(1).map_err(to_str)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Runs the PLAN §3.2 MIGRATE steps (M1 seed / M2 column / M3 backfill) on a
+/// schema that already matches the §3.1 DDL.
+pub fn apply_migrations(conn: &Connection) -> Result<(), String> {
+    // M1 种子默认题库（幂等）
+    conn.execute_batch(SEED_DEFAULT_BANK)
+        .map_err(|e| format!("migrate M1 failed: {e}"))?;
+    // M2 存量库补列（仅当 questions 无 bank_id 列时执行）
+    if table_exists(conn, "questions")? && !column_exists(conn, "questions", "bank_id")? {
+        conn.execute_batch(ADD_BANK_ID_COLUMN)
+            .map_err(|e| format!("migrate M2 failed: {e}"))?;
+    }
+    // M3 存量行回填
+    conn.execute_batch(BACKFILL_BANK_ID)
+        .map_err(|e| format!("migrate M3 failed: {e}"))?;
+    Ok(())
+}
+
+/// Applies the §3.1 DDL followed by the §3.2 MIGRATE steps. For legacy v1 DBs
+/// (questions without bank_id) the DDL batch would fail at idx_questions_bank,
+/// so the M2 column-add is run first when such a table is detected; the DDL
+/// block itself stays character-for-character identical to PLAN §3.1.
+pub fn init_schema(conn: &Connection) -> Result<(), String> {
+    if table_exists(conn, "questions")? && !column_exists(conn, "questions", "bank_id")? {
+        conn.execute_batch(ADD_BANK_ID_COLUMN)
+            .map_err(|e| format!("schema pre-migrate failed: {e}"))?;
+    }
+    conn.execute_batch(MIGRATIONS)
+        .map_err(|e| format!("schema init failed: {e}"))?;
+    apply_migrations(conn)
+}
+
+/// Called from setup: resolve db path, run the DDL + MIGRATE, and publish AppState.
 pub fn ensure_schema(app: &AppHandle) -> Result<(), String> {
     let path = resolve_db_path(app)?;
     let conn = open_connection(&path)?;
-    conn.execute_batch(MIGRATIONS)
-        .map_err(|e| format!("schema init failed: {e}"))?;
+    init_schema(&conn)?;
     app.manage(AppState(Mutex::new(conn)));
     Ok(())
 }
@@ -404,8 +475,8 @@ fn sm2_update(conn: &Connection, question_id: &str, grade: &str, now: DateTime<U
 // ---------------------------------------------------------------------------
 // Question row read/write helpers
 // ---------------------------------------------------------------------------
-const SELECT_FIELDS: &str = "id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at";
-const SELECT_FIELDS_Q: &str = "q.id, q.type, q.version, q.difficulty, q.score, q.status, q.stem_json, q.options_json, q.answer_json, q.analysis_json, q.children_json, q.plain_text, q.created_at, q.updated_at";
+const SELECT_FIELDS: &str = "id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at";
+const SELECT_FIELDS_Q: &str = "q.id, q.bank_id, q.type, q.version, q.difficulty, q.score, q.status, q.stem_json, q.options_json, q.answer_json, q.analysis_json, q.children_json, q.plain_text, q.created_at, q.updated_at";
 
 fn parse_json_opt(s: Option<String>) -> Value {
     match s {
@@ -417,6 +488,7 @@ fn parse_json_opt(s: Option<String>) -> Value {
 fn row_to_question(row: &rusqlite::Row) -> rusqlite::Result<Value> {
     Ok(json!({
         "id": row.get::<_, String>("id")?,
+        "bank_id": row.get::<_, Option<String>>("bank_id")?,
         "type": row.get::<_, String>("type")?,
         "version": row.get::<_, i64>("version")?,
         "difficulty": row.get::<_, i64>("difficulty")?,
@@ -451,6 +523,7 @@ fn fetch_question(conn: &Connection, id: &str) -> Result<Option<Value>, String> 
 
 struct QuestionFields {
     id: String,
+    bank_id: Option<String>,
     typ: String,
     version: i64,
     difficulty: i64,
@@ -485,6 +558,7 @@ fn extract_fields(q: &Value) -> Result<QuestionFields, String> {
             .filter(|s| !s.is_empty())
             .ok_or("missing id")?
             .to_string(),
+        bank_id: q.get("bank_id").and_then(Value::as_str).map(|s| s.to_string()),
         typ: get_str("type").ok_or("missing type")?,
         version: q.get("version").and_then(Value::as_i64).unwrap_or(2),
         difficulty: q
@@ -509,11 +583,24 @@ fn extract_fields(q: &Value) -> Result<QuestionFields, String> {
 fn insert_question(conn: &Connection, q: &Value) -> Result<(), String> {
     let f = extract_fields(q)?;
     conn.execute(
-        "INSERT INTO questions (id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT INTO questions (id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
-            f.id, f.typ, f.version, f.difficulty, f.score, f.status, f.stem_json, f.options_json,
-            f.answer_json, f.analysis_json, f.children_json, f.plain_text, f.created_at, f.updated_at
+            f.id,
+            f.bank_id,
+            f.typ,
+            f.version,
+            f.difficulty,
+            f.score,
+            f.status,
+            f.stem_json,
+            f.options_json,
+            f.answer_json,
+            f.analysis_json,
+            f.children_json,
+            f.plain_text,
+            f.created_at,
+            f.updated_at
         ],
     )
     .map_err(|e| format!("insert question failed: {e}"))?;
@@ -523,9 +610,10 @@ fn insert_question(conn: &Connection, q: &Value) -> Result<(), String> {
 fn upsert_question(conn: &Connection, q: &Value) -> Result<(), String> {
     let f = extract_fields(q)?;
     conn.execute(
-        "INSERT INTO questions (id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        "INSERT INTO questions (id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(id) DO UPDATE SET
+           bank_id = excluded.bank_id,
            type = excluded.type,
            version = excluded.version,
            difficulty = excluded.difficulty,
@@ -540,8 +628,21 @@ fn upsert_question(conn: &Connection, q: &Value) -> Result<(), String> {
            created_at = questions.created_at,
            updated_at = excluded.updated_at",
         params![
-            f.id, f.typ, f.version, f.difficulty, f.score, f.status, f.stem_json, f.options_json,
-            f.answer_json, f.analysis_json, f.children_json, f.plain_text, f.created_at, f.updated_at
+            f.id,
+            f.bank_id,
+            f.typ,
+            f.version,
+            f.difficulty,
+            f.score,
+            f.status,
+            f.stem_json,
+            f.options_json,
+            f.answer_json,
+            f.analysis_json,
+            f.children_json,
+            f.plain_text,
+            f.created_at,
+            f.updated_at
         ],
     )
     .map_err(|e| format!("upsert question failed: {e}"))?;
@@ -549,26 +650,262 @@ fn upsert_question(conn: &Connection, q: &Value) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Bank row helpers
+// ---------------------------------------------------------------------------
+/// bank_{unixms}_{4hex}
+fn generate_bank_id() -> String {
+    let ms = Utc::now().timestamp_millis();
+    let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let mix = (nanos as u64)
+        .wrapping_mul(0x5851_F42D)
+        .wrapping_add((std::process::id() as u64) << 16)
+        .wrapping_add(n << 8);
+    format!("bank_{}_{:04x}", ms, mix & 0xFFFF)
+}
+
+fn bank_row_to_value(row: &rusqlite::Row) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "id": row.get::<_, String>("id")?,
+        "name": row.get::<_, String>("name")?,
+        "description": row.get::<_, Option<String>>("description")?,
+        "question_count": row.get::<_, i64>("question_count")?,
+        "created_at": row.get::<_, String>("created_at")?,
+        "updated_at": row.get::<_, String>("updated_at")?,
+    }))
+}
+
+const BANK_SELECT_COUNT: &str =
+    "SELECT b.id, b.name, b.description, b.created_at, b.updated_at, COUNT(q.id) AS question_count
+     FROM banks b LEFT JOIN questions q ON q.bank_id = b.id";
+
+fn fetch_bank(conn: &Connection, id: &str) -> Result<Option<Value>, String> {
+    let sql = format!("{BANK_SELECT_COUNT} WHERE b.id = ?1 GROUP BY b.id");
+    let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+    let mut rows = stmt.query(params![id]).map_err(to_str)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        out.push(bank_row_to_value(row).map_err(to_str)?);
+    }
+    Ok(out.into_iter().next())
+}
+
+fn list_all_banks(conn: &Connection) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, created_at, updated_at FROM banks ORDER BY created_at ASC, id ASC")
+        .map_err(to_str)?;
+    let mut rows = stmt.query([]).map_err(to_str)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        out.push(json!({
+            "id": row.get::<_, String>(0).map_err(to_str)?,
+            "name": row.get::<_, String>(1).map_err(to_str)?,
+            "description": row.get::<_, Option<String>>(2).map_err(to_str)?,
+            "created_at": row.get::<_, String>(3).map_err(to_str)?,
+            "updated_at": row.get::<_, String>(4).map_err(to_str)?,
+        }));
+    }
+    Ok(out)
+}
+
+/// Returns 'bank_default' if present, otherwise the id of the first bank.
+/// Schema init always seeds at least one bank (M1); the error path is defensive.
+fn resolve_default_bank(conn: &Connection) -> Result<String, String> {
+    let default_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM banks WHERE id = 'bank_default'",
+            [],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(to_str)?
+        .unwrap_or(false);
+    if default_exists {
+        return Ok("bank_default".to_string());
+    }
+    let first: Option<String> = conn
+        .query_row(
+            "SELECT id FROM banks ORDER BY created_at ASC, id ASC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(to_str)?;
+    first.ok_or_else(|| "题库不存在，请先创建题库".into())
+}
+
+// ---------------------------------------------------------------------------
 // Commands (PLAN §4)
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn banks_list(state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(json!(banks_list_impl(&conn)?))
+}
+
+fn banks_list_impl(conn: &Connection) -> Result<Vec<Value>, String> {
+    let sql = format!("{BANK_SELECT_COUNT} GROUP BY b.id ORDER BY b.created_at ASC, b.id ASC");
+    let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+    let mut rows = stmt.query([]).map_err(to_str)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        out.push(bank_row_to_value(row).map_err(to_str)?);
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn banks_create(
+    name: String,
+    description: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let bank = banks_create_impl(&conn, &name, description.as_deref())?;
+    ok(bank)
+}
+
+fn banks_create_impl(conn: &Connection, name: &str, description: Option<&str>) -> Result<Value, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("题库名称不能为空".into());
+    }
+    let id = generate_bank_id();
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO banks (id, name, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, name, description, now, now],
+    )
+    .map_err(to_str)?;
+    fetch_bank(conn, &id)?.ok_or_else(|| "stored bank missing".into())
+}
+
+#[tauri::command]
+pub fn banks_update(
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let bank = banks_update_impl(&conn, &id, name.as_deref(), description.as_deref())?;
+    ok(bank)
+}
+
+fn banks_update_impl(
+    conn: &Connection,
+    id: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> Result<Value, String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM banks WHERE id = ?1",
+            params![id],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(to_str)?
+        .unwrap_or(false);
+    if !exists {
+        return Err("Not Found".into());
+    }
+    if let Some(n) = name {
+        if n.trim().is_empty() {
+            return Err("题库名称不能为空".into());
+        }
+    }
+    let now = now_iso();
+    match (name, description) {
+        (Some(n), Some(d)) => conn
+            .execute(
+                "UPDATE banks SET name = ?1, description = ?2, updated_at = ?3 WHERE id = ?4",
+                params![n.trim(), d, now, id],
+            )
+            .map_err(to_str)?,
+        (Some(n), None) => conn
+            .execute(
+                "UPDATE banks SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                params![n.trim(), now, id],
+            )
+            .map_err(to_str)?,
+        (None, Some(d)) => conn
+            .execute(
+                "UPDATE banks SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                params![d, now, id],
+            )
+            .map_err(to_str)?,
+        (None, None) => 0,
+    };
+    fetch_bank(conn, id)?.ok_or_else(|| "Not Found".into())
+}
+
+#[tauri::command]
+pub fn banks_remove(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let data = banks_remove_impl(&conn, &id)?;
+    ok(data)
+}
+
+/// Deletes a bank and cascades to its questions (→ practice_records +
+/// review_state via the questions FK). Refuses to delete the last bank.
+fn banks_remove_impl(conn: &Connection, id: &str) -> Result<Value, String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM banks WHERE id = ?1",
+            params![id],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(to_str)?
+        .unwrap_or(false);
+    if !exists {
+        return Err("Not Found".into());
+    }
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM banks", [], |r| r.get(0))
+        .map_err(to_str)?;
+    if total <= 1 {
+        return Err("至少保留一个题库".into());
+    }
+    conn.execute("DELETE FROM banks WHERE id = ?1", params![id])
+        .map_err(to_str)?;
+    Ok(json!({ "id": id }))
+}
 
 #[tauri::command]
 pub fn questions_list(
     query: Option<String>,
     type_filter: Option<String>,
+    bank_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
+    let rows = questions_list_impl(&conn, query, type_filter, bank_id)?;
+    ok(json!(rows))
+}
+
+fn questions_list_impl(
+    conn: &Connection,
+    query: Option<String>,
+    type_filter: Option<String>,
+    bank_id: Option<String>,
+) -> Result<Vec<Value>, String> {
     let query = query.filter(|s| !s.trim().is_empty());
     let type_filter = type_filter.filter(|s| !s.is_empty());
+    let bank_id = bank_id.filter(|s| !s.is_empty());
     let sql = format!(
         "SELECT {SELECT_FIELDS} FROM questions
          WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%' OR id LIKE '%'||?1||'%')
            AND (?2 IS NULL OR type = ?2)
+           AND (?3 IS NULL OR bank_id = ?3)
          ORDER BY created_at DESC"
     );
-    let rows = query_questions(&conn, &sql, params![query, type_filter])?;
-    ok(json!(rows))
+    query_questions(conn, &sql, params![query, type_filter, bank_id])
 }
 
 #[tauri::command]
@@ -582,7 +919,11 @@ pub fn questions_get(id: String, state: State<'_, AppState>) -> Result<Value, St
 
 #[tauri::command]
 pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value, String> {
-    let mut q = data;
+    let conn = state.0.lock().map_err(to_str)?;
+    questions_create_impl(&conn, data)
+}
+
+fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<Value, String> {
     if !q.is_object() {
         return Err("data must be a JSON object".into());
     }
@@ -591,7 +932,7 @@ pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value
         _ => generate_id(),
     };
     let now = now_iso();
-    q["id"] = json!(id);
+    q["id"] = json!(id.clone());
     if q.get("created_at")
         .and_then(Value::as_str)
         .map_or(true, |s| s.is_empty())
@@ -610,14 +951,17 @@ pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value
     if q.get("status").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
         q["status"] = json!("published");
     }
+    // 缺 bank_id → 默认库（bank_default 存在则用之，否则首个 bank）
+    if q.get("bank_id").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+        let bid = resolve_default_bank(conn)?;
+        q["bank_id"] = json!(bid);
+    }
     q["plain_text"] = json!(aggregated_plain_text(&q));
 
-    let conn = state.0.lock().map_err(to_str)?;
-    let stored_id = q["id"].as_str().unwrap_or("").to_string();
     let exists: bool = conn
         .query_row(
             "SELECT 1 FROM questions WHERE id = ?1",
-            params![stored_id],
+            params![id],
             |_| Ok(true),
         )
         .optional()
@@ -626,9 +970,9 @@ pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value
     if exists {
         return Err("ID 已存在".into());
     }
-    insert_question(&conn, &q)?;
-    let stored = fetch_question(&conn, &stored_id)?.ok_or("stored question missing")?;
-    ok(stored)
+    insert_question(conn, &q)?;
+    let stored = fetch_question(conn, &id)?.ok_or("stored question missing")?;
+    Ok(stored)
 }
 
 #[tauri::command]
@@ -637,11 +981,15 @@ pub fn questions_update(
     data: Value,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    questions_update_impl(&conn, &id, data)
+}
+
+fn questions_update_impl(conn: &Connection, id: &str, data: Value) -> Result<Value, String> {
     if !data.is_object() {
         return Err("data must be a JSON object".into());
     }
-    let conn = state.0.lock().map_err(to_str)?;
-    let old = fetch_question(&conn, &id)?;
+    let old = fetch_question(conn, id)?;
 
     let mut merged = data;
     if let Some(old) = old {
@@ -649,7 +997,8 @@ pub fn questions_update(
             if let Some(mm) = merged.as_object_mut() {
                 for (k, v) in om {
                     // body wins for present keys; fill missing ones from old
-                    // (created_at preserved here; id/plain_text forced below)
+                    // (created_at preserved here; id/plain_text forced below;
+                    // bank_id 随 body 变更 → 移库)
                     if k != "plain_text" && !mm.contains_key(k) {
                         mm.insert(k.clone(), v.clone());
                     }
@@ -658,7 +1007,7 @@ pub fn questions_update(
         }
     }
     let now = now_iso();
-    merged["id"] = json!(id.clone());
+    merged["id"] = json!(id);
     merged["updated_at"] = json!(now.clone());
     if merged
         .get("created_at")
@@ -679,9 +1028,9 @@ pub fn questions_update(
     }
     merged["plain_text"] = json!(aggregated_plain_text(&merged));
 
-    upsert_question(&conn, &merged)?;
-    let stored = fetch_question(&conn, &id)?.ok_or("stored question missing")?;
-    ok(stored)
+    upsert_question(conn, &merged)?;
+    let stored = fetch_question(conn, id)?.ok_or("stored question missing")?;
+    Ok(stored)
 }
 
 #[tauri::command]
@@ -700,18 +1049,30 @@ pub fn questions_remove(id: String, state: State<'_, AppState>) -> Result<Value,
 pub fn practice_pool(
     limit: Option<u64>,
     type_filter: Option<String>,
+    bank_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
+    let rows = practice_pool_impl(&conn, limit, type_filter, bank_id)?;
+    ok(json!(rows))
+}
+
+fn practice_pool_impl(
+    conn: &Connection,
+    limit: Option<u64>,
+    type_filter: Option<String>,
+    bank_id: Option<String>,
+) -> Result<Vec<Value>, String> {
     let limit = limit.unwrap_or(20).min(500) as i64;
     let type_filter = type_filter.filter(|s| !s.is_empty());
+    let bank_id = bank_id.filter(|s| !s.is_empty());
     let sql = format!(
         "SELECT {SELECT_FIELDS} FROM questions
          WHERE (?1 IS NULL OR type = ?1)
+           AND (?3 IS NULL OR bank_id = ?3)
          ORDER BY RANDOM() LIMIT ?2"
     );
-    let rows = query_questions(&conn, &sql, params![type_filter, limit])?;
-    ok(json!(rows))
+    query_questions(conn, &sql, params![type_filter, limit, bank_id])
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -793,24 +1154,39 @@ pub fn record_answer(
 }
 
 #[tauri::command]
-pub fn review_due(limit: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+pub fn review_due(limit: Option<u64>, bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
+    let rows = review_due_impl(&conn, limit, bank_id)?;
+    ok(json!(rows))
+}
+
+fn review_due_impl(
+    conn: &Connection,
+    limit: Option<u64>,
+    bank_id: Option<String>,
+) -> Result<Vec<Value>, String> {
     let limit = limit.unwrap_or(20).min(500) as i64;
+    let bank_id = bank_id.filter(|s| !s.is_empty());
     let now = now_iso();
     let sql = format!(
         "SELECT {SELECT_FIELDS_Q} FROM questions q
          JOIN review_state r ON r.question_id = q.id
          WHERE r.due_at <= ?1
+           AND (?3 IS NULL OR q.bank_id = ?3)
          ORDER BY r.due_at ASC
          LIMIT ?2"
     );
-    let rows = query_questions(&conn, &sql, params![now, limit])?;
-    ok(json!(rows))
+    query_questions(conn, &sql, params![now, limit, bank_id])
 }
 
 #[tauri::command]
-pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
+pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
+    review_stats_impl(&conn, bank_id)
+}
+
+fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value, String> {
+    let bank_id = bank_id.filter(|s| !s.is_empty());
     let now = Utc::now();
     let start_today = now
         .date_naive()
@@ -821,7 +1197,11 @@ pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
     let start_7d = start_today - Duration::days(6);
 
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM questions", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1)",
+            params![bank_id],
+            |r| r.get(0),
+        )
         .map_err(to_str)?;
 
     let mut by_type = json!({
@@ -829,9 +1209,11 @@ pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
     });
     {
         let mut stmt = conn
-            .prepare("SELECT type, COUNT(*) FROM questions GROUP BY type")
+            .prepare(
+                "SELECT type, COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1) GROUP BY type",
+            )
             .map_err(to_str)?;
-        let mut rows = stmt.query([]).map_err(to_str)?;
+        let mut rows = stmt.query(params![bank_id]).map_err(to_str)?;
         while let Some(row) = rows.next().map_err(to_str)? {
             let t: String = row.get(0).map_err(to_str)?;
             let c: i64 = row.get(1).map_err(to_str)?;
@@ -843,34 +1225,43 @@ pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
 
     let due_total: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM review_state WHERE due_at <= ?1",
-            params![fmt_iso(now)],
+            "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
+            params![fmt_iso(now), bank_id],
             |r| r.get(0),
         )
         .map_err(to_str)?;
     let due_today: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM review_state WHERE due_at <= ?1",
-            params![fmt_iso(end_today)],
+            "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
+            params![fmt_iso(end_today), bank_id],
             |r| r.get(0),
         )
         .map_err(to_str)?;
 
     let practiced_total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM practice_records", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM practice_records p JOIN questions q ON q.id = p.question_id
+             WHERE (?1 IS NULL OR q.bank_id = ?1)",
+            params![bank_id],
+            |r| r.get(0),
+        )
         .map_err(to_str)?;
     let practiced_today: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM practice_records WHERE answered_at >= ?1",
-            params![fmt_iso(start_today)],
+            "SELECT COUNT(*) FROM practice_records p JOIN questions q ON q.id = p.question_id
+             WHERE p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
+            params![fmt_iso(start_today), bank_id],
             |r| r.get(0),
         )
         .map_err(to_str)?;
 
     let (rec_total, rec_correct): (i64, i64) = conn
         .query_row(
-            "SELECT COUNT(*), COALESCE(SUM(correct), 0) FROM practice_records",
-            [],
+            "SELECT COUNT(*), COALESCE(SUM(p.correct), 0) FROM practice_records p
+             JOIN questions q ON q.id = p.question_id WHERE (?1 IS NULL OR q.bank_id = ?1)",
+            params![bank_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(to_str)?;
@@ -884,11 +1275,13 @@ pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
     {
         let mut stmt = conn
             .prepare(
-                "SELECT substr(answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(correct), 0)
-                 FROM practice_records WHERE answered_at >= ?1 GROUP BY d ORDER BY d",
+                "SELECT substr(p.answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(p.correct), 0)
+                 FROM practice_records p JOIN questions q ON q.id = p.question_id
+                 WHERE p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
+                 GROUP BY d ORDER BY d",
             )
             .map_err(to_str)?;
-        let mut rows = stmt.query(params![fmt_iso(start_7d)]).map_err(to_str)?;
+        let mut rows = stmt.query(params![fmt_iso(start_7d), bank_id]).map_err(to_str)?;
         while let Some(row) = rows.next().map_err(to_str)? {
             let d: String = row.get(0).map_err(to_str)?;
             let cnt: i64 = row.get(1).map_err(to_str)?;
@@ -904,7 +1297,7 @@ pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
         records_7d.push(json!({ "date": key, "count": cnt, "correct": cok }));
     }
 
-    ok(json!({
+    Ok(json!({
         "total": total,
         "by_type": by_type,
         "due_total": due_total,
@@ -916,12 +1309,18 @@ pub fn review_stats(state: State<'_, AppState>) -> Result<Value, String> {
     }))
 }
 
+/// v3 export document: {"version":3,"banks":[...],"questions":[...]}
+fn build_export_doc(conn: &Connection) -> Result<Value, String> {
+    let sql = format!("SELECT {SELECT_FIELDS} FROM questions ORDER BY created_at ASC");
+    let questions = query_questions(conn, &sql, params![])?;
+    let banks = list_all_banks(conn)?;
+    Ok(json!({ "version": 3, "banks": banks, "questions": questions }))
+}
+
 #[tauri::command]
 pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    let sql = format!("SELECT {SELECT_FIELDS} FROM questions ORDER BY created_at ASC");
-    let questions = query_questions(&conn, &sql, params![])?;
-    let doc = json!({ "version": 2, "questions": questions });
+    let doc = build_export_doc(&conn)?;
 
     let dir = app
         .path()
@@ -939,23 +1338,71 @@ pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value
 #[tauri::command]
 pub fn import_dbjson(path: String, state: State<'_, AppState>) -> Result<Value, String> {
     let text = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {e}", path))?;
-    let root: Value = serde_json::from_str(&text).map_err(to_str)?;
-    let questions: Vec<Value> = match root.get("questions") {
-        Some(Value::Array(a)) => a.clone(),
+    let mut conn = state.0.lock().map_err(to_str)?;
+    ok(import_dbjson_impl(&mut conn, &text)?)
+}
+
+/// Compatible with v2 and v3: banks UPSERT by id, missing banks ⇒ default bank;
+/// question without bank_id ⇒ default bank; question UPSERT kept from v1.
+fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Value, String> {
+    let root: Value = serde_json::from_str(text).map_err(to_str)?;
+    let (questions, banks): (Vec<Value>, Vec<Value>) = match root.get("questions") {
+        Some(Value::Array(a)) => (
+            a.clone(),
+            root.get("banks").and_then(Value::as_array).cloned().unwrap_or_default(),
+        ),
         _ => match root {
-            Value::Array(a) => a,
+            Value::Array(a) => (a.clone(), Vec::new()),
             _ => {
                 return Err(
-                    "invalid dbjson: expected {\"version\":2,\"questions\":[...]} or an array"
+                    "invalid dbjson: expected {\"version\":2,\"banks\":[...],\"questions\":[...]} or an array"
                         .into(),
                 );
             }
         },
     };
 
-    let mut conn = state.0.lock().map_err(to_str)?;
-    let tx = conn.transaction().map_err(to_str)?;
     let mut imported: i64 = 0;
+    let mut banks_imported: i64 = 0;
+    let tx = conn.transaction().map_err(to_str)?;
+    // 无 banks 数组时确保默认库存在（幂等）
+    tx.execute_batch(SEED_DEFAULT_BANK)
+        .map_err(|e| format!("dbjson: seed default bank failed: {e}"))?;
+    for b in &banks {
+        if !b.is_object() {
+            return Err("dbjson: bank entry is not an object".into());
+        }
+        let id = b
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or("dbjson: bank entry missing id")?
+            .to_string();
+        let name = b.get("name").and_then(Value::as_str).unwrap_or("");
+        let description = b.get("description").and_then(Value::as_str);
+        let fallback = now_iso();
+        let created_at = b
+            .get("created_at")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&fallback);
+        let updated_at = b
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&fallback);
+        tx.execute(
+            "INSERT INTO banks (id, name, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               description = excluded.description,
+               updated_at = excluded.updated_at",
+            params![id, name, description, created_at, updated_at],
+        )
+        .map_err(to_str)?;
+        banks_imported += 1;
+    }
+
     for mut q in questions {
         if !q.is_object() {
             return Err("dbjson: question entry is not an object".into());
@@ -979,12 +1426,17 @@ pub fn import_dbjson(path: String, state: State<'_, AppState>) -> Result<Value, 
         if q.get("version").and_then(Value::as_i64).is_none() {
             q["version"] = json!(2);
         }
+        // 无 bank_id → 默认库
+        if q.get("bank_id").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+            let bid = resolve_default_bank(&tx)?;
+            q["bank_id"] = json!(bid);
+        }
         q["plain_text"] = json!(aggregated_plain_text(&q));
         upsert_question(&tx, &q)?;
         imported += 1;
     }
     tx.commit().map_err(to_str)?;
-    ok(json!({ "imported": imported }))
+    Ok(json!({ "imported": imported, "banks_imported": banks_imported }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1303,4 +1755,386 @@ mod tests {
         assert_eq!(recs, 0);
         assert_eq!(revs, 0);
     }
+
+    // -------------------------------------------------------------------
+    // Iteration 2: banks, migrations, filters, cascade, export v3 (§8)
+    // -------------------------------------------------------------------
+
+    /// In-memory DB with foreign keys + PLAN §3 DDL + MIGRATE (M1 seeds default bank).
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        init_schema(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn banks_crud_and_last_bank_guard() {
+        let conn = test_conn();
+
+        // M1 seeded exactly one default bank
+        let list = banks_list_impl(&conn).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["id"], "bank_default");
+        assert_eq!(list[0]["name"], "默认题库");
+        assert_eq!(list[0]["question_count"], 0);
+
+        // create: name trimmed, description kept
+        let b1 = banks_create_impl(&conn, "  数学题库  ", None).unwrap();
+        let b2 = banks_create_impl(&conn, "英语题库", Some("CET-4")).unwrap();
+        assert!(b1["id"].as_str().unwrap().starts_with("bank_"));
+        assert_eq!(b1["name"], "数学题库");
+        assert_eq!(b2["description"], "CET-4");
+        assert_eq!(b1["question_count"], 0);
+        assert_eq!(banks_list_impl(&conn).unwrap().len(), 3);
+
+        // empty (after trim) name rejected
+        let err = banks_create_impl(&conn, "   ", None).unwrap_err();
+        assert_eq!(err, "题库名称不能为空");
+
+        // update name/description
+        let upd = banks_update_impl(
+            &conn,
+            b1["id"].as_str().unwrap(),
+            Some(" 高等数学 "),
+            Some("线代"),
+        )
+        .unwrap();
+        assert_eq!(upd["name"], "高等数学");
+        assert_eq!(upd["description"], "线代");
+        let err = banks_update_impl(&conn, "bank_nope", Some("x"), None).unwrap_err();
+        assert_eq!(err, "Not Found");
+        let err = banks_update_impl(&conn, b1["id"].as_str().unwrap(), Some("  "), None).unwrap_err();
+        assert_eq!(err, "题库名称不能为空");
+
+        // assigned question reflects in question_count (LEFT JOIN COUNT)
+        let mut q = sample_question();
+        q["id"] = json!("q_bank_1");
+        q["bank_id"] = b1["id"].clone();
+        insert_question(&conn, &q).unwrap();
+        let list2 = banks_list_impl(&conn).unwrap();
+        let b1row = list2.iter().find(|b| b["id"] == b1["id"]).unwrap();
+        assert_eq!(b1row["question_count"], 1);
+
+        // remove b1 → its question is deleted alongside
+        let removed = banks_remove_impl(&conn, b1["id"].as_str().unwrap()).unwrap();
+        assert_eq!(removed["id"], b1["id"]);
+        assert!(fetch_question(&conn, "q_bank_1").unwrap().is_none());
+        let list3 = banks_list_impl(&conn).unwrap();
+        assert_eq!(list3.len(), 2);
+
+        // remove default → only b2 remains
+        banks_remove_impl(&conn, "bank_default").unwrap();
+        let rest = banks_list_impl(&conn).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0]["id"], b2["id"]);
+
+        // deleting the last bank is rejected
+        let err = banks_remove_impl(&conn, b2["id"].as_str().unwrap()).unwrap_err();
+        assert_eq!(err, "至少保留一个题库");
+        // unknown id → Not Found
+        let err = banks_remove_impl(&conn, "bank_nope").unwrap_err();
+        assert_eq!(err, "Not Found");
+    }
+
+    #[test]
+    fn migration_v1_to_v2_adds_column_seeds_and_backfills() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // v1 schema: questions WITHOUT bank_id (previous iteration DDL)
+        conn.execute_batch(
+            "CREATE TABLE questions (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL CHECK (type IN ('single','multi','judge','fill','short','material')),
+                version INTEGER NOT NULL DEFAULT 2,
+                difficulty INTEGER NOT NULL DEFAULT 2,
+                score REAL,
+                status TEXT NOT NULL DEFAULT 'published',
+                stem_json TEXT NOT NULL,
+                options_json TEXT,
+                answer_json TEXT,
+                analysis_json TEXT,
+                children_json TEXT,
+                plain_text TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE practice_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+                mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
+                grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),
+                correct INTEGER NOT NULL,
+                answered_at TEXT NOT NULL,
+                elapsed_ms INTEGER,
+                detail_json TEXT
+            );
+            CREATE TABLE review_state (
+                question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+                ease REAL NOT NULL DEFAULT 2.5,
+                interval_days REAL NOT NULL DEFAULT 0,
+                reps INTEGER NOT NULL DEFAULT 0,
+                lapses INTEGER NOT NULL DEFAULT 0,
+                due_at TEXT NOT NULL,
+                last_result TEXT,
+                last_reviewed_at TEXT
+            );",
+        )
+        .unwrap();
+        // an existing v1 row (raw SQL: no bank_id column yet)
+        conn.execute(
+            "INSERT INTO questions (id, type, version, difficulty, score, status, stem_json, plain_text, created_at, updated_at)
+             VALUES ('q_v1_1', 'single', 2, 2, 5.0, 'published', '{}', '旧题', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+
+        // MIGRATE: run DDL + M1/M2/M3 on the legacy DB
+        init_schema(&conn).unwrap();
+
+        // M2: bank_id column added
+        assert!(column_exists(&conn, "questions", "bank_id").unwrap());
+        // M1: default bank seeded, exactly once
+        let seeded: (String, i64) = conn
+            .query_row(
+                "SELECT name, (SELECT COUNT(*) FROM banks) FROM banks WHERE id = 'bank_default'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(seeded.0, "默认题库");
+        assert_eq!(seeded.1, 1);
+        // M3: legacy row backfilled to bank_default
+        let row = fetch_question(&conn, "q_v1_1").unwrap().unwrap();
+        assert_eq!(row["bank_id"], "bank_default");
+        // bank index created on the migrated column
+        let idx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_questions_bank'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1);
+
+        // idempotent: re-running schema init adds nothing
+        init_schema(&conn).unwrap();
+        let banks: i64 = conn
+            .query_row("SELECT COUNT(*) FROM banks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(banks, 1);
+    }
+
+    #[test]
+    fn filters_by_bank_across_commands() {
+        let conn = test_conn();
+        let b2 = banks_create_impl(&conn, "题库B", None).unwrap();
+        let bid = b2["id"].as_str().unwrap().to_string();
+
+        let mut qa = sample_question();
+        qa["bank_id"] = json!("bank_default");
+        let mut qb = sample_question();
+        qb["id"] = json!("q_b_1");
+        qb["bank_id"] = json!(bid);
+        insert_question(&conn, &qa).unwrap();
+        insert_question(&conn, &qb).unwrap();
+
+        // questions_list
+        assert_eq!(questions_list_impl(&conn, None, None, None).unwrap().len(), 2);
+        let in_b = questions_list_impl(&conn, None, None, Some(bid.clone())).unwrap();
+        assert_eq!(in_b.len(), 1);
+        assert_eq!(in_b[0]["id"], "q_b_1");
+        assert_eq!(in_b[0]["bank_id"], bid);
+        let in_default = questions_list_impl(&conn, None, None, Some("bank_default".to_string())).unwrap();
+        assert_eq!(in_default.len(), 1);
+        assert_eq!(in_default[0]["id"], "q_test_1");
+        let as_all = questions_list_impl(&conn, None, None, Some(String::new())).unwrap();
+        assert_eq!(as_all.len(), 2);
+
+        // practice_pool
+        let pool_b = practice_pool_impl(&conn, Some(20), None, Some(bid.clone())).unwrap();
+        assert_eq!(pool_b.len(), 1);
+        assert_eq!(pool_b[0]["id"], "q_b_1");
+        let pool_default =
+            practice_pool_impl(&conn, Some(20), None, Some("bank_default".to_string())).unwrap();
+        assert_eq!(pool_default.len(), 1);
+        assert_eq!(pool_default[0]["id"], "q_test_1");
+        assert_eq!(practice_pool_impl(&conn, Some(20), None, None).unwrap().len(), 2);
+
+        // review_due: both due immediately, filtered per bank
+        conn.execute_batch(
+            "INSERT INTO review_state (question_id, due_at) VALUES
+             ('q_test_1', '2000-01-01T00:00:00.000Z'),
+             ('q_b_1', '2000-01-01T00:00:00.000Z');",
+        )
+        .unwrap();
+        let due_b = review_due_impl(&conn, Some(50), Some(bid.clone())).unwrap();
+        assert_eq!(due_b.len(), 1);
+        assert_eq!(due_b[0]["id"], "q_b_1");
+        assert_eq!(review_due_impl(&conn, Some(50), None).unwrap().len(), 2);
+
+        // review_stats: all metrics aggregate per bank
+        let stats_b = review_stats_impl(&conn, Some(bid.clone())).unwrap();
+        assert_eq!(stats_b["total"], 1);
+        assert_eq!(stats_b["due_total"], 1);
+        let stats_all = review_stats_impl(&conn, None).unwrap();
+        assert_eq!(stats_all["total"], 2);
+        assert_eq!(stats_all["due_total"], 2);
+
+        // practice records count only for the owning bank
+        conn.execute(
+            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at)
+             VALUES ('q_b_1', 'practice', 'good', 1, '2026-09-10T12:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        let stats_b2 = review_stats_impl(&conn, Some(bid)).unwrap();
+        assert_eq!(stats_b2["practiced_total"], 1);
+        assert_eq!(stats_b2["correct_rate"], json!(100.0));
+        let stats_def = review_stats_impl(&conn, Some("bank_default".to_string())).unwrap();
+        assert_eq!(stats_def["practiced_total"], 0);
+        assert_eq!(stats_def["correct_rate"], Value::Null);
+    }
+
+    #[test]
+    fn remove_bank_cascades_questions_records_and_review() {
+        let conn = test_conn();
+        let b2 = banks_create_impl(&conn, "题库C", None).unwrap();
+        let bid = b2["id"].as_str().unwrap().to_string();
+
+        let mut qb = sample_question();
+        qb["id"] = json!("q_c_1");
+        qb["bank_id"] = json!(bid);
+        insert_question(&conn, &qb).unwrap();
+        conn.execute(
+            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at)
+             VALUES ('q_c_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO review_state (question_id, due_at) VALUES ('q_c_1', '2000-01-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+
+        banks_remove_impl(&conn, &bid).unwrap();
+
+        assert!(fetch_question(&conn, "q_c_1").unwrap().is_none());
+        let recs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM practice_records", [], |r| r.get(0))
+            .unwrap();
+        let revs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM review_state", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recs, 0);
+        assert_eq!(revs, 0);
+        assert_eq!(banks_list_impl(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn export_v3_shape_and_import_v2_v3() {
+        let conn = test_conn();
+        let b2 = banks_create_impl(&conn, "题库D", Some("desc d")).unwrap();
+        let bid = b2["id"].as_str().unwrap().to_string();
+        let mut qa = sample_question();
+        qa["bank_id"] = json!("bank_default");
+        let mut qb = sample_question();
+        qb["id"] = json!("q_d_1");
+        qb["bank_id"] = json!(bid);
+        insert_question(&conn, &qa).unwrap();
+        insert_question(&conn, &qb).unwrap();
+
+        // v3 shape: version 3, banks array present, questions carry bank_id
+        let doc = build_export_doc(&conn).unwrap();
+        assert_eq!(doc["version"], 3);
+        let banks = doc["banks"].as_array().unwrap();
+        assert_eq!(banks.len(), 2);
+        let default = banks.iter().find(|b| b["id"] == "bank_default").unwrap();
+        assert!(default.get("name").is_some());
+        assert!(default.get("description").is_some());
+        let questions = doc["questions"].as_array().unwrap();
+        assert_eq!(questions.len(), 2);
+        assert!(questions.iter().all(|q| q.get("bank_id").is_some()));
+
+        // v2 import: no banks array, question without bank_id → default bank
+        let mut conn2 = Connection::open_in_memory().unwrap();
+        conn2.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        init_schema(&conn2).unwrap();
+        let v2doc = json!({
+            "version": 2,
+            "questions": [{
+                "id": "q_imp_2",
+                "type": "single",
+                "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "v2题"}]}]},
+                "created_at": "2026-09-01T00:00:00.000Z",
+                "updated_at": "2026-09-01T00:00:00.000Z"
+            }]
+        });
+        let res2 =
+            import_dbjson_impl(&mut conn2, &serde_json::to_string(&v2doc).unwrap()).unwrap();
+        assert_eq!(res2["imported"], 1);
+        assert_eq!(fetch_question(&conn2, "q_imp_2").unwrap().unwrap()["bank_id"], "bank_default");
+
+        // v3 import: banks upserted by id, questions keep their bank_id
+        let mut conn3 = Connection::open_in_memory().unwrap();
+        conn3.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        init_schema(&conn3).unwrap();
+        let v3text = serde_json::to_string(&doc).unwrap();
+        let res3 = import_dbjson_impl(&mut conn3, &v3text).unwrap();
+        assert_eq!(res3["imported"], 2);
+        assert_eq!(res3["banks_imported"], 2);
+        assert_eq!(fetch_question(&conn3, "q_d_1").unwrap().unwrap()["bank_id"], bid);
+
+        // re-import UPSERTs bank name/description without duplication
+        let mut updated = doc;
+        if let Some(bs) = updated.get_mut("banks").and_then(Value::as_array_mut) {
+            for b in bs.iter_mut() {
+                if b["id"] == bid {
+                    b["name"] = json!("题库D改名");
+                    b["description"] = json!("new desc");
+                }
+            }
+        }
+        let res4 = import_dbjson_impl(&mut conn3, &serde_json::to_string(&updated).unwrap()).unwrap();
+        assert_eq!(res4["banks_imported"], 2);
+        let banks3 = banks_list_impl(&conn3).unwrap();
+        assert_eq!(banks3.len(), 2);
+        let renamed = banks3.iter().find(|b| b["id"] == bid).unwrap();
+        assert_eq!(renamed["name"], "题库D改名");
+        assert_eq!(renamed["description"], "new desc");
+    }
+
+    #[test]
+    fn questions_create_defaults_bank_and_update_moves_bank() {
+        let conn = test_conn();
+        // create without bank_id → defaults to bank_default
+        let mut q = sample_question();
+        q.as_object_mut().unwrap().remove("bank_id");
+        let created = questions_create_impl(&conn, q).unwrap();
+        assert_eq!(created["bank_id"], "bank_default");
+
+        // explicit bank_id honored
+        let b2 = banks_create_impl(&conn, "题库E", None).unwrap();
+        let bid = b2["id"].as_str().unwrap().to_string();
+        let mut q2 = sample_question();
+        q2["id"] = json!("q_e_1");
+        q2["bank_id"] = json!(bid);
+        let created2 = questions_create_impl(&conn, q2).unwrap();
+        assert_eq!(created2["bank_id"], bid);
+
+        // update with bank_id in body moves the question (移库)
+        let moved = questions_update_impl(
+            &conn,
+            "q_test_1",
+            json!({ "bank_id": bid, "score": 9 }),
+        )
+        .unwrap();
+        assert_eq!(moved["bank_id"], bid);
+        assert_eq!(moved["score"], json!(9.0));
+        let counting = banks_list_impl(&conn).unwrap();
+        let eb = counting.iter().find(|b| b["id"] == bid).unwrap();
+        assert_eq!(eb["question_count"], 2);
+    }
 }
+

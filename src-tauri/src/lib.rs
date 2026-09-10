@@ -9,6 +9,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            db::banks_list,
+            db::banks_create,
+            db::banks_update,
+            db::banks_remove,
             db::questions_list,
             db::questions_get,
             db::questions_create,

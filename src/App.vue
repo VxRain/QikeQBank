@@ -8,7 +8,7 @@
         </div>
         <nav class="nav">
           <router-link to="/" class="nav-link" active-class="active">首页</router-link>
-          <router-link to="/library" class="nav-link" active-class="active">题库</router-link>
+          <router-link to="/banks" class="nav-link" active-class="active">题库</router-link>
           <router-link to="/create" class="nav-link primary" active-class="active">+ 新增</router-link>
           <router-link to="/practice" class="nav-link" active-class="active">刷题</router-link>
           <router-link to="/review" class="nav-link" active-class="active">复习</router-link>
@@ -22,6 +22,10 @@
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
+import { loadBanks } from '@/stores/bank.js'
+
+onMounted(loadBanks)
 </script>
 
 <style>

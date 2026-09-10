@@ -3,7 +3,10 @@
     <div class="card">
       <div class="card-head">
         <h2>题库列表</h2>
-        <span class="badge">{{ filteredCount }} 题</span>
+        <div class="head-badges">
+          <span v-if="currentBankName" class="badge cur-bank">当前：{{ currentBankName }}</span>
+          <span class="badge">{{ filteredCount }} 题</span>
+        </div>
       </div>
 
       <div class="toolbar">
@@ -21,6 +24,15 @@
           <option value="fill">填空</option>
           <option value="short">问答</option>
           <option value="material">材料</option>
+        </select>
+        <select
+          v-model="bankStore.currentBankId"
+          class="select"
+          :disabled="!bankStore.loaded"
+          @change="fetchList"
+        >
+          <option value="">全部题库</option>
+          <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
         <button class="btn primary" @click="fetchList">搜索</button>
         <button class="btn" @click="reset">重置</button>
@@ -65,8 +77,11 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { list, remove } from '@/api/questions.js'
+import { bankStore, setCurrentBank } from '@/stores/bank.js'
 
+const route = useRoute()
 const query = ref('')
 const type = ref('')
 const questions = ref([])
@@ -74,6 +89,11 @@ const loading = ref(false)
 const error = ref('')
 
 const filteredCount = computed(() => questions.value.length)
+
+const currentBankName = computed(() => {
+  const b = bankStore.banks.find((x) => x.id === bankStore.currentBankId)
+  return b ? b.name : ''
+})
 
 function typeLabel(t) {
   const map = {
@@ -147,6 +167,7 @@ async function fetchList() {
     const params = {}
     if (query.value.trim()) params.query = query.value.trim()
     if (type.value) params.type = type.value
+    params.bankId = bankStore.currentBankId  // 空串 = 全部题库，由 api 层不传 bank_id
     const res = await list(params)
     // handle various response shapes: array, { data: [] }, { questions: [] }, { items: [] }
     let data = res
@@ -185,7 +206,12 @@ async function onDelete(id) {
   }
 }
 
-onMounted(fetchList)
+onMounted(async () => {
+  // 从题库页进入：/library?bank=<id> → 设为当前库再加载
+  const qb = route.query.bank
+  if (typeof qb === 'string' && qb) setCurrentBank(qb)
+  await fetchList()
+})
 
 // optional: auto search debounce could be added, but keep explicit search for now
 watch(type, () => {
@@ -209,6 +235,8 @@ watch(type, () => {
   margin-bottom: 16px;
 }
 .card-head h2 { margin: 0; font-size: 20px; font-weight:700; letter-spacing:-0.01em }
+.head-badges { display: flex; gap: 8px; align-items: center; }
+.badge.cur-bank { color: var(--primary); border-color: var(--primary-border); background: var(--primary-bg); }
 .badge {
   display: inline-block;
   font-size: 12px;

@@ -51,7 +51,7 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 │   └── views/              # Home 仪表盘 / List 题库 / Form 编辑 / Practice 刷题 / Review 复习
 ├── src-tauri/              # Rust：main/lib/db.rs（命令层 + SM-2 + 统计）
 │   └── src/db.rs           # 3 表 Schema / 11 个 command / 复习算法（含单测）
-└── tools/                  # migrate-dbjson.mjs / smoke-test.mjs
+└── tools/                  # migrate-dbjson.mjs / smoke-test.mjs / 在 App 首页可用「导入数据」直接加载
 ```
 
 ## 数据模型（简）

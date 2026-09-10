@@ -1,46 +1,56 @@
 # QikeQBank — 本地题库管理/刷题/复习客户端（Tauri 2 + Vue3 + SQLite）
 
-> 将 `C:/Users/Administrator/Desktop/test/QBank` 的 Web 版（Vue3+Vite+Tiptap3+KaTeX，Block JSON 题目格式）迁移为 **Tauri 2 桌面客户端**，存储从 `DB.json` 换成 **SQLite3**，并新增 **刷题** 与 **间隔复习** 两大功能。
-> 工作目录：`D:/Workspaces/QikeQBank`（git 仓库，当前无提交）。
+> 将 `C:/Users/Administrator/Desktop/test/QBank` 的 Web 版（Vue3+Vite+Tiptap3+KaTeX，Block JSON 题目格式）迁移为 **Tauri 2 桌面客户端**，存储为 **SQLite3**，含 **刷题** 与 **间隔复习（SM-2）**。
+> 工作目录：`D:/Workspaces/QikeQBank`（git 仓库）。
+> **迭代二（本计划主要变更）**：支持 **多题库** —— 新增 `banks` 表，`questions.bank_id` 外键；题库 CRUD + 全局 currentBank 状态；列表/刷题/复习按题库过滤；导出格式 v3。
 
 ## 1. 总体架构
 
 ```
-QikeQBank/                         ← 前端在仓库根（Tauri 惯例），后端为 Rust
-├── package.json / vite.config.js / index.html / tsconfig.json   [已由主线程写好，勿动]
-├── src/                           ← 前端（从 QBank/client/src 移植 + 新页面）
-│   ├── main.js  App.vue  router/index.js  api/*  utils/*
-│   ├── components/*               ← 原样复制（编辑器/预览，一行不改）
-│   └── views/ List.vue Form.vue | Home.vue Practice.vue Review.vue(新)
-├── src-tauri/                     ← Rust 后端（W1 负责）
-│   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json
-│   ├── icons/                     [主线程用 tauri icon 生成，勿动]
-│   └── src/ main.rs lib.rs db.rs
-└── tools/                         ← 迁移/冒烟脚本（W4 负责）
-    ├── migrate-dbjson.mjs   tools/smoke-test.mjs
+QikeQBank/
+├── package.json / vite.config.js / index.html / tsconfig.json / pnpm-workspace.yaml   [根配置，主线程所有]
+├── src/                           ← 前端
+│   ├── main.js  App.vue  router/index.js
+│   ├── api/    bridge.js  questions.js  practice.js  banks.js
+│   ├── stores/ bank.js            ← 全局题库状态（currentBankId，localStorage 持久化）
+│   ├── utils/  render.js validate.js normalize.js parsePureText.js
+│   ├── components/*               ← 编辑器组件（不变）
+│   └── views/  Home(v1+题库管理) List(题库下拉) Form(带 bank_id) Practice(题库下拉) Review(题库下拉)
+├── src-tauri/                     ← Rust（db.rs 承载全部逻辑）
+│   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
+└── tools/  migrate-dbjson.mjs  smoke-test.mjs
 ```
 
-**存储**：`questions`（题目，JSON 列）+ `practice_records`（作答流水）+ `review_state`（间隔复习状态）。DB 文件默认在 app_data_dir（运行时由 Rust 解析，`QKEBANK_DB` 环境变量可覆盖）。
-
-**数据流**：Vue 组件 → `src/api/*`（invoke 封装）→ Rust command → rusqlite。校验/规范化在前端（复用既有 JS），Rust 只做存储+检索+复习算法。
+**存储**：`banks` + `questions`（JSON 列）+ `practice_records` + `review_state`。DB 默认在 app_data_dir（`QKEBANK_DB` 环境变量可覆盖）。
 
 ## 2. 文件权限（互斥，严禁越界）
 
 | 角色 | 拥有文件（相对 D:/Workspaces/QikeQBank） |
 |---|---|
-| 主线程 | package.json vite.config.js index.html tsconfig.json .gitignore src-tauri/icons/** PLAN.md 集成/验证/提交 |
-| **W1** | `src-tauri/` 下除 icons/ 外全部：Cargo.toml, build.rs, tauri.conf.json, capabilities/default.json, src/main.rs, src/lib.rs, src/db.rs |
-| **W2** | `src/` 全部（复制自 QBank/client/src 并改造），但 **不得创建** views/Home.vue、Practice.vue、Review.vue；也不得动 src-tauri/、tools/ |
-| **W3** | 仅 `src/views/Home.vue`、`src/views/Practice.vue`、`src/views/Review.vue`（三个新文件） |
-| **W4** | 仅 `tools/migrate-dbjson.mjs`、`tools/smoke-test.mjs` |
+| 主线程 | 根配置、PLAN.md、src-tauri/icons/、README、集成验证/提交 |
+| **W1 Rust** | `src-tauri/Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`、`src/db.rs` |
+| **W2 前端管道** | `src/api/bridge.js`、`src/api/questions.js`、`src/api/practice.js`、`src/api/banks.js`(新)、`src/stores/bank.js`(新)、`src/App.vue` |
+| **W3a 列表/编辑** | `src/views/List.vue`、`src/views/Form.vue` |
+| **W3b 刷题/复习** | `src/views/Practice.vue`、`src/views/Review.vue` |
+| **W3c 首页** | `src/views/Home.vue` |
+| **W4 工具** | `tools/migrate-dbjson.mjs`、`tools/smoke-test.mjs` |
 
-W2 要改的既有文件：`src/api/questions.js`（axios→invoke）、`src/api/bridge.js`(新)、`src/api/practice.js`(新)、`src/router/index.js`、`src/App.vue`（导航）、`src/views/Form.vue`（保存前调用 normalize）、`src/utils/normalize.js`(新)。其余 components/views/utils 原样复制。
+## 3. SQLite（v2 权威定义：DDL 幂等语句 + MIGRATE 级联步骤，Rust 与 W4 必须逐字符一致）
 
-## 3. SQLite 表结构（唯一权威 DDL，Rust 与 W4 脚本必须逐字符一致）
+### 3.1 DDL（幂等，可重复执行）
 
 ```sql
+CREATE TABLE IF NOT EXISTS banks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY,
+  bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('single','multi','judge','fill','short','material')),
   version INTEGER NOT NULL DEFAULT 2,
   difficulty INTEGER NOT NULL DEFAULT 2,
@@ -57,6 +67,7 @@ CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
+CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
@@ -84,130 +95,142 @@ CREATE TABLE IF NOT EXISTS review_state (
 );
 ```
 
-- 连接开启 `PRAGMA foreign_keys=ON`、`PRAGMA journal_mode=WAL`。
-- 题目列 ↔ Question JSON 映射：
-  `stem_json←stem`、`options_json←options`、`answer_json←answer`、`analysis_json←analysis`、`children_json←children`；读取时组合回完整 Question 对象（键缺失即 null，前端容忍）。
-- 时间一律 ISO-8601 UTC（如 `2026-09-10T12:00:00.000Z`）。
+### 3.2 MIGRATE 步骤（先 DDL 后按序执行；`<now>` 一律用 SQL `strftime('%Y-%m-%dT%H:%M:%fZ','now')`）
+
+```sql
+-- M1 种子默认题库（幂等）
+INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at)
+VALUES ('bank_default', '默认题库', NULL,
+        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- M2 存量库补列（仅当 questions 无 bank_id 列时执行）：
+ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE;
+
+-- M3 存量行回填
+UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;
+```
+
+- 连接设置：`PRAGMA foreign_keys=ON`、`PRAGMA journal_mode=WAL`。
+- 题目列 ↔ Question JSON：`stem_json←stem`、`options_json←options`、`answer_json←answer`、`analysis_json←analysis`、`children_json←children`；读取时组合回完整对象（缺键 null）。
+- 时间一律 ISO-8601 UTC。
 
 ## 4. Rust Command 契约（tauri v2，全部 `-> Result<Value, String>`）
 
-JS invoke 传参用 **camelCase**，Rust 参数用 **snake_case**，Tauri v2 自动映射。
+JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映射）。
 
-| command | 参数 | 返回（JSON） |
+**题库（新增 4 个）**
+
+| command | 参数 | 返回 |
 |---|---|---|
-| `questions_list` | `query?: String, type_filter?: String` | `{"success":true,"data":[Question...]}` 按 plain_text/id LIKE 搜索、type 过滤，created_at DESC |
-| `questions_get` | `id: String` | `{"success":true,"data":Question}`；不存在 → Err("Not Found") |
-| `questions_create` | `data: Value` | 无 id 则生成 `q_{unixms}_{4hex}`；补 created_at/updated_at/version=2；重算 plain_text；插入。返回信封 |
-| `questions_update` | `id: String, data: Value` | 以 body 为准合并（保留旧 created_at），id=参数值，updated_at=now，重算 plain_text，UPSERT。返回信封 |
-| `questions_remove` | `id: String` | 删除（级联删流水/复习态）。`{"success":true,"data":{"id":...}}` |
-| `practice_pool` | `limit?: u64(默认20), type_filter?: String` | `ORDER BY RANDOM() LIMIT n` 随机抽题 |
-| `record_answer` | `items: [{question_id,mode,grade,correct?,elapsed_ms?,detail?}]` | 插 practice_records + 按 SM-2 更新 review_state（见 §5）。`{"success":true,"data":{"inserted":n}}` |
-| `review_due` | `limit?: u64(默认20)` | `due_at <= now` 的题，due_at ASC。`{"success":true,"data":[Question...]}` |
-| `review_stats` | — | 见 §6 |
-| `export_dbjson` | — | 全量导出 `{version:2,questions:[...]}` 到 `app_data/export/DB-<时间戳>.json`，返回 `{"success":true,"data":{"path":"..."}}` |
-| `import_dbjson` | `path: String` | 读取并 UPSERT（缺 id/created_at 的补默认），重算 plain_text。`{"success":true,"data":{"imported":n}}` |
+| `banks_list` | — | `{"success":true,"data":[{id,name,description,question_count,created_at,updated_at}]}`（question_count 用 LEFT JOIN COUNT） |
+| `banks_create` | `name: String, description?: Option<String>` | name trim 后非空，否则 Err("题库名称不能为空")；id=`bank_<unixms>_<4hex>`；补时间戳 |
+| `banks_update` | `id: String, name?: Option<String>, description?: Option<String>` | 改名/改说明；name 给出时须非空；不存在 Err("Not Found") |
+| `banks_remove` | `id: String` | 级联删该库全部题（→ 流水/复习态）。**若为最后一个题库 → Err("至少保留一个题库")**。返回 `{"success":true,"data":{"id":...}}` |
 
-- `plain_text` = 题干全文聚合（含 material 子题：各子题 stem + options + answer.reference + analysis），规则：
-  paragraph 内 text 拼接；`inlineMath`→latex 原文；`blank`→"___"；`imageBlock`→"[图]"；`mathBlock`→latex。
-- AppState：`Mutex<Connection>`（rusqlite Connection 非 Sync），每次调用短锁。
-- setup 阶段建库（ensure：执行 §3 DDL）。
-- db 路径：环境变量 `QKEBANK_DB` 优先，否则 `app.path().app_data_dir()` 下 `qbank.db`。
+**试题（bank_id 过滤 + 归属）**
 
-## 5. SM-2 复习算法（W1 实现，须带单元测试）
+| command | 参数 | 变更 |
+|---|---|---|
+| `questions_list` | `query?, type_filter?, bank_id?` | 有 bank_id 时 `WHERE bank_id=?`；其余不变 |
+| `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
+| `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；其余不变 |
+| `questions_get` / `questions_remove` | 不变 | 不变 |
+
+**刷题/复习/统计（bank 可选过滤）**
+
+| command | 参数 | 变更 |
+|---|---|---|
+| `practice_pool` | `limit?, type_filter?, bank_id?` | 有 bank_id 时过滤 |
+| `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤 |
+| `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局 |
+| `record_answer` | 不变 | 不变 |
+
+**导入导出（v3）**
+
+| command | 参数 | 变更 |
+|---|---|---|
+| `export_dbjson` | — | 输出 `{"version":3,"banks":[{id,name,description,created_at,updated_at}],"questions":[...]}`（questions 含 bank_id） |
+| `import_dbjson` | `path` | 兼容 v2/v3：banks 按 id UPSERT（name/description/updated_at），缺 banks 时确保默认库存在；question 无 bank_id → 默认库；UPSERT 见 v1 |
+
+- `plain_text` 聚合、SM-2、信封结构、AppState(Mutex<Connection>)、db 路径解析均沿用 v1。
+
+## 5. SM-2（不变）
 
 ```text
-grade:
-  again: lapses+=1; reps=0; ease=max(1.3, ease-0.20); interval_days=0;   due=now
-  hard : reps+=1; ease=max(1.3, ease-0.15); interval_days=max(1, round(interval*1.2)); due=now+interval
-  good : reps+=1; ease=min(3.0, ease+0.10); interval = reps==1?1 : reps==2?6 : round(interval*ease); due=now+interval
-  easy : reps+=1; ease=min(3.0, ease+0.15); interval = max(2, round(interval==0?2 : interval*2)); due=now+interval
+again: lapses+=1; reps=0; ease=max(1.3, ease-0.20); interval_days=0;   due=now
+hard : reps+=1; ease=max(1.3, ease-0.15); interval_days=max(1, round(interval*1.2)); due=now+interval
+good : reps+=1; ease=min(3.0, ease+0.10); interval = reps==1?1 : reps==2?6 : round(interval*ease); due=now+interval
+easy : reps+=1; ease=min(3.0, ease+0.15); interval = max(2, round(interval==0?2 : interval*2)); due=now+interval
 ```
-- practice 模式映射：`correct=true→good`，`correct=false→again`；review 模式由用户在 UI 三键自评（again/hard/good/easy）。
-- 每题首次作答（无 review_state 行）按 ease=2.5, interval=0, reps=0 初始化再更新。
-- `correct` 落地 = grade ∈ {good, easy}（1/0），前端自带的 correct 字段仅为冗余参考。
+practice 映射：correct=true→good / false→again。`correct` 落地 = grade ∈ {good,easy}。
 
-## 6. review_stats 返回结构
+## 6. review_stats（不变结构，支持 bank_id 可选聚合）
 
 ```json
-{
-  "success": true,
-  "data": {
-    "total": 123, "by_type": {"single": 5, "multi": 2, "judge": 1, "fill": 1, "short": 1, "material": 1},
-    "due_total": 7, "due_today": 3,
-    "practiced_total": 300, "practiced_today": 12,
-    "correct_rate": 82.5,
-    "records_7d": [{"date": "2026-09-04", "count": 20, "correct": 16}, "..."]
-  }
-}
+{"success":true,"data":{"total":n,"by_type":{...},"due_total":n,"due_today":n,
+ "practiced_total":n,"practiced_today":n,"correct_rate":82.5|null,
+ "records_7d":[{"date":"2026-09-04","count":20,"correct":16}]}}
 ```
-- due_today = `due_at <= 当日UTC结束`；records_7d = 近7天按 `substr(answered_at,1,10)` 分组；correct_rate 无数据时为 null。
 
 ## 7. 前端模块契约
 
-### api/bridge.js（W2 新建）
+### api/bridge.js（不变）
+`cmd(name, args)` 封装 invoke。
+
+### api/banks.js（W2 新建）
 ```js
-import { invoke } from '@tauri-apps/api/core'
-export async function cmd(name, args = {}) {
-  return await invoke(name, args)   // Err(String) 自动 reject 为 Error
-}
+listBanks()            → cmd('banks_list') → .data        // [{id,name,description,question_count,...}]
+createBank(name, description='') → cmd('banks_create',{name,description}) → .data
+updateBank(id, {name, description}) → cmd('banks_update',{id,...}) → .data
+removeBank(id)         → cmd('banks_remove',{id}) → .data
 ```
 
-### api/questions.js（W2 改造，导出签名不变，List.vue/Form.vue 因此零改动）
+### stores/bank.js（W2 新建）
 ```js
-list(params)  → cmd('questions_list', { query, typeFilter })   // 返回完整信封 {success,data}
-get(id)       → cmd('questions_get', { id })                   // 信封 {success,data}
-create(data)  → cmd('questions_create', { data })
-update(id,data) → cmd('questions_update', { id, data })
-remove(id)    → cmd('questions_remove', { id })
+import { reactive } from 'vue'
+export const bankStore = reactive({ banks: [], currentBankId: localStorage.getItem('qbank.currentBankId') || '', loaded: false })
+export async function loadBanks()      // 拉 banks；banks 非空且 currentBankId 不在其中 → 默认第一个；写 localStorage
+export function setCurrentBank(id)     // 更新 + localStorage
 ```
 
-### api/practice.js（W2 新建，W3 只依赖它）
-```js
-practicePool({ limit = 20, type = '' })  → resolve 为 Question[]（取 .data）
-recordAnswer(items)                      → { inserted }
-reviewDue({ limit = 20 })                → Question[]
-stats()                                  → stats 对象
-exportData()                             → { path }
-importData(path)                         → { imported }
-```
+### api/questions.js（W2 改）
+`list({query, type, bankId})` → args 带 `bank_id`（bankId falsy 时不传=全部）。其余不变。
 
-### 路由（W2 改 router/index.js；**createWebHashHistory**，桌面端 hash 路由最稳）
-```
-/          → Home.vue       (name: Home)
-/library   → List.vue       (name: List)
-/create    → Form.vue       (name: Create)
-/edit/:id  → Form.vue       (name: Edit)
-/practice  → Practice.vue   (name: Practice)
-/review    → Review.vue     (name: Review)
-```
+### api/practice.js（W2 改）
+`practicePool({limit,type,bankId})`、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）。其余不变。
 
-### App.vue 导航（W2 改，样式沿用，加 3 项）
-`首页 | 题库 | 新增 | 刷题 | 复习`（router-link，active-class="active"）
+### App.vue（W2 改）
+`onMounted` 调 `loadBanks()`（唯一全局装载入口）；导航不变。
 
-### utils/normalize.js（W2 新建）
-从 `C:/Users/Administrator/Desktop/test/QBank/server/routes/questions.js` **原样移植**两个纯函数：
-`normalizeQuestion(q)`（analysis 空→null、options 去 isAnswer 并补 id、short 迁移 reference、material 子题 id/score/difficulty 派生）与 `getAggregatedPlainText(q)`。
-Form.vue 的 `onSave` 在 create/update 前调用二者（normalize 后把 `q.plain_text = getAggregatedPlainText(q)`）。
+### List.vue（W3a）
+- 工具栏加「题库」下拉：选项 = 「全部题库」(值为 '') + bankStore.banks 各项；绑定 bankStore.currentBankId。
+- 切换即重新 fetchList（携带 bankId）；搜索/筛选逻辑不变。
+- 未加载完成时下拉禁用（disabled）。
 
-### 新页面（W3）
-- **Home.vue**：stats 仪表盘（题量/正确率/待复习/7日趋势条）+ 入口卡（刷题、复习——显示 due_today、题库、新增、导出数据）。书写朴素，无图表库。
-- **Practice.vue** 刷题：设置（题型多选+题量[5/10/20/全部]）→ 逐题作答：
-  - single/judge 单选按钮；multi 复选；fill 题干里 blank 节点渲染为输入框（从 stem doc 提取 blank id 顺序）；short 文本框+“查看参考答案”+自评(不会/会)；material 先渲染材料题干再逐子题作答。
-  - 提交后：自动判分（choice 比对 answer.ids；fill 比对 blank.answers 任一含 trim+小写相等；short 自评），显示 对/错、解析(analysis)、参考答案(short)，然后 `recordAnswer([{question_id, mode:'practice', grade, elapsed_ms, detail}])` → 下一题。
-  - **判分前不得显示答案/解析**（用 utils/render.js 的 renderDoc/renderInlineNodes 自行渲染，不要用 QuestionPreview 的带答案高亮版本）。
-  - 结束页：得分/正确率/时长 + “错题重做”（会话内记忆 wrong 题再排一轮）+ 返回首页。
-- **Review.vue** 复习：显示 due_total → 开始复习 `reviewDue({limit:20})` → 与刷题相近的卡片流程，作答后展示参考答案/解析 + **四键自评** 忘记(again)/困难(hard)/良好(good)/简单(easy) → `recordAnswer([..., mode:'review'])`。结束页汇总。
-- 两页都复用 `QuestionPreview`? —— 不。判分前用自定义渲染（见上），判分后用 `renderDoc/renderOptions` 展示解析。样式复用全局 CSS 变量（App.vue 的 :root）。
+### Form.vue（W3a）
+- `onSave`：新建时 `payload.bank_id = bankStore.currentBankId || bankStore.banks[0]?.id`；编辑时不覆盖（保留 DB 行的 bank_id）。
+- 顶部展示「所属题库」小徽章（编辑时显示当前 bank 名，只读）。
 
-## 8. 验证标准（worker 各自完成后自证）
+### Practice.vue（W3b）
+- 设置面板加「题库」下拉：全部(值为 '') + 各库；默认当前库（bankStore.currentBankId，空则 ''）。
+- 组卷时 `practicePool({limit,type,bankId})`；其余逻辑不动。
 
-- **W1**：`cd src-tauri && cargo check` 通过；`cargo test`（db.rs 内 SM-2 与 plain_text 提取单测）全绿。首次编译耗时 5-10 分钟属正常。
-- **W2**：`node --check` 每个改动 JS；`pnpm build`（vite build）通过（依赖根 package.json，主线程已 install）。Home/Practice/Review 三个文件不存在时 vite 也能构建（路由用了动态 import 或延迟解析——router 用 `() => import(...)` 懒加载，天然兼容）。
-- **W3**：三个 .vue 语法自检（vite build 集成验证在 W2+W3 合并后由主线程执行）；逻辑上对照 §7 契约自测。
-- **W4**：`node tools/migrate-dbjson.mjs <DB.json> <out.db>` 跑通；`node tools/smoke-test.mjs` PASS（验证 DDL 与 §3 一致、CRUD 往返）。
+### Review.vue（W3b）
+- 顶部设置同 Practice（题库下拉）；`reviewDue({limit:20, bankId})`；其余不动。
 
-**依赖解析**：W1 `cargo add tauri tauri-build serde serde_json rusqlite --features rusqlite/bundled chrono`（chrono 只开 clock feature）；W4 优先 Node 24 内置 `node:sqlite`（DatabaseSync），不可用则 `pnpm add -D better-sqlite3`。
+### Home.vue（W3c）
+- 新增「题库管理」卡：
+  - 列表：每行 = 名称 + 题数(question_count) + 当前徽章 + 设为当前(点行)/重命名(prompt 输入新名)/删除(confirm + 客户端也拦最后一个)。
+  - 新增：输入框 + 按钮（name trim 非空）。
+  - 操作后 `loadBanks()` 刷新（保持当前选择）。
+- 其余卡片不动；导出数据继续调 `exportData()`。
 
-**升级条件**（失败≥2 次或发现计划假设失真 → 停止并如实汇报，勿臆造）：
-- 计划假设与代码现实不符（如某组件依赖 axios 之外的网络调用、Tiptap 版本不兼容 vite5）
-- 跨模块根因（如 tauri.conf.json 与 Cargo.toml 不匹配）
+## 8. 验证标准
+
+- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
+- **W2**：`node --check` 新增/改动 js；无 axios 残留。
+- **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
+- **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）。输出 SMOKE PASS / 迁移统计。
+- **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、debug EXE 启动建库冒烟、git commit。
+
+**升级条件**（同 v1）：失败 ≥2 次或计划假设失真 → 停止如实汇报，禁止臆造。
