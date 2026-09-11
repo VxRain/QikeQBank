@@ -1,6 +1,7 @@
 /**
  * 题库管理页（/banks）
- * 每个题库一张卡：题数 / 当前标记 / 进入题库（试题列表）/ 设为当前 / 重命名 / 删除
+ * 卡片网格：点击卡片进入题库；右键菜单承载进入/设为当前/重命名/删除；
+ * 新建/重命名共用应用内弹窗（名字 + 描述）。
  */
 <template>
   <div class="page">
@@ -9,21 +10,12 @@
         <h2 class="section-title flex items-center gap-2">
           <i class="i-lucide-library text-primary" />题库管理
         </h2>
-        <span class="badge">{{ bankStore.banks.length }} 个题库 · 共 {{ totalCount }} 题</span>
-      </div>
-
-      <div class="flex gap-2.5 mb-4">
-        <input
-          v-model="newBankName"
-          class="input flex-1 min-w-[180px]"
-          type="text"
-          placeholder="新题库名称，回车创建"
-          :disabled="creating"
-          @keyup.enter="onCreateBank"
-        />
-        <button type="button" class="btn btn-primary" :disabled="creating || !newBankName.trim()" @click="onCreateBank">
-          <i class="i-lucide-plus" />{{ creating ? '创建中…' : '新建题库' }}
-        </button>
+        <div class="flex items-center gap-2.5">
+          <span class="badge">{{ bankStore.banks.length }} 个题库 · 共 {{ totalCount }} 题</span>
+          <button type="button" class="btn btn-primary btn-small" @click="openCreate">
+            <i class="i-lucide-plus" />新建题库
+          </button>
+        </div>
       </div>
 
       <div v-if="!bankStore.loaded" class="text-muted py-2 flex items-center gap-2">
@@ -31,98 +23,236 @@
       </div>
 
       <div v-else-if="bankStore.banks.length === 0" class="text-muted py-2 flex items-center gap-2">
-        <i class="i-lucide-folder-open" />暂无题库，请先在上方新建
+        <i class="i-lucide-folder-open" />暂无题库，点击右上新建
       </div>
 
-      <div v-else class="flex flex-col gap-2">
+      <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3.5">
         <div
           v-for="b in bankStore.banks"
           :key="b.id"
-          class="flex items-center justify-between gap-3 px-3.5 py-3 border border-line rounded-[12px] bg-bg-accent cursor-pointer transition-[background-color,border-color] duration-150 hover:bg-card hover:border-line-strong"
-          :class="b.id === bankStore.currentBankId && 'border-primary-border bg-primary-bg hover:border-primary-border hover:bg-primary-bg'"
-          @click="onSelectBank(b)"
+          role="button"
+          tabindex="0"
+          class="card card-interactive flex flex-col gap-2 cursor-pointer !p-4"
+          :class="b.id === bankStore.currentBankId && '!border-primary-border !bg-primary-bg'"
+          :title="`进入「${b.name}」`"
+          @click="onEnter(b)"
+          @keyup.enter="onEnter(b)"
+          @contextmenu.prevent="onCtxMenu($event, b)"
         >
-          <div class="flex items-center gap-2.5 min-w-0">
-            <i class="i-lucide-folder text-[18px] shrink-0" :class="b.id === bankStore.currentBankId ? 'text-primary' : 'text-muted-light'" />
-            <span class="font-600 text-[14px] text-text truncate">{{ b.name }}</span>
-            <span class="text-[12px] text-muted whitespace-nowrap">{{ b.question_count ?? 0 }} 题</span>
-            <span v-if="b.id === bankStore.currentBankId" class="badge badge-cur">当前</span>
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <i
+                class="i-lucide-folder text-[18px] shrink-0"
+                :class="b.id === bankStore.currentBankId ? 'text-primary' : 'text-muted-light'"
+              />
+              <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
+            </div>
+            <span v-if="b.id === bankStore.currentBankId" class="badge badge-cur shrink-0">当前</span>
           </div>
-          <div class="flex gap-1.5 flex-wrap" @click.stop>
-            <router-link :to="`/library?bank=${b.id}`" class="btn btn-small btn-primary-link">
-              <i class="i-lucide-arrow-right" />进入题库
-            </router-link>
-            <button
-              v-if="b.id !== bankStore.currentBankId"
-              type="button"
-              class="btn btn-small"
-              @click="onSelectBank(b)"
-            ><i class="i-lucide-check" />设为当前</button>
-            <button type="button" class="btn btn-small" @click="onRenameBank(b)">
-              <i class="i-lucide-pen-line" />重命名
-            </button>
-            <button type="button" class="btn btn-small btn-danger" @click="onRemoveBank(b)">
-              <i class="i-lucide-trash-2" />删除
-            </button>
+          <div v-if="b.description" class="text-[12px] text-muted leading-[1.6] line-clamp-2 min-h-[19px]">
+            {{ b.description }}
+          </div>
+          <div class="flex items-center justify-between gap-2 mt-auto pt-1">
+            <span class="text-[12px] text-muted-light">{{ b.question_count ?? 0 }} 题</span>
+            <span class="inline-flex items-center gap-1 text-[12px] font-500 text-primary">
+              进入<i class="i-lucide-arrow-right text-[13px]" />
+            </span>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- 右键菜单：应用内悬浮，非原生 -->
+    <Teleport to="body">
+      <Transition name="ctx">
+        <div
+          v-if="ctx"
+          class="fixed z-[900] w-[180px] bg-card border border-line rounded-[8px] shadow-lg p-1.5 flex flex-col gap-0.5"
+          :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+          role="menu"
+        >
+          <button type="button" class="ctx-item" @click="onCtxEnter">
+            <i class="i-lucide-arrow-right" />进入题库
+          </button>
+          <button
+            v-if="ctx.bank.id !== bankStore.currentBankId"
+            type="button"
+            class="ctx-item"
+            @click="onCtxSetCurrent"
+          >
+            <i class="i-lucide-check" />设为当前
+          </button>
+          <button type="button" class="ctx-item" @click="onCtxRename">
+            <i class="i-lucide-pen-line" />重命名
+          </button>
+          <div class="h-px bg-[var(--line)] my-1" />
+          <button type="button" class="ctx-item ctx-danger" @click="onCtxRemove">
+            <i class="i-lucide-trash-2" />删除
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- 新建 / 重命名弹窗：名字 + 描述，复用 DialogHost 视觉语言 -->
+    <Teleport to="body">
+      <Transition name="dg">
+        <div v-if="dlg" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="dlg = null">
+          <div class="dg-card w-[min(420px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" :aria-label="dlg.mode === 'create' ? '新建题库' : '重命名题库'">
+            <h3 class="m-0 mb-3.5 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)]">
+              {{ dlg.mode === 'create' ? '新建题库' : '重命名题库' }}
+            </h3>
+            <label class="field-label" for="bank-dlg-name">名称</label>
+            <input
+              id="bank-dlg-name"
+              v-model="dlg.name"
+              class="input w-full mb-3.5"
+              type="text"
+              placeholder="题库名称"
+              maxlength="60"
+              @keyup.enter="onDlgOk"
+              @keyup.esc="dlg = null"
+            />
+            <label class="field-label" for="bank-dlg-desc">描述（可选）</label>
+            <textarea
+              id="bank-dlg-desc"
+              v-model="dlg.description"
+              class="input w-full mb-4 resize-y min-h-[72px] leading-[1.6]"
+              rows="3"
+              placeholder="一句话说明这个题库的用途…"
+              maxlength="300"
+              @keyup.esc="dlg = null"
+            />
+            <div class="flex justify-end gap-2.5">
+              <button type="button" class="btn" @click="dlg = null">取消</button>
+              <button
+                type="button"
+                class="btn btn-primary"
+                :disabled="dlg.saving || !dlg.name.trim()"
+                @click="onDlgOk"
+              >{{ dlg.saving ? '保存中…' : '确定' }}</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { bankStore, loadBanks, setCurrentBank } from '@/stores/bank.js'
 import { createBank, updateBank, removeBank } from '@/api/banks.js'
-import { toast, confirmDialog, promptDialog } from '@/stores/ui.js'
+import { toast, confirmDialog } from '@/stores/ui.js'
 
-const newBankName = ref('')
-const creating = ref(false)
+const router = useRouter()
 
 const totalCount = computed(() =>
   bankStore.banks.reduce((s, b) => s + (b.question_count ?? 0), 0)
 )
+
+// ── 进入 / 设为当前 ──
+function onEnter(b) {
+  router.push(`/library?bank=${b.id}`)
+}
 
 function onSelectBank(b) {
   if (b.id === bankStore.currentBankId) return
   setCurrentBank(b.id)
 }
 
-async function onCreateBank() {
-  const name = newBankName.value.trim()
-  if (!name) return
-  creating.value = true
-  try {
-    const created = await createBank(name)
-    newBankName.value = ''
-    await loadBanks()
-    if (created?.id) setCurrentBank(created.id)
-  } catch (e) {
-    console.error(e)
-    toast('新建题库失败：' + (e?.message || e), 'error')
-  } finally {
-    creating.value = false
+// ── 右键菜单 ──
+const ctx = ref(null) // { x, y, bank }
+
+function onCtxMenu(e, b) {
+  ctx.value = {
+    x: Math.min(e.clientX, window.innerWidth - 196),
+    y: Math.min(e.clientY, window.innerHeight - 190),
+    bank: b
   }
+  // 注意：关闭监听用冒泡（不能 capture），否则 window 先于菜单项按钮收到 click，
+  // closeCtx 会抢先清空 ctx，导致菜单动作读不到 bank。scroll 不冒泡，保留 capture。
+  window.addEventListener('click', closeCtx)
+  window.addEventListener('keydown', onCtxKey)
+  window.addEventListener('scroll', closeCtx, { capture: true })
 }
 
-async function onRenameBank(b) {
-  const name = await promptDialog({
-    title: '重命名题库',
-    message: `请输入「${b.name}」的新名称：`,
-    initial: b.name,
-    placeholder: '题库名称'
-  })
-  if (name == null) return
-  const trimmed = name.trim()
-  if (!trimmed || trimmed === b.name) return
+function closeCtx() {
+  if (!ctx.value) return
+  ctx.value = null
+  window.removeEventListener('click', closeCtx)
+  window.removeEventListener('keydown', onCtxKey)
+  window.removeEventListener('scroll', closeCtx, { capture: true })
+}
+
+function onCtxKey(e) {
+  if (e.key === 'Escape') closeCtx()
+}
+
+function onCtxEnter() {
+  const b = ctx.value?.bank
+  closeCtx()
+  if (b) onEnter(b)
+}
+
+function onCtxSetCurrent() {
+  const b = ctx.value?.bank
+  closeCtx()
+  if (b) onSelectBank(b)
+}
+
+function onCtxRename() {
+  const b = ctx.value?.bank
+  closeCtx()
+  if (b) openRename(b)
+}
+
+function onCtxRemove() {
+  const b = ctx.value?.bank
+  closeCtx()
+  if (b) onRemoveBank(b)
+}
+
+onUnmounted(closeCtx)
+
+// ── 新建 / 重命名弹窗 ──
+const dlg = ref(null) // { mode: 'create'|'rename', id, name, description, saving }
+
+function openCreate() {
+  dlg.value = { mode: 'create', id: '', name: '', description: '', saving: false }
+}
+
+function openRename(b) {
+  dlg.value = { mode: 'rename', id: b.id, name: b.name, description: b.description || '', saving: false, _origName: b.name, _origDesc: b.description || '' }
+}
+
+async function onDlgOk() {
+  const d = dlg.value
+  if (!d || d.saving) return
+  const name = d.name.trim()
+  if (!name) return
+  const description = d.description.trim()
+  d.saving = true
   try {
-    await updateBank(b.id, { name: trimmed })
-    await loadBanks()
-    toast('题库已重命名', 'success')
+    if (d.mode === 'create') {
+      const created = await createBank(name, description)
+      await loadBanks()
+      if (created?.id) setCurrentBank(created.id)
+      toast(`题库「${name}」已创建`, 'success')
+    } else {
+      if (name === d._origName && description === (d._origDesc || '')) {
+        dlg.value = null
+        return
+      }
+      await updateBank(d.id, { name, description })
+      await loadBanks()
+      toast('题库已更新', 'success')
+    }
+    dlg.value = null
   } catch (e) {
     console.error(e)
-    toast('重命名失败：' + (e?.message || e), 'error')
+    toast((d.mode === 'create' ? '新建题库失败：' : '更新失败：') + (e?.message || e), 'error')
+    d.saving = false
   }
 }
 
@@ -160,3 +290,32 @@ onMounted(async () => {
 })
 </script>
 
+<style scoped>
+/* 右键菜单项 */
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color .12s ease, color .12s ease;
+}
+.ctx-item:hover { background: var(--bg-accent); color: var(--text); }
+.ctx-item.ctx-danger { color: var(--danger); }
+.ctx-item.ctx-danger:hover { background: var(--danger-bg); color: var(--danger); }
+/* 右键菜单入场 */
+.ctx-enter-active, .ctx-leave-active { transition: opacity .12s ease, transform .12s ease; }
+.ctx-enter-from, .ctx-leave-to { opacity: 0; transform: scale(.96) translateY(-2px); }
+/* 弹窗入场（与 DialogHost 同语言） */
+.dg-enter-active, .dg-leave-active { transition: opacity .18s ease; }
+.dg-enter-active .dg-card, .dg-leave-active .dg-card { transition: transform .18s ease; }
+.dg-enter-from, .dg-leave-to { opacity: 0; }
+.dg-enter-from .dg-card, .dg-leave-to .dg-card { transform: translateY(8px) scale(.97); }
+</style>
