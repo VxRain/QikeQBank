@@ -97,6 +97,7 @@ import { ref } from 'vue'
 import { parseTemplateFile } from '@/utils/parseTemplate.js'
 import { TEMPLATE_SAMPLE } from '@/utils/parseTemplate.js'
 import { stripMarkdown } from '@/utils/stripMarkdown.js'
+import { saveTextFile } from '@/api/practice.js'
 import { validateQuestion } from '@/utils/validate.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { create } from '@/api/questions.js'
@@ -139,7 +140,16 @@ function onClose() {
   emit('close')
 }
 
-function downloadSample() {
+async function downloadSample() {
+  // Tauri 真机：blob <a download> 在 WebView 里无默认保存处理，走后端落盘返 path；
+  // 无后端环境（浏览器 dev）：回退前端 blob 下载
+  try {
+    const res = await saveTextFile(TEMPLATE_SAMPLE, '试题导入模板.md')
+    toast('模板已保存到：' + (res?.path || ''), 'success', 6000)
+    return
+  } catch (e) {
+    console.warn('save_text_file 不可用，回退 blob 下载', e)
+  }
   try {
     const blob = new Blob([TEMPLATE_SAMPLE], { type: 'text/markdown;charset=utf-8' })
     const a = document.createElement('a')

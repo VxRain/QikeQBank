@@ -1336,6 +1336,25 @@ pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value
 }
 
 #[tauri::command]
+pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Result<Value, String> {
+    // 通用文本落盘（导入模板下载等）：只允许纯文件名，防路径穿越；落到 export/ 目录
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "invalid filename".to_string())?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(to_str)?
+        .join("export");
+    fs::create_dir_all(&dir).map_err(to_str)?;
+    let path = dir.join(name);
+    fs::write(&path, content).map_err(to_str)?;
+    ok(json!({ "path": path.to_string_lossy().to_string() }))
+}
+
+#[tauri::command]
 pub fn import_dbjson(path: String, state: State<'_, AppState>) -> Result<Value, String> {
     let text = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {e}", path))?;
     let mut conn = state.0.lock().map_err(to_str)?;

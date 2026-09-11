@@ -151,6 +151,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 |---|---|---|
 | `export_dbjson` | — | 输出 `{"version":3,"banks":[{id,name,description,created_at,updated_at}],"questions":[...]}`（questions 含 bank_id） |
 | `import_dbjson` | `path` | 兼容 v2/v3：banks 按 id UPSERT（name/description/updated_at），缺 banks 时确保默认库存在；question 无 bank_id → 默认库；UPSERT 见 v1 |
+| `save_text_file` | `filename: String, content: String` | 通用文本落盘到 `app_data_dir/export/`（仅纯文件名，防路径穿越），返回 `{"path"}`；供导入模板下载等 |
 
 - `plain_text` 聚合、SM-2、信封结构、AppState(Mutex<Connection>)、db 路径解析均沿用 v1。
 

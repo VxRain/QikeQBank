@@ -34,6 +34,7 @@ pub fn run() {
             db::review_due,
             db::review_stats,
             db::export_dbjson,
+            db::save_text_file,
             db::import_dbjson
         ])
         .run(tauri::generate_context!())

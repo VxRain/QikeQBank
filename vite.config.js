@@ -17,6 +17,8 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
-    strictPort: true
+    strictPort: true,
+    // tauri dev 下 vite 会监听项目文件，排除 Rust 构建产物（Windows 下 watch dll 会 EBUSY 崩溃）
+    watch: { ignored: ['**/src-tauri/target/**', '**/node_modules/**'] }
   }
 })

@@ -37,3 +37,8 @@ export async function importData(path) {
   const res = await cmd('import_dbjson', { path })
   return res?.data
 }
+
+export async function saveTextFile(content, filename) {
+  const res = await cmd('save_text_file', { content, filename })
+  return res?.data
+}
