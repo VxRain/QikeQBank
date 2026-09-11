@@ -46,12 +46,25 @@
           <i class="i-lucide-rotate-ccw" />重置
         </button>
         <button
+          class="btn"
+          :disabled="!bankStore.loaded || !bankStore.currentBankId"
+          :title="bankStore.currentBankId ? '从模板文件导入到当前题库' : '请先选择一个题库'"
+          @click="showImport = true"
+        ><i class="i-lucide-file-up" />导入文件</button>
+        <button
           class="btn btn-primary ml-auto"
           :disabled="!bankStore.loaded || !bankStore.currentBankId"
           :title="bankStore.currentBankId ? '新增到当前题库' : '请先选择一个题库'"
           @click="onAdd"
         ><i class="i-lucide-plus" />新增试题</button>
       </div>
+      <ImportFileBox
+        :open="showImport"
+        :bank-id="bankStore.currentBankId"
+        :bank-name="currentBankName"
+        @done="onImportDone"
+        @close="showImport = false"
+      />
 
       <div v-if="loading" class="text-muted py-4 flex items-center gap-2">
         <i class="i-lucide-loader-circle animate-spin" />加载中...
@@ -100,12 +113,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { list, remove, update } from '@/api/questions.js'
 import { bankStore, setCurrentBank, loadBanks } from '@/stores/bank.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
+import ImportFileBox from '@/components/ImportFileBox.vue'
 
 const route = useRoute()
 const router = useRouter()
 const query = ref('')
 const type = ref('')
 const questions = ref([])
+const showImport = ref(false)
+
+async function onImportDone() {
+  showImport.value = false
+  await fetchList()
+  await loadBanks()
+}
 const loading = ref(false)
 const error = ref('')
 
