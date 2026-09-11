@@ -17,7 +17,7 @@
           <input
             v-model="query"
             class="input w-full pl-9"
-            placeholder="搜索题干、ID..."
+            placeholder="搜索题干..."
             @keyup.enter="fetchList"
           />
         </div>
@@ -62,7 +62,6 @@
         <table class="w-full border-collapse text-[14px]">
           <thead>
             <tr>
-              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 160px">ID</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 80px">类型</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">分值</th>
@@ -71,10 +70,9 @@
           </thead>
           <tbody>
             <tr v-if="questions.length === 0">
-              <td colspan="5" class="text-center py-6 text-muted">暂无数据</td>
+              <td colspan="4" class="text-center py-6 text-muted">暂无数据</td>
             </tr>
             <tr v-for="q in questions" :key="q.id" class="transition-[background-color] duration-100 hover:bg-card-hover">
-              <td class="px-3.5 py-3 border-b border-line font-mono text-[12px] text-muted bg-bg-accent px-1.5 py-0.5 rounded-[4px]">{{ q.id }}</td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
               <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
               <td class="px-3.5 py-3 border-b border-line">{{ q.score ?? (q.children ? q.children.reduce((s,c)=>s+(c.score||0),0) : '-') }}</td>
@@ -85,7 +83,7 @@
                     <option value="" disabled>移动题库…</option>
                     <option v-for="b in otherBanks(q.bank_id)" :key="b.id" :value="b.id">{{ b.name }}</option>
                   </select>
-                  <button class="btn btn-small btn-danger" @click="onDelete(q.id)"><i class="i-lucide-trash-2" />删除</button>
+                  <button class="btn btn-small btn-danger" @click="onDelete(q)"><i class="i-lucide-trash-2" />删除</button>
                 </div>
               </td>
             </tr>
@@ -180,7 +178,7 @@ function getPlainText(q) {
   if (q.type === 'material' && Array.isArray(q.children) && q.children[0]?.stem) {
     return extractFromDoc(q.children[0].stem) + ` （含 ${q.children.length} 子题）`
   }
-  return q.id || '-'
+  return '-'
 }
 
 async function fetchList() {
@@ -243,16 +241,17 @@ function reset() {
   fetchList()
 }
 
-async function onDelete(id) {
+async function onDelete(q) {
+  const stem = truncate(getPlainText(q), 30)
   const ok = await confirmDialog({
     title: '删除试题',
-    message: `确定删除 ${id} ？此操作不可撤销。`,
+    message: `确定删除「${stem}」？此操作不可撤销。`,
     okText: '删除',
     danger: true
   })
   if (!ok) return
   try {
-    await remove(id)
+    await remove(q.id)
     await fetchList()
     toast('试题已删除', 'success')
   } catch (e) {

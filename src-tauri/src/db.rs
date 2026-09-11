@@ -900,7 +900,7 @@ fn questions_list_impl(
     let bank_id = bank_id.filter(|s| !s.is_empty());
     let sql = format!(
         "SELECT {SELECT_FIELDS} FROM questions
-         WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%' OR id LIKE '%'||?1||'%')
+         WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%')
            AND (?2 IS NULL OR type = ?2)
            AND (?3 IS NULL OR bank_id = ?3)
          ORDER BY created_at DESC"
@@ -1670,7 +1670,7 @@ mod tests {
 
         // list SQL template (questions_list) with/without filters
         let sql = format!(
-            "SELECT {SELECT_FIELDS} FROM questions WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%' OR id LIKE '%'||?1||'%') AND (?2 IS NULL OR type = ?2) ORDER BY created_at DESC"
+            "SELECT {SELECT_FIELDS} FROM questions WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%') AND (?2 IS NULL OR type = ?2) ORDER BY created_at DESC"
         );
         let all = query_questions(&conn, &sql, params![Option::<String>::None, Option::<String>::None]).unwrap();
         assert_eq!(all.len(), 1);

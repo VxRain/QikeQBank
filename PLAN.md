@@ -131,7 +131,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `questions_list` | `query?, type_filter?, bank_id?` | 有 bank_id 时 `WHERE bank_id=?`；其余不变 |
+| `questions_list` | `query?, type_filter?, bank_id?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；其余不变 |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；其余不变 |
 | `questions_get` / `questions_remove` | 不变 | 不变 |
