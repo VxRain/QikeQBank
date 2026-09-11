@@ -2,7 +2,18 @@ mod db;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // release 才禁 devtools 快捷键（F12 / Ctrl+Shift+I），debug 保留方便调试。
+    // 注意不禁 CONTEXT_MENU：右键由前端按元素白名单细粒度控制（main.js），
+    // Rust 层一刀切会连编辑区的复制粘贴菜单一起杀掉。
+    let builder = tauri::Builder::default();
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(
+        tauri_plugin_prevent_default::Builder::new()
+            .with_flags(tauri_plugin_prevent_default::Flags::DEV_TOOLS)
+            .shortcut(tauri_plugin_prevent_default::KeyboardShortcut::new("F12"))
+            .build(),
+    );
+    builder
         .setup(|app| {
             // ensure DB schema exists before any command can be invoked
             db::ensure_schema(app.handle())?;
