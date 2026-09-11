@@ -140,12 +140,20 @@ function onClose() {
 }
 
 function downloadSample() {
-  const blob = new Blob([TEMPLATE_SAMPLE], { type: 'text/markdown;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = '试题导入模板.md'
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+  try {
+    const blob = new Blob([TEMPLATE_SAMPLE], { type: 'text/markdown;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = '试题导入模板.md'
+    // 必须挂载到 DOM 再点：未挂载的程序化 click 在 WebView 里会被吞掉
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+  } catch (err) {
+    console.error(err)
+    toast('模板下载失败：' + (err?.message || err), 'error')
+  }
 }
 
 async function onFile(e) {
