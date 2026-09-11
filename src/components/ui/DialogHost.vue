@@ -5,10 +5,10 @@
 <template>
   <Teleport to="body">
     <Transition name="dg">
-      <div v-if="ui.dialog" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="onCancel">
+      <div v-if="ui.dialog" class="dg-mask fixed inset-0 z-[1050] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="onCancel">
         <div class="dg-card w-[min(420px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" :aria-label="ui.dialog.title">
           <h3 class="m-0 mb-2 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)]">{{ ui.dialog.title }}</h3>
-          <p v-if="ui.dialog.message" class="m-0 mb-3.5 text-[14px] leading-[1.7] text-text-secondary whitespace-pre-line">{{ ui.dialog.message }}</p>
+          <p v-if="ui.dialog.message" class="m-0 mb-3.5 text-[14px] leading-[1.7] text-text-secondary whitespace-pre-line break-all">{{ ui.dialog.message }}</p>
 
           <input
             v-if="ui.dialog.type === 'prompt'"
