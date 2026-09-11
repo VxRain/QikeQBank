@@ -1,10 +1,9 @@
 <template>
-  <div class="editor">
-    <!-- 题型 + (material: 只读总分/难度) + (非material: 可编辑分值/难度) -->
-    <div class="row type-row" style="position:relative; justify-content:space-between">
-      <div class="row">
-        <label>题型</label>
-        <select :value="local.type" @change="onMainTypeChange($event.target.value)" class="select">
+  <div class="flex flex-col gap-2.5">
+    <div class="row type-row relative flex items-center justify-between gap-2 flex-wrap">
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <label class="text-[13px] text-text-secondary">题型</label>
+        <select :value="local.type" @change="onMainTypeChange($event.target.value)" class="select px-2 py-1.5 text-[12px] w-auto">
           <option value="single">单选</option>
           <option value="multi">多选</option>
           <option value="judge">判断</option>
@@ -13,31 +12,29 @@
           <option value="material">材料（父子题）</option>
         </select>
         <template v-if="local.type==='material'">
-          <label style="margin-left:12px">总分</label>
+          <label class="text-[13px] text-text-secondary ml-3">总分</label>
           <span class="badge">{{ totalScore }} 分</span>
-          <label style="margin-left:12px">难度</label>
+          <label class="text-[13px] text-text-secondary ml-3">难度</label>
           <span class="badge">{{ materialDifficulty }}（子题加权）</span>
         </template>
         <template v-else>
-          <label style="margin-left:12px">分值</label>
-          <input v-model.number="local.score" type="number" class="input" style="width:80px" @change="emitUpdate" />
-          <label style="margin-left:12px">难度</label>
-          <select v-model.number="local.difficulty" class="select" style="width:80px" @change="emitUpdate">
+          <label class="text-[13px] text-text-secondary ml-3">分值</label>
+          <input v-model.number="local.score" type="number" class="input px-2 py-1.5 text-[12px] w-[80px]" @change="emitUpdate" />
+          <label class="text-[13px] text-text-secondary ml-3">难度</label>
+          <select v-model.number="local.difficulty" class="select px-2 py-1.5 text-[12px] w-[80px]" @change="emitUpdate">
             <option :value="1">1</option><option :value="2">2</option><option :value="3">3</option><option :value="4">4</option><option :value="5">5</option>
           </select>
         </template>
       </div>
-      <button class="icon-btn" @click="showPaste=!showPaste" title="粘贴智能填入">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v3"/></svg>
-        智能粘贴
+      <button class="i-btn px-2.5 py-1.5 text-[12px]" @click="showPaste=!showPaste" title="粘贴智能填入">
+        <i class="i-lucide-clipboard text-[14px]" />智能粘贴
       </button>
-      <div v-if="showPaste" class="paste-popover">
+      <div v-if="showPaste" class="absolute top-[calc(100%+8px)] right-0 w-[min(560px,92vw)] z-30 bg-card border border-line rounded-[12px] shadow-[0_12px_32px_rgba(0,0,0,0.12)] p-3">
         <PasteBox @parsed="onPasteAndClose" />
       </div>
     </div>
-    <div v-if="showPaste" class="paste-backdrop" @click="showPaste=false"></div>
+    <div v-if="showPaste" class="fixed inset-0 z-20" @click="showPaste=false"></div>
 
-    <!-- 非材料：单题表单复用 -->
     <QuestionForm
       v-if="local.type!=='material'"
       :key="'main-'+formKey"
@@ -45,39 +42,38 @@
       @update="onFormUpdate"
     />
 
-    <!-- 材料：材料 stem + 子题列表（子题复用 QuestionForm） -->
     <template v-else>
-      <div class="section">
-        <div class="row" style="justify-content:space-between;margin-bottom:6px">
-          <h3 style="margin:0">材料</h3>
-          <span class="muted">总分：{{ totalScore }} 分（= 子题分值之和，自动计算）</span>
+      <div class="bg-card border border-line rounded-[8px] p-2.5">
+        <div class="flex items-center justify-between mb-1.5">
+          <h3 class="m-0 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-file-text text-primary text-[14px]" />材料</h3>
+          <span class="text-muted text-[11px]">总分：{{ totalScore }} 分（= 子题分值之和，自动计算）</span>
         </div>
         <TiptapDocEditor :modelValue="local.stem" :showBlank="false" @update:modelValue="onMaterialStem" />
       </div>
 
-      <div class="section">
-        <h3>子题（{{children.length}}）</h3>
-        <div v-for="(child, cIdx) in children" :key="child._uid" class="sub-card">
-          <div class="row" style="justify-content:space-between;margin-bottom:8px">
-            <b>子题 {{cIdx+1}} · {{ typeLabel(child.data.type) }}</b>
-            <span class="row">
-              <label style="font-size:12px;color:var(--muted)">分</label>
-              <input v-model.number="child.data.score" type="number" class="input" style="width:60px" @change="onChildUpdate(cIdx, child.data)" />
-              <label style="font-size:12px;color:var(--muted)">难度</label>
-              <select v-model.number="child.data.difficulty" class="select" style="width:64px" @change="onChildUpdate(cIdx, child.data)">
+      <div class="bg-card border border-line rounded-[8px] p-2.5">
+        <h3 class="m-0 mb-2 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-list text-primary text-[14px]" />子题（{{children.length}}）</h3>
+        <div v-for="(child, cIdx) in children" :key="child._uid" class="bg-bg-accent border border-line rounded-[8px] p-2.5 mb-2.5">
+          <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <b class="text-[12px] text-text">子题 {{cIdx+1}} · {{ typeLabel(child.data.type) }}</b>
+            <span class="flex items-center gap-1.5 flex-wrap">
+              <label class="text-[12px] text-muted">分</label>
+              <input v-model.number="child.data.score" type="number" class="input px-1.5 py-1 text-[12px] w-[60px]" @change="onChildUpdate(cIdx, child.data)" />
+              <label class="text-[12px] text-muted">难度</label>
+              <select v-model.number="child.data.difficulty" class="select px-1.5 py-1 text-[12px] w-[64px]" @change="onChildUpdate(cIdx, child.data)">
                 <option :value="1">1</option><option :value="2">2</option><option :value="3">3</option><option :value="4">4</option><option :value="5">5</option>
               </select>
-              <button class="btn small danger" @click="removeChild(cIdx)">删除</button>
+              <button class="btn btn-small btn-danger" @click="removeChild(cIdx)"><i class="i-lucide-trash-2" />删除</button>
             </span>
           </div>
           <QuestionForm :key="child._uid" :question="child.data" :show-score="false" @update="v=>onChildUpdate(cIdx,v)" />
         </div>
-        <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn small" @click="addChild('single')">+单选</button>
-          <button class="btn small" @click="addChild('multi')">+多选</button>
-          <button class="btn small" @click="addChild('judge')">+判断</button>
-          <button class="btn small" @click="addChild('fill')">+填空</button>
-          <button class="btn small" @click="addChild('short')">+问答</button>
+        <div class="flex gap-1.5 flex-wrap mt-2">
+          <button class="btn btn-small" @click="addChild('single')"><i class="i-lucide-plus" />单选</button>
+          <button class="btn btn-small" @click="addChild('multi')"><i class="i-lucide-plus" />多选</button>
+          <button class="btn btn-small" @click="addChild('judge')"><i class="i-lucide-plus" />判断</button>
+          <button class="btn btn-small" @click="addChild('fill')"><i class="i-lucide-plus" />填空</button>
+          <button class="btn btn-small" @click="addChild('short')"><i class="i-lucide-plus" />问答</button>
         </div>
       </div>
     </template>
@@ -271,24 +267,3 @@ function extractPlain(doc){
 }
 </script>
 
-<style scoped>
-.editor{ display:flex; flex-direction:column; gap:10px }
-.row{ display:flex; align-items:center; gap:6px; flex-wrap:wrap }
-.row label{ font-size:13px; color:var(--text-secondary) }
-.section{ background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px }
-.section h3{ margin:0 0 6px; font-size:13px; font-weight:700; color:var(--text) }
-.input{ background:var(--card); border:1px solid var(--line); border-radius:6px; color:var(--text); padding:6px 8px; font-size:12px }
-.select{ background:var(--card); border:1px solid var(--line); border-radius:6px; color:var(--text); padding:6px 8px; font-size:12px }
-.btn{ background:var(--card); border:1px solid var(--line); color:var(--text-secondary); padding:5px 10px; border-radius:6px; cursor:pointer; font-size:11px; font-weight:500 }
-.btn:hover{ background:var(--bg-accent); border-color:var(--line-strong) }
-.btn.small{ padding:4px 8px; font-size:11px }
-.btn.danger{ border-color:#fecaca; color:var(--danger); background:#fff }
-.sub-card{ background:var(--bg-accent); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px }
-.sub-card .row b{ font-size:12px; color:var(--text) }
-.muted{ color:var(--muted); font-size:11px }
-.icon-btn{ display:inline-flex; align-items:center; gap:4px; background:var(--card); border:1px solid var(--line); color:var(--text-secondary); padding:5px 10px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:500 }
-.icon-btn:hover{ background:var(--bg-accent); border-color:var(--line-strong); color:var(--text) }
-.type-row{ position:relative }
-.paste-popover{ position:absolute; top:calc(100% + 8px); right:0; width:min(560px, 92vw); z-index:30; background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:0 12px 32px rgba(0,0,0,.12); padding:12px }
-.paste-backdrop{ position:fixed; inset:0; z-index:20; background:transparent }
-</style>

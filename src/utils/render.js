@@ -22,7 +22,7 @@ export function renderInlineNodes(nodes){
     }
     if(n.type==='inlineMath') return renderInlineMath(n.attrs.latex)
     if(n.type==='blank') return `<span class="blank" data-id="${n.attrs.id}">&nbsp;&nbsp;&nbsp;&nbsp;</span>`
-    if(n.type==='inlineImage') return `<img src="${n.attrs.src}" alt="${escapeHtml(n.attrs.alt||'')}" style="vertical-align:middle;height:1.4em;max-width:4em;border-radius:4px;border:1px solid #e2e8f0" />`
+    if(n.type==='inlineImage') return `<img src="${n.attrs.src}" alt="${escapeHtml(n.attrs.alt||'')}" style="vertical-align:middle;height:1.4em;max-width:4em;border-radius:4px;border:1px solid #e3ddcd" />`
     return ''
   }).join('')
 }
@@ -34,10 +34,10 @@ export function renderDoc(doc){
       const src=node.attrs.src||''
       const cap=escapeHtml(node.attrs.caption||'')
       const w=node.attrs.width||600
-      return `<figure style="text-align:center;margin:14px 0"><img src="${src}" alt="${escapeHtml(node.attrs.alt||cap)}" style="max-width:${w}px;max-width:100%;border-radius:8px;border:1px solid #e2e8f0;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.06)" /><figcaption style="color:#64748b;font-size:12px;margin-top:6px">${cap}</figcaption></figure>`
+      return `<figure style="text-align:center;margin:14px 0"><img src="${src}" alt="${escapeHtml(node.attrs.alt||cap)}" style="max-width:${w}px;max-width:100%;border-radius:8px;border:1px solid #e3ddcd;background:#fffdf7;box-shadow:0 1px 3px rgba(0,0,0,.06)" /><figcaption style="color:#7d7568;font-size:12px;margin-top:6px">${cap}</figcaption></figure>`
     }
     if(node.type==='mathBlock') return renderBlockMath(node.attrs.latex)
-    if(node.type==='blockquote') return `<blockquote style="border-left:3px solid #0ea5e9;padding-left:12px;color:#475569;background:#f8fafc;border-radius:6px;padding:8px 12px">${renderDoc(node)}</blockquote>`
+    if(node.type==='blockquote') return `<blockquote style="border-left:3px solid #1f4d3a;padding-left:12px;color:#3d3a33;background:#f4f1ea;border-radius:6px;padding:8px 12px">${renderDoc(node)}</blockquote>`
     return ''
   }).join('')
 }
@@ -56,7 +56,7 @@ export function renderMaterial(material){
   if(Array.isArray(material.children)){
     material.children.forEach((child, idx)=>{
       const title = renderDoc(child.stem).replace(/^<p>/,'<span>').replace(/<\/p>$/,'</span>')
-      html+=`<div class="sub-q"><div class="q-title">${idx+1}. ${title} <span style="color:#64748b;font-size:12px">（${child.score||5}分 · ${child.type}）</span></div>`
+      html+=`<div class="sub-q"><div class="q-title">${idx+1}. ${title} <span style="color:#7d7568;font-size:12px">（${child.score||5}分 · ${child.type}）</span></div>`
       if(['single','multi','judge'].includes(child.type)) html+=renderOptions(child.options, child.answer?.ids)
       else if(child.type==='short'){
         if(child.answer?.reference) html+=`<div style="margin-top:8px;padding:8px;background:var(--success-bg);border-radius:8px;font-size:13px"><b style="color:#10b981">参考答案：</b>${renderDoc(child.answer.reference)}</div>`

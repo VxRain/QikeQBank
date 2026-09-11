@@ -1,9 +1,11 @@
 <template>
-  <div class="option-block" :class="{correct: isCorrect}">
-    <div class="head">
-      <span class="key">{{ displayKey }}.</span>
-      <label class="check"><input type="checkbox" :checked="isCorrect" @change="$emit('toggle')" /> 正确答案</label>
-      <button v-if="removable" class="btn small danger" @click="$emit('remove')">删除</button>
+  <div class="option-block border rounded-[8px] p-3 mb-2.5 shadow-sm transition-[border-color,box-shadow,background-color] duration-150 hover:shadow-sm hover:border-line-strong" :class="isCorrect ? 'border-[#bcd9c4] bg-success-bg' : 'border-line bg-card'">
+    <div class="flex items-center gap-2 mb-2.5">
+      <span class="w-[22px] h-[22px] rounded-full bg-primary-bg text-primary font-700 text-[12px] flex items-center justify-center shrink-0">{{ displayKey }}</span>
+      <label class="flex items-center gap-1.5 text-[13px] text-text-secondary cursor-pointer font-500 ml-auto">
+        <input type="checkbox" :checked="isCorrect" @change="$emit('toggle')" /> 正确答案
+      </label>
+      <button v-if="removable" class="btn btn-small btn-danger" @click="$emit('remove')"><i class="i-lucide-trash-2" />删除</button>
     </div>
     <TiptapDocEditor :modelValue="doc" :showBlank="false" :compact="compact" @update:modelValue="onDocUpdate" />
   </div>
@@ -30,15 +32,3 @@ function onDocUpdate(newDoc){
 }
 </script>
 
-<style scoped>
-.option-block{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; box-shadow:var(--shadow-sm); transition:all .15s }
-.option-block:hover{ border-color:var(--line-strong); box-shadow:var(--shadow) }
-.option-block.correct{ border-color:#86efac; background:var(--success-bg); box-shadow:var(--shadow-sm) }
-.head{ display:flex; align-items:center; gap:8px; margin-bottom:10px }
-.key{ font-weight:700; color:var(--primary); min-width:22px; width:22px; height:22px; display:flex; align-items:center; justify-content:center; background:var(--primary-bg); border-radius:50%; font-size:12px }
-.check{ display:flex; gap:6px; align-items:center; font-size:13px; color:var(--text-secondary); cursor:pointer; font-weight:500 }
-.btn{ background:var(--card); border:1px solid var(--line); color:var(--muted); padding:6px 10px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:500; box-shadow:var(--shadow-sm) }
-.btn:hover{ background:var(--bg-accent); border-color:var(--line-strong) }
-.btn.danger{ border-color:#fecaca; color:var(--danger); background:#fff }
-.btn.danger:hover{ background:var(--danger-bg) }
-</style>

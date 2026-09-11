@@ -1,15 +1,15 @@
 <template>
-  <div class="paste-box">
-    <div class="row" style="justify-content:space-between;margin-bottom:6px">
-      <b style="font-size:13px">粘贴智能填入（纯文本通用模板）</b>
-      <span class="muted" style="font-size:11px">支持：A. B. C. D. / 填空___/（） / 判断正确·错误 / 材料题</span>
+  <div class="paste-box border border-dashed border-line-strong rounded-[8px] bg-bg-accent p-3 mb-2.5">
+    <div class="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
+      <b class="text-[13px] flex items-center gap-1.5"><i class="i-lucide-clipboard text-primary text-[14px]" />粘贴智能填入（纯文本通用模板）</b>
+      <span class="text-muted text-[11px] flex items-center gap-1"><i class="i-lucide-info text-[12px]" />支持：A. B. C. D. / 填空___/（） / 判断正确·错误 / 材料题</span>
     </div>
-    <textarea v-model="text" class="textarea" rows="4" placeholder="粘贴纯文本，例如：&#10;单选：成本函数…？&#10;A. 220元  B. 200元  C. 180元  D. 250元&#10;答案：A&#10;解析：代入…&#10;&#10;或：材料：某工厂…&#10;1. 当产量10时成本是？ A.220 B.200 答案：A&#10;2. 填空 ___ 元"></textarea>
-    <div class="row" style="margin-top:6px">
-      <button class="btn primary" @click="onParse" :disabled="!text.trim()">智能填入</button>
-      <button class="btn" @click="text=''">清空</button>
-      <span v-if="msg" class="badge" :class="msgOk?'ok':'bad'">{{ msg }}</span>
-      <span v-if="warn" class="muted" style="font-size:11px">{{ warn }}</span>
+    <textarea v-model="text" class="w-full bg-card border border-line rounded-[8px] text-text p-2 text-[12px] leading-[1.6] resize-y outline-none transition-[border-color,box-shadow] duration-150 focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.15)]" rows="4" placeholder="粘贴纯文本，例如：&#10;单选：成本函数…？&#10;A. 220元  B. 200元  C. 180元  D. 250元&#10;答案：A&#10;解析：代入…&#10;&#10;或：材料：某工厂…&#10;1. 当产量10时成本是？ A.220 B.200 答案：A&#10;2. 填空 ___ 元"></textarea>
+    <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+      <button class="btn btn-primary btn-tiny" @click="onParse" :disabled="!text.trim()"><i class="i-lucide-wand-sparkles" />智能填入</button>
+      <button class="btn btn-tiny" @click="text=''"><i class="i-lucide-x" />清空</button>
+      <span v-if="msg" class="badge" :class="msgOk?'badge-ok':'badge-bad'">{{ msg }}</span>
+      <span v-if="warn" class="text-muted text-[11px]">{{ warn }}</span>
     </div>
   </div>
 </template>
@@ -49,15 +49,3 @@ function onParse(){
 }
 </script>
 
-<style scoped>
-.paste-box{ background:var(--bg-accent); border:1px dashed var(--line-strong); border-radius:10px; padding:10px 12px; margin-bottom:10px }
-.textarea{ width:100%; background:var(--card); border:1px solid var(--line); border-radius:8px; color:var(--text); padding:8px; font-size:12px; line-height:1.6; resize:vertical }
-.textarea:focus{ border-color:var(--primary); outline:none }
-.row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap }
-.btn{ background:var(--card); border:1px solid var(--line); color:var(--text-secondary); padding:5px 10px; border-radius:6px; cursor:pointer; font-size:11px }
-.btn.primary{ background:var(--text); color:#fff; border-color:var(--text) }
-.badge{ font-size:11px; padding:3px 8px; border-radius:999px; border:1px solid var(--line); background:var(--card) }
-.badge.ok{ color:var(--success); border-color:#86efac; background:var(--success-bg) }
-.badge.bad{ color:var(--danger); border-color:#fecaca; background:var(--danger-bg) }
-.muted{ color:var(--muted) }
-</style>

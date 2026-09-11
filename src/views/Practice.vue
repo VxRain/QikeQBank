@@ -1,46 +1,46 @@
 <template>
   <div class="page">
-    <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="error" class="error-box">{{ error }}</div>
 
     <!-- 设置面板 -->
-    <section v-if="phase === 'setup'" class="card setup">
+    <section v-if="phase === 'setup'" class="card max-w-[640px]">
       <div class="card-head">
-        <h2>开始刷题</h2>
-        <span class="badge">练习模式 · 判分后计入复习</span>
+        <h2 class="section-title flex items-center gap-2"><i class="i-lucide-zap text-primary" />开始刷题</h2>
+        <span class="badge badge-type">练习模式 · 判分后计入复习</span>
       </div>
 
-      <div class="field">
-        <div class="label">题库</div>
-        <select v-model="bankId" class="select">
+      <div class="mb-5">
+        <div class="field-label">题库</div>
+        <select v-model="bankId" class="select w-full max-w-[320px]">
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
       </div>
 
-      <div class="field">
-        <div class="label">题型（多选）</div>
-        <div class="type-grid">
+      <div class="mb-5">
+        <div class="field-label">题型（多选）</div>
+        <div class="flex flex-wrap gap-2.5">
           <label
             v-for="t in ALL_TYPES"
             :key="t"
-            class="chip"
-            :class="{ on: selectedTypes.includes(t) }"
+            class="inline-flex items-center gap-1.5 px-4 py-2 border border-line rounded-full bg-card text-text-secondary text-[14px] cursor-pointer transition-[background-color,border-color,color] duration-150 select-none"
+            :class="selectedTypes.includes(t) && 'bg-primary-bg border-primary-border text-primary font-600'"
           >
-            <input v-model="selectedTypes" type="checkbox" :value="t" />
+            <input v-model="selectedTypes" type="checkbox" :value="t" class="hidden" />
             {{ TYPE_LABELS[t] }}
           </label>
         </div>
       </div>
 
-      <div class="field">
-        <div class="label">题量</div>
-        <div class="count-row">
+      <div class="mb-5">
+        <div class="field-label">题量</div>
+        <div class="flex gap-2 flex-wrap">
           <button
             v-for="c in COUNT_OPTIONS"
             :key="c.value"
             type="button"
-            class="count-btn"
-            :class="{ on: count === c.value }"
+            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
+            :class="count === c.value && 'bg-text text-white border-text'"
             @click="count = c.value"
           >
             {{ c.label }}
@@ -48,159 +48,161 @@
         </div>
       </div>
 
-      <div class="start-row">
+      <div>
         <button
           type="button"
-          class="btn primary big"
+          class="btn btn-primary btn-big"
           :disabled="!selectedTypes.length || fetching"
           @click="start"
         >
-          {{ fetching ? '正在抽题…' : '开始刷题' }}
+          <i class="i-lucide-play" />{{ fetching ? '正在抽题…' : '开始刷题' }}
         </button>
       </div>
     </section>
 
     <!-- 作答卡片 -->
-    <section v-else-if="phase === 'card'" class="card q-card">
-      <div class="progress-row">
-        <span class="badge type">{{ curBadge }}</span>
-        <span class="q-pos">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
+    <section v-else-if="phase === 'card'" class="card flex flex-col gap-3.5">
+      <div class="flex items-center justify-between gap-3">
+        <span class="badge badge-type">{{ curBadge }}</span>
+        <span class="text-[13px] text-muted font-500">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
       </div>
-      <div class="progress-bar"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
+      <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
-      <div v-if="cur.isChild" class="material-stem">
-        <div class="material-head">
-          <button type="button" class="btn small" @click="materialOpen = !materialOpen">
-            {{ materialOpen ? '收起' : '展开' }}材料
+      <div v-if="cur.isChild" class="border border-dashed border-primary-border bg-bg-accent rounded-[12px] px-3.5 py-3">
+        <div class="flex justify-end mb-2">
+          <button type="button" class="btn btn-small" @click="materialOpen = !materialOpen">
+            <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}材料
           </button>
         </div>
-        <div v-if="materialOpen" class="material-doc" v-html="materialStemHtml"></div>
-        <div v-else class="material-tip">共 {{ cur.childCount }} 问 · 正在作答第 {{ cur.childIdx + 1 }} 问</div>
+        <div v-if="materialOpen" class="text-[13px] text-text-secondary" v-html="materialStemHtml"></div>
+        <div v-else class="text-[12px] text-muted">共 {{ cur.childCount }} 问 · 正在作答第 {{ cur.childIdx + 1 }} 问</div>
       </div>
 
-      <div class="stem" :key="cur.uid" v-html="stemHtml" @input="onStemInput"></div>
+      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput"></div>
 
       <!-- 选择类 -->
-      <div v-if="isChoice" class="options">
+      <div v-if="isChoice" class="flex flex-col gap-2">
         <button
           v-for="(o, i) in cur.q.options || []"
           :key="o.id"
           type="button"
           class="option-btn"
-          :class="{ on: singlePick === o.id }"
+          :class="singlePick === o.id && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
           @click="singlePick = o.id"
         >
-          <span class="key">{{ keyOf(i) }}</span>
+          <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
           <span class="opt-body" v-html="optHtml(o)"></span>
         </button>
       </div>
-      <div v-else-if="cur.q.type === 'multi'" class="options">
+      <div v-else-if="cur.q.type === 'multi'" class="flex flex-col gap-2">
         <button
           v-for="(o, i) in cur.q.options || []"
           :key="o.id"
           type="button"
           class="option-btn"
-          :class="{ on: multiPick.includes(o.id) }"
+          :class="multiPick.includes(o.id) && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
           @click="toggleMulti(o.id)"
         >
-          <span class="key">{{ keyOf(i) }}</span>
+          <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
           <span class="opt-body" v-html="optHtml(o)"></span>
         </button>
       </div>
 
       <!-- 简答 -->
-      <div v-else-if="cur.q.type === 'short'" class="short-block">
-        <textarea v-model="shortText" rows="5" placeholder="请输入你的答案…"></textarea>
-        <div class="short-actions">
+      <div v-else-if="cur.q.type === 'short'" class="flex flex-col gap-2.5">
+        <textarea v-model="shortText" rows="5" class="w-full p-3 border border-line rounded-[8px] text-[14px] text-text bg-card outline-none resize-y shadow-sm transition-[border-color,box-shadow] duration-150 focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.15)]" placeholder="请输入你的答案…"></textarea>
+        <div class="flex gap-2">
           <button type="button" class="btn" @click="showRef = !showRef">
-            {{ showRef ? '收起参考答案' : '查看参考答案' }}
+            <i :class="showRef ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ showRef ? '收起参考答案' : '查看参考答案' }}
           </button>
         </div>
-        <div v-if="showRef" class="ref-box">
-          <b class="ref-title">参考答案：</b>
+        <div v-if="showRef" class="p-3.5 bg-success-bg border border-[#bcd9c4] rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+          <b class="text-success flex items-center gap-1"><i class="i-lucide-book-open text-[14px]" />参考答案：</b>
           <div v-html="refHtml"></div>
         </div>
-        <div v-if="showRef && !graded" class="self-grade">
-          <span class="self-tip">这道题你会吗？</span>
-          <button type="button" class="btn danger" @click="shortSubmit('不会')">不会</button>
-          <button type="button" class="btn primary" @click="shortSubmit('会')">会</button>
+        <div v-if="showRef && !graded" class="flex items-center gap-2.5 flex-wrap">
+          <span class="text-[13px] text-muted">这道题你会吗？</span>
+          <button type="button" class="btn btn-danger" @click="shortSubmit('不会')"><i class="i-lucide-x" />不会</button>
+          <button type="button" class="btn btn-primary" @click="shortSubmit('会')"><i class="i-lucide-check" />会</button>
         </div>
       </div>
 
       <!-- 提交 -->
-      <div v-if="!graded && !isShort" class="submit-row">
-        <button type="button" class="btn primary big" :disabled="!canSubmit" @click="submit">提交判分</button>
+      <div v-if="!graded && !isShort">
+        <button type="button" class="btn btn-primary btn-big" :disabled="!canSubmit" @click="submit">
+          <i class="i-lucide-check-circle" />提交判分
+        </button>
       </div>
 
       <!-- 判分结果（判分前绝不展示答案/解析） -->
-      <div v-if="graded" class="result">
-        <div class="verdict" :class="gradeResult.correct ? 'ok' : 'no'">
-          {{ gradeResult.correct ? '✓ 回答正确' : '✗ 回答错误' }}
+      <div v-if="graded" class="border-t border-line pt-4 flex flex-col gap-3">
+        <div class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px]" :class="gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]'">
+          <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />{{ gradeResult.correct ? '回答正确' : '回答错误' }}
         </div>
 
-        <div v-if="isChoice && gradeResult" class="answer-view" v-html="answerHtml"></div>
+        <div v-if="isChoice && gradeResult" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
 
-        <div v-if="cur.q.type === 'fill'" class="blank-results">
-          <div v-for="r in gradeResult.results" :key="r.id" class="blank-res" :class="r.correct ? 'ok' : 'no'">
-            <span class="blank-id">{{ r.id }}</span>
-            <span class="blank-you">你的答案：{{ r.value || '（未填写）' }}</span>
-            <span class="verdict-inline">{{ r.correct ? '✓' : '✗' }}</span>
-            <span v-if="!r.correct" class="blank-ans">
-              正确答案：{{ blankAnswersOf(r.id) }}
-            </span>
+        <div v-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
+          <div v-for="r in gradeResult.results" :key="r.id" class="flex items-baseline gap-2 flex-wrap px-3 py-2 rounded-[8px] text-[13px] border border-line" :class="r.correct ? 'bg-success-bg border-[#bcd9c4] text-text-secondary' : 'bg-danger-bg border-[#e3c9c5] text-text-secondary'">
+            <span class="font-700 text-text">{{ r.id }}</span>
+            <span>你的答案：{{ r.value || '（未填写）' }}</span>
+            <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
+            <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
           </div>
         </div>
 
-        <div v-if="analysisHtml" class="analysis">
-          <b class="analysis-title">解析：</b>
+        <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+          <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
           <div v-html="analysisHtml"></div>
         </div>
 
-        <div v-if="recordError" class="record-warn">记录失败：{{ recordError }}</div>
+        <div v-if="recordError" class="text-[12px] text-danger flex items-center gap-1"><i class="i-lucide-triangle-alert" />记录失败：{{ recordError }}</div>
 
-        <div class="next-row">
-          <button type="button" class="btn primary big" @click="next">下一题</button>
+        <div class="flex justify-end">
+          <button type="button" class="btn btn-primary btn-big" @click="next"><i class="i-lucide-arrow-right" />下一题</button>
         </div>
       </div>
     </section>
 
     <!-- 结束页 -->
-    <section v-else-if="phase === 'done'" class="card done">
-      <div class="done-title">本轮练习结束 🎉</div>
-      <div class="done-stats">
-        <div class="done-stat">
-          <div class="num">{{ lastRound.correct }} / {{ lastRound.total }}</div>
-          <div class="lbl">答对题数</div>
+    <section v-else-if="phase === 'done'" class="card flex flex-col gap-5 items-center text-center">
+      <div class="text-[22px] font-800 tracking-[-0.01em] font-[var(--serif)] flex items-center gap-2">
+        <i class="i-lucide-trophy text-primary text-[26px]" />本轮练习结束
+      </div>
+      <div class="flex gap-3.5 flex-wrap justify-center">
+        <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[24px] font-800 text-text">{{ lastRound.correct }} / {{ lastRound.total }}</div>
+          <div class="text-[12px] text-muted mt-1">答对题数</div>
         </div>
-        <div class="done-stat">
-          <div class="num">{{ lastRound.rate }}%</div>
-          <div class="lbl">正确率</div>
+        <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[24px] font-800 text-text">{{ lastRound.rate }}%</div>
+          <div class="text-[12px] text-muted mt-1">正确率</div>
         </div>
-        <div class="done-stat">
-          <div class="num">{{ fmtMs(lastRound.ms) }}</div>
-          <div class="lbl">本轮用时</div>
+        <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[24px] font-800 text-text">{{ fmtMs(lastRound.ms) }}</div>
+          <div class="text-[12px] text-muted mt-1">本轮用时</div>
         </div>
-        <div class="done-stat" v-if="lastRound.wrong.length">
-          <div class="num danger-num">{{ lastRound.wrong.length }}</div>
-          <div class="lbl">错题数</div>
+        <div v-if="lastRound.wrong.length" class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[24px] font-800 text-danger">{{ lastRound.wrong.length }}</div>
+          <div class="text-[12px] text-muted mt-1">错题数</div>
         </div>
       </div>
 
-      <div v-if="rounds.length > 1" class="cum">
+      <div v-if="rounds.length > 1" class="text-[13px] text-muted">
         累计：{{ sessionStats.total }} 题 · 答对 {{ sessionStats.correct }} ·
         共 {{ fmtMs(sessionStats.ms) }}
       </div>
 
-      <div class="done-actions">
+      <div class="flex gap-3 flex-wrap justify-center">
         <button
           v-if="lastRound.wrong.length"
           type="button"
-          class="btn primary big"
+          class="btn btn-primary btn-big"
           @click="startRedo"
         >
           错题重做（{{ lastRound.wrong.length }} 题）
         </button>
-        <router-link to="/" class="btn big">返回首页</router-link>
+        <router-link to="/" class="btn btn-big"><i class="i-lucide-home" />返回首页</router-link>
       </div>
     </section>
   </div>
@@ -542,178 +544,22 @@ function fmtMs(ms) {
 </script>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 16px; }
-.error {
-  color: #b91c1c; background: var(--danger-bg); border: 1px solid #fecaca;
-  padding: 12px; border-radius: 10px;
-}
-.card {
-  background: var(--card); border: 1px solid var(--line);
-  border-radius: var(--radius-lg); padding: 24px; box-shadow: var(--shadow);
-}
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-.card-head h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
-.badge {
-  display: inline-block; font-size: 12px; padding: 4px 10px;
-  border-radius: 999px; border: 1px solid var(--line);
-  color: var(--muted); background: var(--bg-accent); font-weight: 500;
-}
-.badge.type { color: var(--primary); border-color: var(--primary-border); background: var(--primary-bg); }
-
-.field { margin-bottom: 20px; }
-.label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
-.select {
-  width: 100%; max-width: 320px; padding: 9px 12px;
-  border: 1px solid var(--line-strong); border-radius: 10px;
-  font-size: 14px; color: var(--text); background: var(--card);
-  outline: none; box-shadow: var(--shadow-sm); font-family: inherit; cursor: pointer;
-}
-.select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
-.type-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-.chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 16px; border: 1px solid var(--line);
-  border-radius: 999px; background: var(--card); color: var(--text-secondary);
-  font-size: 14px; cursor: pointer; transition: all .15s ease; user-select: none;
-}
-.chip input { display: none; }
-.chip.on { background: var(--primary-bg); border-color: var(--primary-border); color: var(--primary); font-weight: 600; }
-
-.count-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.count-btn {
-  padding: 8px 18px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--card); color: var(--text-secondary); cursor: pointer;
-  font-size: 14px; font-weight: 500; transition: all .15s ease; box-shadow: var(--shadow-sm);
-}
-.count-btn:hover { background: var(--bg-accent); }
-.count-btn.on { background: var(--text); color: #fff; border-color: var(--text); }
-
-.start-row { margin-top: 8px; }
-
-.btn {
-  padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--card); color: var(--text-secondary); cursor: pointer;
-  font-size: 13px; font-weight: 500;
-  transition: all .15s ease; box-shadow: var(--shadow-sm);
-  text-decoration: none !important; display: inline-flex; align-items: center; justify-content: center;
-}
-.btn:hover { background: var(--bg-accent); border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow); }
-.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
-.btn.primary { background: var(--text); color: #fff; border-color: var(--text); }
-.btn.primary:hover { background: #1e293b; }
-.btn.danger { border-color: #fecaca; color: var(--danger); background: #fff; }
-.btn.danger:hover { background: var(--danger-bg); border-color: #fca5a5; }
-.btn.big { padding: 10px 22px; font-size: 15px; border-radius: 12px; }
-.btn.small { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
-
-.q-card { display: flex; flex-direction: column; gap: 14px; }
-.progress-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.q-pos { font-size: 13px; color: var(--muted); font-weight: 500; }
-.progress-bar { height: 6px; background: var(--bg-accent); border-radius: 999px; overflow: hidden; }
-.progress-inner { height: 100%; background: var(--primary); border-radius: 999px; transition: width .25s ease; }
-
-.material-stem {
-  border: 1px dashed var(--primary-border); background: var(--bg-accent);
-  border-radius: var(--radius); padding: 12px 14px;
-}
-.material-head { display: flex; justify-content: flex-end; margin-bottom: 8px; }
-.material-doc { font-size: 13px; color: var(--text-secondary); }
-.material-tip { font-size: 12px; color: var(--muted); }
-
-.stem { line-height: 1.8; color: var(--text-secondary); }
+/* v-html 注入的题干 / 选项 / 解析 / 答案渲染样式，原子类无法覆盖，保留 :deep() */
 .stem :deep(p) { margin: 10px 0; }
 .stem :deep(figure) { margin: 14px 0; text-align: center; }
-.stem :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+.stem :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #fffdf7; }
 .stem :deep(.math-block) { margin: 12px 0; padding: 12px; background: var(--bg-accent); border: 1px solid var(--line); border-radius: 8px; text-align: center; }
 .stem :deep(.qb-fill-input) {
   min-width: 92px; padding: 6px 10px; margin: 0 4px;
   border: 1px solid var(--line-strong); border-bottom: 2px solid var(--primary);
   border-radius: 8px; font-size: 14px; color: var(--text); background: var(--card);
-  outline: none; transition: all .15s ease; box-shadow: var(--shadow-sm);
+  outline: none; transition: border-color .15s ease, box-shadow .15s ease; box-shadow: var(--shadow-sm);
 }
-.stem :deep(.qb-fill-input:focus) { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
-
-.options { display: flex; flex-direction: column; gap: 8px; }
-.option-btn {
-  display: flex; align-items: flex-start; gap: 8px; text-align: left;
-  padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--card); color: var(--text-secondary); cursor: pointer;
-  font-size: 14px; line-height: 1.6; transition: all .15s ease; box-shadow: var(--shadow-sm);
-}
-.option-btn:hover { background: var(--bg-accent); border-color: var(--line-strong); }
-.option-btn.on { background: var(--primary-bg); border-color: var(--primary-border); color: var(--text); box-shadow: 0 0 0 3px rgba(14,165,233,.12); }
-.option-btn .key { font-weight: 700; color: var(--primary); margin-right: 2px; flex-shrink: 0; }
-.option-btn.on .key { color: var(--primary-hover); }
+.stem :deep(.qb-fill-input:focus) { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(31,77,58,.15); }
 .opt-body :deep(p) { margin: 0; }
-
-.short-block { display: flex; flex-direction: column; gap: 10px; }
-.short-block textarea {
-  width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
-  font: inherit; font-size: 14px; color: var(--text); background: var(--card);
-  outline: none; resize: vertical; box-shadow: var(--shadow-sm);
-}
-.short-block textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
-.short-actions { display: flex; gap: 8px; }
-.ref-box {
-  padding: 12px 14px; background: var(--success-bg); border: 1px solid #a7f3d0;
-  border-radius: 10px; font-size: 14px; line-height: 1.7; color: var(--text-secondary);
-}
-.ref-title { color: var(--success); }
-.ref-box :deep(p) { margin: 6px 0; }
-.self-grade { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.self-tip { font-size: 13px; color: var(--muted); }
-
-.submit-row { margin-top: 4px; }
-
-.result {
-  border-top: 1px solid var(--line); padding-top: 16px;
-  display: flex; flex-direction: column; gap: 12px;
-}
-.verdict {
-  font-size: 16px; font-weight: 700; padding: 12px 14px; border-radius: 10px;
-}
-.verdict.ok { color: var(--success); background: var(--success-bg); border: 1px solid #a7f3d0; }
-.verdict.no { color: var(--danger); background: var(--danger-bg); border: 1px solid #fecaca; }
-.answer-view {
-  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
-  background: var(--bg-accent); font-size: 14px;
-}
 .answer-view :deep(.option) { padding: 6px 8px; border-radius: 8px; }
 .answer-view :deep(.option.correct) { color: var(--success); font-weight: 600; }
 .answer-view :deep(.key) { font-weight: 700; color: var(--primary); margin-right: 6px; }
 .answer-view :deep(p) { margin: 4px 0; }
-.blank-results { display: flex; flex-direction: column; gap: 6px; }
-.blank-res {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  padding: 8px 12px; border-radius: 8px; font-size: 13px;
-  border: 1px solid var(--line);
-}
-.blank-res.ok { background: var(--success-bg); border-color: #a7f3d0; color: var(--text-secondary); }
-.blank-res.no { background: var(--danger-bg); border-color: #fecaca; color: var(--text-secondary); }
-.blank-id { font-weight: 700; color: var(--text); }
-.blank-ans { color: var(--danger); font-weight: 500; }
-.verdict-inline { font-weight: 700; }
-.blank-res.ok .verdict-inline { color: var(--success); }
-.blank-res.no .verdict-inline { color: var(--danger); }
-.analysis {
-  padding: 12px 14px; background: var(--bg-accent); border: 1px solid var(--line);
-  border-radius: 10px; font-size: 14px; line-height: 1.7; color: var(--text-secondary);
-}
-.analysis-title { color: var(--primary); }
 .analysis :deep(p) { margin: 6px 0; }
-.record-warn { font-size: 12px; color: var(--danger); }
-.next-row { display: flex; justify-content: flex-end; }
-
-.done { display: flex; flex-direction: column; gap: 20px; align-items: center; text-align: center; }
-.done-title { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
-.done-stats { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
-.done-stat {
-  min-width: 150px; padding: 18px; border: 1px solid var(--line);
-  border-radius: var(--radius); background: var(--bg-accent);
-}
-.done-stat .num { font-size: 24px; font-weight: 800; color: var(--text); }
-.done-stat .num.danger-num { color: var(--danger); }
-.done-stat .lbl { font-size: 12px; color: var(--muted); margin-top: 4px; }
-.cum { font-size: 13px; color: var(--muted); }
-.done-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 </style>

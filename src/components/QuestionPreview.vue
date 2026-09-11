@@ -1,5 +1,5 @@
 <template>
-  <div class="preview" v-html="html"></div>
+  <div class="preview bg-card border border-line rounded-[12px] p-4 min-h-[120px] leading-[1.7] shadow-sm text-text" v-html="html"></div>
 </template>
 
 <script setup>
@@ -52,9 +52,9 @@ onBeforeUnmount(()=> clearTimeout(timer))
 .preview{ background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px; min-height:120px; line-height:1.7; box-shadow:var(--shadow-sm); color:var(--text) }
 .preview :deep(p){ margin:10px 0; color:var(--text-secondary) }
 .preview :deep(figure){ margin:14px 0; text-align:center }
-.preview :deep(img){ max-width:100%; border-radius:8px; border:1px solid var(--line); background:#fff; box-shadow:var(--shadow-sm) }
+.preview :deep(img){ max-width:100%; border-radius:8px; border:1px solid var(--line); background:#fffdf7; box-shadow:var(--shadow-sm) }
 .preview :deep(.option){ padding:10px 12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; background:var(--card); transition:all .15s }
-.preview :deep(.option.correct){ border-color:#86efac; background:var(--success-bg); box-shadow:var(--shadow-sm) }
+.preview :deep(.option.correct){ border-color:#bcd9c4; background:var(--success-bg); box-shadow:var(--shadow-sm) }
 .preview :deep(.key){ font-weight:700; color:var(--primary); margin-right:6px }
 .preview :deep(.blank){ display:inline-block; min-width:72px; border-bottom:2px solid var(--primary); margin:0 4px; text-align:center; color:var(--primary); font-weight:600 }
 .preview :deep(.sub-q){ margin:14px 0; padding:14px; background:var(--bg-accent); border:1px solid var(--line); border-radius:10px }

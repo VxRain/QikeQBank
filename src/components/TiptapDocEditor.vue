@@ -1,20 +1,20 @@
 <template>
-  <div class="tiptap-editor" :class="{ compact }">
-    <div v-if="editor" class="toolbar">
-      <button class="btn tiny" @click="insertInlineMath" title="插入行内公式">∑ 公式</button>
-      <button v-if="showBlank" class="btn tiny" @click="insertBlank" title="插入填空">__ 填空</button>
-      <label class="btn tiny" title="插入行内图">🖼 行内图<input type="file" accept="image/*" hidden @change="e=>uploadImage(e,'inlineImage')" /></label>
-      <label class="btn tiny" title="上传块级图">▭ 块级图<input type="file" accept="image/*" hidden @change="e=>uploadImage(e,'imageBlock')" /></label>
-      <button class="btn tiny" @click="insertMathBlock" title="插入块公式">∫ 块公式</button>
+  <div class="tiptap-editor border border-line rounded-[8px] bg-card" :class="{ compact }">
+    <div v-if="editor" class="toolbar flex gap-1 p-1.5 bg-bg-accent border-b border-line flex-wrap items-center">
+      <button class="btn btn-tiny" @click="insertInlineMath" title="插入行内公式"><i class="i-lucide-sigma" />公式</button>
+      <button v-if="showBlank" class="btn btn-tiny" @click="insertBlank" title="插入填空">__ 填空</button>
+      <label class="btn btn-tiny" title="插入行内图"><i class="i-lucide-image" />行内图<input type="file" accept="image/*" hidden @change="e=>uploadImage(e,'inlineImage')" /></label>
+      <label class="btn btn-tiny" title="上传块级图"><i class="i-lucide-image" />块级图<input type="file" accept="image/*" hidden @change="e=>uploadImage(e,'imageBlock')" /></label>
+      <button class="btn btn-tiny" @click="insertMathBlock" title="插入块公式"><i class="i-lucide-square-function" />块公式</button>
     </div>
-    <BubbleMenu v-if="editor" :editor="editor" class="bubble-menu" :shouldShow="shouldShowBubble">
-      <button class="btn tiny" @click="editor.chain().focus().toggleBold().run()" :class="{active: editor.isActive('bold')}" title="加粗"><b>B</b></button>
-      <button class="btn tiny" @click="editor.chain().focus().toggleItalic().run()" :class="{active: editor.isActive('italic')}" title="斜体"><i>I</i></button>
-      <label class="btn tiny swatch" title="文字颜色">
-        <span class="dot" :style="{background: editor.getAttributes('textStyle').color || '#0f172a'}"></span>
-        <input type="color" :value="editor.getAttributes('textStyle').color || '#0f172a'" @input="editor.chain().focus().setColor($event.target.value).run()" />
+    <BubbleMenu v-if="editor" :editor="editor" class="bubble-menu flex gap-[3px] p-1 bg-card border border-line rounded-[8px] shadow-lg items-center" :shouldShow="shouldShowBubble">
+      <button class="btn btn-tiny" @click="editor.chain().focus().toggleBold().run()" :class="{ 'btn-primary': editor.isActive('bold') }" title="加粗"><b>B</b></button>
+      <button class="btn btn-tiny" @click="editor.chain().focus().toggleItalic().run()" :class="{ 'btn-primary': editor.isActive('italic') }" title="斜体"><i>I</i></button>
+      <label class="btn btn-tiny swatch relative inline-flex items-center gap-1 cursor-pointer" title="文字颜色">
+        <span class="dot w-3 h-3 rounded-full inline-block border border-line-strong" :style="{background: editor.getAttributes('textStyle').color || '#1b1a17'}"></span>
+        <input type="color" class="w-0 h-0 opacity-0 absolute" :value="editor.getAttributes('textStyle').color || '#1b1a17'" @input="editor.chain().focus().setColor($event.target.value).run()" />
       </label>
-      <button class="btn tiny" @click="editor.chain().focus().unsetColor().run()" title="清除颜色">↺</button>
+      <button class="btn btn-tiny" @click="editor.chain().focus().unsetColor().run()" title="清除颜色"><i class="i-lucide-rotate-ccw" /></button>
     </BubbleMenu>
     <editor-content :editor="editor" class="content" />
 
@@ -151,8 +151,8 @@ const ImageBlock = Node.create({
   parseHTML(){ return [{tag:'figure[data-image-block]'}] },
   renderHTML({node}){
     return ['figure',{'data-image-block':'true', style:'text-align:center;margin:12px 0'},
-      ['img',{src:node.attrs.src, alt:node.attrs.alt||node.attrs.caption, style:`max-width:${node.attrs.width}px;width:100%;border-radius:8px;border:1px solid #e2e8f0`}],
-      ['figcaption',{style:'color:#64748b;font-size:12px;margin-top:4px'}, node.attrs.caption||'']]
+      ['img',{src:node.attrs.src, alt:node.attrs.alt||node.attrs.caption, style:`max-width:${node.attrs.width}px;width:100%;border-radius:8px;border:1px solid #e3ddcd`}],
+      ['figcaption',{style:'color:#7d7568;font-size:12px;margin-top:4px'}, node.attrs.caption||'']]
   },
   addNodeView(){
     return ({node, getPos, editor})=>{
@@ -160,7 +160,7 @@ const ImageBlock = Node.create({
       wrap.style.cssText='border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg-accent);margin:8px 0'
       const img=document.createElement('img')
       img.src=node.attrs.src||''
-      img.style.cssText='max-width:100%;border-radius:8px;border:1px solid var(--line);background:#fff;display:block;margin:0 auto;max-height:140px;cursor:pointer'
+      img.style.cssText='max-width:100%;border-radius:8px;border:1px solid var(--line);background:#fffdf7;display:block;margin:0 auto;max-height:140px;cursor:pointer'
       img.title='点击更换图片'
       img.addEventListener('click',()=>{
         openImg({
@@ -178,7 +178,7 @@ const ImageBlock = Node.create({
       const cap=document.createElement('input')
       cap.value=node.attrs.caption||''
       cap.placeholder='图片标题'
-      cap.style.cssText='width:100%;margin-top:6px;background:#fff;border:1px solid var(--line);border-radius:6px;color:#0f172a;padding:5px 8px;font-size:12px'
+      cap.style.cssText='width:100%;margin-top:6px;background:#fffdf7;border:1px solid var(--line);border-radius:6px;color:#1b1a17;padding:5px 8px;font-size:12px'
       cap.addEventListener('input',()=>{
         const pos=getPos()
         editor.chain().setNodeSelection(pos).updateAttributes('imageBlock',{caption:cap.value}).run()
@@ -396,16 +396,6 @@ function uploadImage(ev, kind){
 </script>
 
 <style scoped>
-.tiptap-editor{ border:1px solid var(--line); border-radius:8px; overflow:visible; background:var(--card) }
-.toolbar{ display:flex; gap:4px; padding:6px 8px; background:var(--bg-accent); border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center }
-.btn.tiny{ background:var(--card); border:1px solid var(--line); color:var(--text-secondary); padding:4px 8px; border-radius:6px; cursor:pointer; font-size:11px; font-weight:500; line-height:1 }
-.btn.tiny:hover{ background:var(--card); border-color:var(--line-strong); color:var(--text) }
-.btn.tiny.active{ background:var(--text); color:#fff; border-color:var(--text) }
-.bubble-menu{ display:flex; gap:3px; padding:4px; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow-lg); align-items:center }
-.bubble-menu .btn.tiny{ box-shadow:none; padding:3px 6px }
-.swatch{ display:inline-flex; align-items:center; gap:4px; cursor:pointer }
-.swatch input[type=color]{ width:0; height:0; opacity:0; position:absolute }
-.dot{ width:12px; height:12px; border-radius:50%; display:inline-block; border:1px solid var(--line-strong) }
 .content{ padding:8px 10px; min-height:72px; background:var(--card) }
 .content :deep(.tiptap){ outline:none; min-height:100px; color:var(--text-secondary) }
 .content :deep(p){ margin:8px 0 }
@@ -416,14 +406,13 @@ function uploadImage(ev, kind){
 .content :deep(img){ max-width:100%; border-radius:8px; border:1px solid var(--line) }
 .content :deep(.inline-math.clickable){ background:var(--primary-bg); border:1px solid var(--primary-border); border-radius:999px; padding:2px 8px; font-size:12px; color:var(--primary) }
 .content :deep(.blank){ display:inline-block; min-width:72px; border-bottom:2px solid var(--primary); color:var(--primary); text-align:center; padding:0 6px; margin:0 2px; font-weight:600; background:var(--primary-bg); border-radius:4px 4px 0 0 }
-.muted{ color:var(--muted); font-size:11px }
 </style>
 
 <style>
 /* LaTeX / 图片浮层 — teleport 到 body，非 scoped；fixed 视口定位 */
 .latex-pop{
   position:fixed; z-index:1000; width:340px;
-  background:#fff; border:1px solid var(--line-strong); border-radius:12px;
+  background:#fffdf7; border:1px solid var(--line-strong); border-radius:12px;
   box-shadow:0 12px 24px rgba(0,0,0,.14), 0 4px 8px rgba(0,0,0,.08);
   padding:0 12px 12px;
 }
@@ -432,28 +421,28 @@ function uploadImage(ev, kind){
   margin:0 -12px 8px; padding:7px 12px;
   background:var(--bg-accent); border-bottom:1px solid var(--line);
   border-radius:12px 12px 0 0;
-  font-size:12px; font-weight:700; color:#334155;
+  font-size:12px; font-weight:700; color:#3d3a33;
   cursor:move; user-select:none;
 }
-.latex-pop .pop-head .close{ border:none; background:transparent; font-size:14px; color:#64748b }
+.latex-pop .pop-head .close{ border:none; background:transparent; font-size:14px; color:#7d7568 }
 .latex-pop .latex-input{
   width:100%; box-sizing:border-box; resize:vertical;
   font-family:ui-monospace,Consolas,monospace; font-size:13px;
   background:var(--bg-accent); border:1px solid var(--line);
-  border-radius:8px; color:#0f172a; padding:8px;
+  border-radius:8px; color:#1b1a17; padding:8px;
 }
-.latex-pop .latex-input:focus{ outline:none; border-color:#0ea5e9 }
+.latex-pop .latex-input:focus{ outline:none; border-color:#1f4d3a }
 .latex-pop .latex-preview{
-  background:#f8fafc; border:1px solid var(--line); border-radius:8px;
+  background:#f4f1ea; border:1px solid var(--line); border-radius:8px;
   padding:10px; margin:10px 0 8px; min-height:36px; overflow:auto; text-align:center;
 }
 .latex-pop .img-preview{
   max-width:100%; max-height:120px; display:block; margin:10px auto 8px;
-  border-radius:8px; border:1px solid var(--line); background:#fff;
+  border-radius:8px; border:1px solid var(--line); background:#fffdf7;
 }
 .latex-pop .latex-actions{ display:flex; gap:8px; margin-top:8px; align-items:center }
 .latex-pop .latex-actions .muted{ margin-left:auto }
-.latex-pop .btn.primary{ background:#0ea5e9; border-color:#0ea5e9; color:#fff }
-.latex-pop .btn{ background:#fff; border:1px solid var(--line); color:#334155; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:500 }
-.latex-pop .btn:hover{ background:#f1f5f9 }
+.latex-pop .btn.primary{ background:#1f4d3a; border-color:#1f4d3a; color:#fffdf7 }
+.latex-pop .btn{ background:#fffdf7; border:1px solid var(--line); color:#3d3a33; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:500 }
+.latex-pop .btn:hover{ background:#ece7db }
 </style>

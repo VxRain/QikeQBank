@@ -1,22 +1,27 @@
 <template>
-  <div class="list-page">
+  <div class="page">
     <div class="card">
       <div class="card-head">
-        <h2>题库列表</h2>
-        <div class="head-badges">
-          <span v-if="currentBankName" class="badge cur-bank">当前：{{ currentBankName }}</span>
+        <h2 class="section-title flex items-center gap-2">
+          <i class="i-lucide-list text-primary" />题库列表
+        </h2>
+        <div class="flex gap-2 items-center">
+          <span v-if="currentBankName" class="badge badge-cur">当前：{{ currentBankName }}</span>
           <span class="badge">{{ filteredCount }} 题</span>
         </div>
       </div>
 
-      <div class="toolbar">
-        <input
-          v-model="query"
-          class="input"
-          placeholder="搜索题干、ID..."
-          @keyup.enter="fetchList"
-        />
-        <select v-model="type" class="select" @change="fetchList">
+      <div class="flex flex-wrap gap-2 items-center p-3 mb-4 bg-bg-accent border border-line rounded-[12px]">
+        <div class="relative flex-1 min-w-[180px]">
+          <i class="i-lucide-search absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-muted-light pointer-events-none" />
+          <input
+            v-model="query"
+            class="input w-full pl-9"
+            placeholder="搜索题干、ID..."
+            @keyup.enter="fetchList"
+          />
+        </div>
+        <select v-model="type" class="select min-w-[130px]" @change="fetchList">
           <option value="">全部类型</option>
           <option value="single">单选</option>
           <option value="multi">多选</option>
@@ -27,54 +32,60 @@
         </select>
         <select
           v-model="bankStore.currentBankId"
-          class="select"
+          class="select min-w-[130px]"
           :disabled="!bankStore.loaded"
           @change="fetchList"
         >
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
-        <button class="btn primary" @click="fetchList">搜索</button>
-        <button class="btn" @click="reset">重置</button>
+        <button class="btn btn-primary" @click="fetchList">
+          <i class="i-lucide-search" />搜索
+        </button>
+        <button class="btn" @click="reset">
+          <i class="i-lucide-rotate-ccw" />重置
+        </button>
         <button
-          class="btn primary add-btn"
+          class="btn btn-primary ml-auto"
           :disabled="!bankStore.loaded || !bankStore.currentBankId"
           :title="bankStore.currentBankId ? '新增到当前题库' : '请先选择一个题库'"
           @click="onAdd"
-        >＋ 新增试题</button>
+        ><i class="i-lucide-plus" />新增试题</button>
       </div>
 
-      <div v-if="loading" class="muted" style="padding: 16px 0">加载中...</div>
-      <div v-else-if="error" class="error">{{ error }}</div>
+      <div v-if="loading" class="text-muted py-4 flex items-center gap-2">
+        <i class="i-lucide-loader-circle animate-spin" />加载中...
+      </div>
+      <div v-else-if="error" class="error-box mb-3">{{ error }}</div>
 
-      <div v-else class="table-wrap">
-        <table class="table">
+      <div v-else class="overflow-x-auto border border-line rounded-[12px]">
+        <table class="w-full border-collapse text-[14px]">
           <thead>
             <tr>
-              <th style="width: 160px">ID</th>
-              <th style="width: 80px">类型</th>
-              <th>题干</th>
-              <th style="width: 70px">分值</th>
-              <th style="width: 240px">操作</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 160px">ID</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 80px">类型</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">分值</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 240px">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="questions.length === 0">
-              <td colspan="5" class="muted" style="text-align: center; padding: 24px">暂无数据</td>
+              <td colspan="5" class="text-center py-6 text-muted">暂无数据</td>
             </tr>
-            <tr v-for="q in questions" :key="q.id">
-              <td class="mono">{{ q.id }}</td>
-              <td><span class="badge type">{{ typeLabel(q.type) }}</span></td>
-              <td class="stem-cell" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
-              <td>{{ q.score ?? (q.children ? q.children.reduce((s,c)=>s+(c.score||0),0) : '-') }}</td>
-              <td>
-                <div class="actions">
-                  <router-link :to="`/edit/${q.id}`" class="btn small">编辑</router-link>
-                  <select class="select mini" :value="''" title="移动题库" @change="onMove(q.id, $event.target.value)">
+            <tr v-for="q in questions" :key="q.id" class="transition-[background-color] duration-100 hover:bg-card-hover">
+              <td class="px-3.5 py-3 border-b border-line font-mono text-[12px] text-muted bg-bg-accent px-1.5 py-0.5 rounded-[4px]">{{ q.id }}</td>
+              <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
+              <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
+              <td class="px-3.5 py-3 border-b border-line">{{ q.score ?? (q.children ? q.children.reduce((s,c)=>s+(c.score||0),0) : '-') }}</td>
+              <td class="px-3.5 py-3 border-b border-line">
+                <div class="flex gap-1.5 flex-wrap">
+                  <router-link :to="`/edit/${q.id}`" class="btn btn-small"><i class="i-lucide-pencil" />编辑</router-link>
+                  <select class="select px-1.5 py-1 text-[11px] w-[104px] min-w-0" :value="''" title="移动题库" @change="onMove(q.id, $event.target.value)">
                     <option value="" disabled>移动题库…</option>
                     <option v-for="b in otherBanks(q.bank_id)" :key="b.id" :value="b.id">{{ b.name }}</option>
                   </select>
-                  <button class="btn small danger" @click="onDelete(q.id)">删除</button>
+                  <button class="btn btn-small btn-danger" @click="onDelete(q.id)"><i class="i-lucide-trash-2" />删除</button>
                 </div>
               </td>
             </tr>
@@ -262,97 +273,3 @@ watch(type, () => {
 })
 </script>
 
-<style scoped>
-.card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  box-shadow: var(--shadow);
-}
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.card-head h2 { margin: 0; font-size: 20px; font-weight:700; letter-spacing:-0.01em }
-.head-badges { display: flex; gap: 8px; align-items: center; }
-.badge.cur-bank { color: var(--primary); border-color: var(--primary-border); background: var(--primary-bg); }
-.badge {
-  display: inline-block;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  background: var(--bg-accent);
-  font-weight:500;
-}
-.badge.type { color: var(--primary); border-color: var(--primary-border); background: var(--primary-bg); }
-.toolbar {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-bottom: 16px;
-  padding: 12px;
-  background: var(--bg-accent);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.input, .select {
-  padding: 9px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--text);
-  font-size: 14px;
-  outline: none;
-  transition: all .15s ease;
-  box-shadow: var(--shadow-sm);
-}
-.input { flex: 1; min-width: 180px; }
-.select { min-width: 130px; }
-.input:focus, .select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
-.btn {
-  padding: 8px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight:500;
-  transition: all .15s ease;
-  box-shadow: var(--shadow-sm);
-}
-.btn:hover { background: var(--bg-accent); border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow); }
-.btn.primary { background: var(--text); color: #fff; border-color: var(--text); }
-.btn.primary:hover { background: #1e293b; box-shadow: var(--shadow); }
-.btn.small { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
-.btn.danger { border-color: #fecaca; color: var(--danger); background: #fff; }
-.btn.danger:hover { background: var(--danger-bg); border-color: #fca5a5; }
-.select.mini { padding: 5px 6px; font-size: 11px; width: 104px; min-width: 0; }
-.add-btn { margin-left: auto; }
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-.table th, .table td {
-  text-align: left;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
-}
-.table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; background: var(--bg-accent); }
-.table tbody tr:hover{ background: #f8fafc }
-.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); background: var(--bg-accent); padding:2px 6px; border-radius:4px }
-.stem-cell { max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); font-weight:500 }
-.muted { color: var(--muted); }
-.error { color: #b91c1c; background: var(--danger-bg); border: 1px solid #fecaca; padding: 12px; border-radius: 10px; margin-bottom: 12px; }
-.actions { display: flex; gap: 6px; flex-wrap: wrap; }
-</style>

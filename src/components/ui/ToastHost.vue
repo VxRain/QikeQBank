@@ -4,11 +4,13 @@
  */
 <template>
   <Teleport to="body">
-    <TransitionGroup name="tst" tag="div" class="tst-wrap">
-      <div v-for="t in ui.toasts" :key="t.id" class="tst" :class="t.type">
-        <span class="tst-icon" aria-hidden="true">{{ icon(t.type) }}</span>
-        <span class="tst-text">{{ t.text }}</span>
-        <button type="button" class="tst-close" aria-label="关闭" @click="dismissToast(t.id)">✕</button>
+    <TransitionGroup name="tst" tag="div" class="fixed right-4.5 bottom-4.5 z-[1100] flex flex-col gap-2.5 pointer-events-none">
+      <div v-for="t in ui.toasts" :key="t.id" class="tst pointer-events-auto flex items-center gap-2.5 max-w-[380px] px-3.5 py-2.75 rounded-[12px] bg-card border border-line border-l-4 border-l-primary shadow-lg text-[13px] text-text-secondary" :class="t.type">
+        <span class="tst-icon shrink-0 w-5 h-5 inline-flex items-center justify-center rounded-full text-white bg-primary" aria-hidden="true">
+          <i :class="iconClass(t.type)" class="text-[12px]" />
+        </span>
+        <span class="leading-[1.5] break-all">{{ t.text }}</span>
+        <button type="button" class="shrink-0 border-none bg-transparent text-muted-light cursor-pointer text-[11px] px-1 py-0.5 rounded-[6px] transition-colors duration-150 hover:text-text hover:bg-bg-accent" aria-label="关闭" @click="dismissToast(t.id)"><i class="i-lucide-x" /></button>
       </div>
     </TransitionGroup>
   </Teleport>
@@ -17,69 +19,18 @@
 <script setup>
 import { ui, dismissToast } from '@/stores/ui.js'
 
-function icon(type) {
-  if (type === 'success') return '✓'
-  if (type === 'error') return '✕'
-  return 'ℹ'
+function iconClass(type) {
+  if (type === 'success') return 'i-lucide-check'
+  if (type === 'error') return 'i-lucide-x'
+  return 'i-lucide-info'
 }
 </script>
 
 <style scoped>
-.tst-wrap {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 1100;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  pointer-events: none;
-}
-.tst {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 380px;
-  padding: 11px 14px;
-  border-radius: 12px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-left: 4px solid var(--primary);
-  box-shadow: var(--shadow-lg);
-  font-size: 13px;
-  color: var(--text-secondary);
-}
 .tst.success { border-left-color: var(--success); }
 .tst.error { border-left-color: var(--danger); }
-.tst-icon {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--primary);
-}
 .tst.success .tst-icon { background: var(--success); }
 .tst.error .tst-icon { background: var(--danger); }
-.tst-text { line-height: 1.5; word-break: break-all; }
-.tst-close {
-  flex-shrink: 0;
-  border: none;
-  background: transparent;
-  color: var(--muted-light);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 4px;
-  border-radius: 6px;
-}
-.tst-close:hover { color: var(--text); background: var(--bg-accent); }
-
 .tst-enter-active, .tst-leave-active { transition: all .2s ease; }
 .tst-enter-from, .tst-leave-to { opacity: 0; transform: translateX(24px); }
 .tst-move { transition: transform .2s ease; }

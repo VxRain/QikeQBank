@@ -1,24 +1,21 @@
 <template>
-  <div class="qform">
-    <!-- 子题分值（仅当父层未接管时显示；主试题由顶层行管理） -->
-    <div v-if="showScore" class="row">
-      <label>分值</label>
-      <input v-model.number="local.score" type="number" class="input" style="width:80px" @change="emitUpdate" />
-      <label style="margin-left:12px">难度</label>
-      <select v-model.number="local.difficulty" class="select" style="width:80px" @change="emitUpdate">
+  <div class="flex flex-col gap-2.5">
+    <div v-if="showScore" class="flex items-center gap-1.5 flex-wrap">
+      <label class="text-[13px] text-text-secondary">分值</label>
+      <input v-model.number="local.score" type="number" class="input px-2 py-1.5 text-[12px] w-[80px]" @change="emitUpdate" />
+      <label class="text-[13px] text-text-secondary ml-3">难度</label>
+      <select v-model.number="local.difficulty" class="select px-2 py-1.5 text-[12px] w-[80px]" @change="emitUpdate">
         <option :value="1">1</option><option :value="2">2</option><option :value="3">3</option><option :value="4">4</option><option :value="5">5</option>
       </select>
     </div>
 
-    <!-- 题干 -->
-    <div class="section">
-      <h3>题干</h3>
+    <div class="bg-card border border-line rounded-[8px] p-2.5">
+      <h3 class="m-0 mb-1.5 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-help-circle text-primary text-[14px]" />题干</h3>
       <TiptapDocEditor :modelValue="local.stem" :showBlank="local.type==='fill'" @update:modelValue="onStemUpdate" @blankInserted="onBlankInserted" />
     </div>
 
-    <!-- 选项 -->
-    <div v-if="['single','multi','judge'].includes(local.type)" class="section">
-      <h3>选项</h3>
+    <div v-if="['single','multi','judge'].includes(local.type)" class="bg-card border border-line rounded-[8px] p-2.5">
+      <h3 class="m-0 mb-1.5 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-list-checks text-primary text-[14px]" />选项</h3>
       <OptionBlock
         v-for="(opt, idx) in local.options"
         :key="opt.id || idx"
@@ -31,28 +28,25 @@
         @remove="removeOption(idx)"
         :removable="local.options.length>2"
       />
-      <button class="btn small" @click="addOption" v-if="local.type!=='judge'">+选项</button>
+      <button class="btn btn-small" @click="addOption" v-if="local.type!=='judge'"><i class="i-lucide-plus" />选项</button>
     </div>
 
-    <!-- 填空答案 -->
-    <div v-if="local.type==='fill'" class="section">
-      <h3>填空答案</h3>
-      <div v-for="(b, idx) in blanks" :key="b.id" class="row" style="margin-bottom:4px">
-        <span style="font-size:12px;min-width:28px">空{{idx+1}}</span>
-        <input v-model="fillAnswers[idx]" placeholder="答案，逗号分隔多解" class="input" style="flex:1" @input="updateFillAnswer" />
+    <div v-if="local.type==='fill'" class="bg-card border border-line rounded-[8px] p-2.5">
+      <h3 class="m-0 mb-1.5 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-pencil-line text-primary text-[14px]" />填空答案</h3>
+      <div v-for="(b, idx) in blanks" :key="b.id" class="flex items-center gap-1.5 mb-1">
+        <span class="text-[12px] min-w-[28px]">空{{idx+1}}</span>
+        <input v-model="fillAnswers[idx]" placeholder="答案，逗号分隔多解" class="input flex-1 px-2 py-1.5 text-[12px]" @input="updateFillAnswer" />
       </div>
-      <div v-if="blanks.length===0" class="muted">在题干编辑器点“__ 填空”插入填空位</div>
+      <div v-if="blanks.length===0" class="text-muted text-[11px] flex items-center gap-1"><i class="i-lucide-info text-[12px]" />在题干编辑器点“__ 填空”插入填空位</div>
     </div>
 
-    <!-- 问答参考答案（answer.reference，与解析分离） -->
-    <div v-if="local.type==='short'" class="section">
-      <h3>参考答案</h3>
+    <div v-if="local.type==='short'" class="bg-card border border-line rounded-[8px] p-2.5">
+      <h3 class="m-0 mb-1.5 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-book-open text-primary text-[14px]" />参考答案</h3>
       <TiptapDocEditor :modelValue="local.answer?.reference || emptyDoc()" :showBlank="false" @update:modelValue="onReferenceDoc" />
     </div>
 
-    <!-- 解析 -->
-    <div class="section">
-      <h3>解析</h3>
+    <div class="bg-card border border-line rounded-[8px] p-2.5">
+      <h3 class="m-0 mb-1.5 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-lightbulb text-primary text-[14px]" />解析</h3>
       <TiptapDocEditor :modelValue="local.analysis || emptyDoc()" :showBlank="false" @update:modelValue="onAnalysisDoc" />
     </div>
   </div>
@@ -204,15 +198,3 @@ function isDocEmpty(doc){
 }
 </script>
 
-<style scoped>
-.qform{ display:flex; flex-direction:column; gap:10px }
-.section{ background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px }
-.section h3{ margin:0 0 6px; font-size:13px; font-weight:700; color:var(--text) }
-.row{ display:flex; align-items:center; gap:6px; flex-wrap:wrap }
-.input{ background:var(--card); border:1px solid var(--line); border-radius:6px; color:var(--text); padding:6px 8px; font-size:12px }
-.input:focus{ border-color:var(--primary); outline:none }
-.btn{ background:var(--card); border:1px solid var(--line); color:var(--text-secondary); padding:5px 10px; border-radius:6px; cursor:pointer; font-size:11px; font-weight:500 }
-.btn:hover{ background:var(--bg-accent); border-color:var(--line-strong) }
-.btn.small{ padding:4px 8px; font-size:11px }
-.muted{ color:var(--muted); font-size:11px }
-</style>
