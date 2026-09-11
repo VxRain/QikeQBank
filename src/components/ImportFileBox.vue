@@ -101,7 +101,8 @@ import { saveTextFile } from '@/api/practice.js'
 import { validateQuestion } from '@/utils/validate.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { create } from '@/api/questions.js'
-import { toast } from '@/stores/ui.js'
+import { toast, confirmDialog } from '@/stores/ui.js'
+import { openPath } from '@tauri-apps/plugin-opener'
 
 const props = defineProps({
   bankId: { type: String, required: true },
@@ -145,7 +146,21 @@ async function downloadSample() {
   // 无后端环境（浏览器 dev）：回退前端 blob 下载
   try {
     const res = await saveTextFile(TEMPLATE_SAMPLE, '试题导入模板.md')
-    toast('模板已保存到：' + (res?.path || ''), 'success', 6000)
+    const path = res?.path || ''
+    const ok = await confirmDialog({
+      title: '模板已保存',
+      message: `${path}\n是否打开所在文件夹？`,
+      okText: '打开文件夹',
+      cancelText: '知道了',
+    })
+    if (ok && path) {
+      try {
+        await openPath(path.replace(/[/\\][^/\\]+$/, ''))
+      } catch (err) {
+        console.error(err)
+        toast('打开文件夹失败：' + (err?.message || err), 'error')
+      }
+    }
     return
   } catch (e) {
     console.warn('save_text_file 不可用，回退 blob 下载', e)

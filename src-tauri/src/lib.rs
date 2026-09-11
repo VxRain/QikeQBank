@@ -6,6 +6,7 @@ pub fn run() {
     // 注意不禁 CONTEXT_MENU：右键由前端按元素白名单细粒度控制（main.js），
     // Rust 层一刀切会连编辑区的复制粘贴菜单一起杀掉。
     let builder = tauri::Builder::default();
+    let builder = builder.plugin(tauri_plugin_opener::init());
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(
         tauri_plugin_prevent_default::Builder::new()
