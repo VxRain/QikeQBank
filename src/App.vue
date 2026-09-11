@@ -20,7 +20,11 @@
             class="nav-link relative inline-flex items-center gap-1.5 px-3.5 h-full text-[14px] font-500 no-underline text-text-secondary transition-[color] duration-150 hover:text-text"
           ><i :class="item.icon" aria-hidden="true" />{{ item.label }}</router-link>
         </nav>
-        <div class="ml-auto" />
+        <div class="ml-auto flex items-center">
+          <button type="button" class="i-btn px-2.5 py-1.5 text-[13px]" title="设置" @click="showSettings = true">
+            <i class="i-lucide-settings-2 text-[15px]" />设置
+          </button>
+        </div>
       </div>
     </header>
     <main class="max-w-[1140px] w-full mx-auto px-7 py-8 flex-1">
@@ -28,14 +32,54 @@
     </main>
     <DialogHost />
     <ToastHost />
+
+    <!-- 设置弹窗 -->
+    <Teleport to="body">
+      <Transition name="dg">
+        <div v-if="showSettings" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="showSettings = false">
+          <div class="dg-card w-[min(440px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" aria-label="设置">
+            <h3 class="m-0 mb-4 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2">
+              <i class="i-lucide-settings-2 text-primary" />设置
+            </h3>
+            <button
+              type="button"
+              role="switch"
+              :aria-checked="settings.keepContentOnTypeChange"
+              class="w-full flex items-start justify-between gap-3 p-3.5 border border-line rounded-[10px] bg-card cursor-pointer transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-bg-accent text-left"
+              @click="settings.keepContentOnTypeChange = !settings.keepContentOnTypeChange"
+            >
+              <span class="min-w-0">
+                <span class="block text-[14px] font-600 text-text">切换题型时保留内容</span>
+                <span class="block text-[12px] text-muted leading-[1.6] mt-1">启用后，切换试题类型时选项 / 答案 / 解析尽量复用而不重置（如单选切多选保留选项与答案，问答参考答案转存为解析）</span>
+              </span>
+              <span
+                class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
+                :class="settings.keepContentOnTypeChange ? 'bg-primary' : 'bg-[var(--line-strong)]'"
+              >
+                <span
+                  class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
+                  :class="settings.keepContentOnTypeChange ? 'left-[22px]' : 'left-[3px]'"
+                />
+              </span>
+            </button>
+            <div class="flex justify-end gap-2.5 mt-4">
+              <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { loadBanks } from '@/stores/bank.js'
+import { settings } from '@/stores/settings.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
+
+const showSettings = ref(false)
 
 const navItems = [
   { to: '/', label: '首页', icon: 'i-lucide-home' },
@@ -123,8 +167,7 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
   background-position: right 10px center;
   background-size: 12px;
 }
-/* 导航 tab：底部细线指示器（书签感），非胶囊 */
-.nav-link {
+/* 导航 tab：底部细线指示器（书签感），非胶囊 */.nav-link {
   border-bottom: 2px solid transparent;
 }
 .nav-link:hover { border-bottom-color: var(--line-strong); }
@@ -134,6 +177,12 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
   border-bottom-color: var(--primary);
   background: transparent;
 }
+
+/* App 内联设置弹窗入场（与 DialogHost 同语言；DialogHost 的是 scoped，App 用不了） */
+.dg-enter-active, .dg-leave-active { transition: opacity .18s ease; }
+.dg-enter-active .dg-card, .dg-leave-active .dg-card { transition: transform .18s ease; }
+.dg-enter-from, .dg-leave-to { opacity: 0; }
+.dg-enter-from .dg-card, .dg-leave-to .dg-card { transform: translateY(8px) scale(.97); }
 
 /* 补线体标题工具类（由 uno.config theme.fontFamily.serif 提供 font-serif 原子类） */
 </style>

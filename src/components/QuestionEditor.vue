@@ -89,6 +89,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import TiptapDocEditor from './TiptapDocEditor.vue'
 import QuestionForm from './QuestionForm.vue'
 import PasteBox from './PasteBox.vue'
+import { settings } from '@/stores/settings.js'
 
 const props = defineProps({ modelValue: Object })
 const emit = defineEmits(['update:modelValue'])
@@ -155,10 +156,15 @@ function onFormUpdate(payload){
 }
 function onMainTypeChange(newType){
   if(newType === local.type) return
-  const keepStem = JSON.parse(JSON.stringify(local.stem || createDoc('')))
-  const def = createDefault(newType)
-  def.id = local.id
-  def.stem = preservedStem(keepStem, newType) || def.stem
+  let def
+  if (settings.keepContentOnTypeChange) {
+    def = preserveTypeChange(local, newType)
+  } else {
+    const keepStem = JSON.parse(JSON.stringify(local.stem || createDoc('')))
+    def = createDefault(newType)
+    def.id = local.id
+    def.stem = preservedStem(keepStem, newType) || def.stem
+  }
   replaceLocal(def)
 }
 
@@ -177,6 +183,139 @@ function preservedStem(stem, newType){
   })(stem)
   if(!stem.content.length) return null
   return stem
+}
+
+/* ---------- 类型切换保持内容完整性（设置 keepContentOnTypeChange 启用时） ---------- */
+const cloneQ = (o) => JSON.parse(JSON.stringify(o))
+const CHOICE_TYPES = ['single', 'multi', 'judge']
+
+// 题干纯文本（去 blank/图片等节点，只要文字）
+function stemTextOf(stem) {
+  const parts = []
+  ;(function w(n) {
+    if (!n) return
+    if (n.type === 'text' && n.text) parts.push(n.text)
+    if (n.content) n.content.forEach(w)
+  })(stem)
+  return parts.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+function defaultOptions(n = 4) {
+  const names = ['选项A', '选项B', '选项C', '选项D', '选项E', '选项F']
+  const arr = []
+  for (let i = 0; i < n; i++) arr.push({ id: `o${i + 1}`, content: createDoc(names[i] || `选项${i + 1}`) })
+  return arr
+}
+
+function judgeOptions() {
+  return [
+    { id: 'o1', content: createDoc('正确') },
+    { id: 'o2', content: createDoc('错误') },
+  ]
+}
+
+// 单题互切：保留题干/分值/难度/解析，选项答案尽量映射复用
+function preserveSingle(old, newType) {
+  const wasChoice = CHOICE_TYPES.includes(old.type)
+  const q = {
+    type: newType,
+    id: old.id,
+    difficulty: old.difficulty ?? 2,
+    score: old.score ?? (newType === 'judge' ? 2 : newType === 'short' ? 10 : 5),
+    stem: null,
+    analysis: old.analysis || null,
+    plain_text: '',
+  }
+  // 问答参考答案转存为解析（反向在 short 分支处理），避免内容丢失
+  if (old.type === 'short' && newType !== 'short') {
+    q.analysis = old.answer?.reference || old.analysis || null
+  }
+  // 题干：fill 无 blank 时保留纯文字；其余去 blank 节点保留
+  if (newType === 'fill') {
+    let has = false
+    ;(function w(n) { if (!n) return; if (n.type === 'blank') has = true; if (n.content) n.content.forEach(w) })(old.stem)
+    if (has) q.stem = cloneQ(old.stem)
+    else {
+      const t = stemTextOf(old.stem)
+      q.stem = t ? createDoc(t) : createDefault('fill').stem
+    }
+  } else {
+    const text = stemTextOf(old.stem)
+    q.stem = preservedStem(cloneQ(old.stem || createDoc('')), newType)
+      || (text ? createDoc(text) : createDefault(newType).stem)
+  }
+
+  if (newType === 'single' || newType === 'multi') {
+    q.options = wasChoice && old.options?.length >= 2 ? cloneQ(old.options) : defaultOptions(4)
+    while (q.options.length < 2) q.options.push({ id: `o${q.options.length + 1}`, content: createDoc(`选项${q.options.length + 1}`) })
+    const set = new Set(q.options.map((o) => o.id))
+    let ids = ((old.answer?.ids) || []).filter((id) => set.has(id))
+    if (newType === 'single') ids = ids.slice(0, 1)
+    if (!ids.length) ids = [q.options[0].id]
+    q.answer = { ids }
+  } else if (newType === 'judge') {
+    q.options = judgeOptions()
+    // 原首个有效答案为 o1 → 正确，否则 → 错误；无答案默认正确
+    let correct = true
+    if (wasChoice) {
+      const set = new Set((old.options || []).map((o) => o.id))
+      const first = ((old.answer?.ids) || []).find((id) => set.has(id))
+      if (first != null) correct = first === 'o1'
+    }
+    q.answer = { ids: [correct ? 'o1' : 'o2'] }
+  } else if (newType === 'fill') {
+    if (old.type === 'fill') q.answer = cloneQ(old.answer || { blanks: [] })
+    else q.answer = { blanks: [] }
+  } else if (newType === 'short') {
+    const ref = old.type === 'short' ? old.answer?.reference : old.analysis || null
+    q.answer = { reference: ref ? cloneQ(ref) : createDoc('参考答案') }
+    // 解析已转存为参考答案，不再重复保留
+    if (old.type !== 'short') q.analysis = null
+  }
+  return q
+}
+
+// 含材料互切的完整切换
+function preserveTypeChange(old, newType) {
+  // 材料 → 单题：首个子题整体接管（类型内容全保留）， analysis 取子题或材料级
+  if (old.type === 'material' && newType !== 'material') {
+    const kids = old.children || []
+    const first = kids[0] && kids[0].type !== 'material' ? cloneQ(kids[0]) : null
+    let base
+    if (first) {
+      base = first
+      base.analysis = first.analysis || old.analysis || null
+      base.score = first.score ?? 5
+      base.difficulty = first.difficulty ?? 3
+    } else {
+      base = createDefault('single')
+      const t = stemTextOf(old.stem)
+      base.stem = t ? createDoc(t) : cloneQ(old.stem)
+      base.analysis = old.analysis || null
+    }
+    base.id = old.id
+    delete base.children
+    if (base.type !== newType) return preserveSingle(base, newType)
+    base.plain_text = ''
+    return base
+  }
+  // 单题 → 材料：原题原样成为子题 1（类型保留零丢失），原题干转纯文本作材料正文
+  if (newType === 'material') {
+    const mat = createDefault('material')
+    mat.id = old.id
+    const t = stemTextOf(old.stem)
+    mat.stem = t ? createDoc(t) : createDoc('阅读下列材料：')
+    const child = cloneQ(old)
+    delete child.id
+    delete child.children
+    delete child.plain_text
+    child.score = child.score ?? 5
+    child.difficulty = child.difficulty ?? 2
+    mat.children = [child]
+    mat.analysis = old.analysis || null
+    return mat
+  }
+  return preserveSingle(old, newType)
 }
 
 function replaceLocal(def){
@@ -202,9 +341,14 @@ function onChildUpdate(cIdx, payload){
 }
 function onChildTypeChange(cIdx, newType){
   const child = children.value[cIdx]
-  const keepStem = JSON.parse(JSON.stringify(child.data.stem || createDoc('')))
-  const def = createDefault(newType)
-  def.stem = preservedStem(keepStem, newType) || def.stem
+  let def
+  if (settings.keepContentOnTypeChange) {
+    def = preserveTypeChange(child.data, newType)
+  } else {
+    const keepStem = JSON.parse(JSON.stringify(child.data.stem || createDoc('')))
+    def = createDefault(newType)
+    def.stem = preservedStem(keepStem, newType) || def.stem
+  }
   child.data = def
   child._uid = `u${++uidSeq}`
   local.children[cIdx] = def
