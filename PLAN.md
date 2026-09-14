@@ -131,7 +131,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `questions_list` | `query?, type_filter?, bank_id?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；其余不变 |
+| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；返回 `{"total","items"}` |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；其余不变 |
 | `questions_get` / `questions_remove` | 不变 | 不变 |
@@ -140,7 +140,8 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `practice_pool` | `limit?, type_filter?, bank_id?` | 有 bank_id 时过滤 |
+| `practice_pool` | `limit?, type_filter?, bank_id?, ids?` | 有 bank_id 时过滤；ids 非空时按传入顺序返回存在的题（上限 500），忽略题型/随机逻辑（错题重练用） |
+| `wrong_list` | `bank_id?, type_filter?, limit?, offset?` | 错题本：最近一次作答仍为 wrong（correct=0）的题；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at）；分页默认 limit 50、上限 500 |
 | `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤 |
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局 |
 | `record_answer` | 不变 | 不变 |
@@ -197,10 +198,10 @@ export function setCurrentBank(id)     // 更新 + localStorage
 ```
 
 ### api/questions.js（W2 改）
-`list({query, type, bankId})` → args 带 `bank_id`（bankId falsy 时不传=全部）。其余不变。
+`list({query, type, bankId, limit, offset})` → args 带 `bank_id`（bankId falsy 时不传=全部）；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
 
 ### api/practice.js（W2 改）
-`practicePool({limit,type,bankId})`、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）。其余不变。
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type})` → `cmd('wrong_list',…)` 取 `.data`。其余不变。
 
 ### App.vue（W2 改）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；导航不变。
@@ -209,19 +210,27 @@ export function setCurrentBank(id)     // 更新 + localStorage
 - 工具栏加「题库」下拉：选项 = 「全部题库」(值为 '') + bankStore.banks 各项；绑定 bankStore.currentBankId。
 - 切换即重新 fetchList（携带 bankId）；搜索/筛选逻辑不变。
 - 未加载完成时下拉禁用（disabled）。
+- 分页：50/页，表格下方「上一页/下一页 + 第 X/Y 页 · 共 N 题」；筛选/搜索/重置时回第 1 页。
 
 ### Form.vue（W3a）
 - `onSave`：新建时 `payload.bank_id = bankStore.currentBankId || bankStore.banks[0]?.id`；编辑时不覆盖（保留 DB 行的 bank_id）。
 - 顶部展示「所属题库」小徽章（编辑时显示当前 bank 名，只读）。
 
+### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）
+- 筛选条：题库下拉（默认当前库）+ 题型下拉 + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页）。
+- 「重练全部」：按当前筛选取最多 500 个 id → sessionStorage['qbank.retryIds'] → `/practice?retry=1`；Practice 绕过 setup 直接组卷（`practicePool({ids})`），读完即清 storage；空结果回 setup 并提示。
+- 收录规则：最近一次作答仍错才在册，答对自动移出，删题经 FK 级联自动消失（无手动移出）。
+
 ### Practice.vue（W3b）
 - 设置面板加「题库」下拉：全部(值为 '') + 各库；默认当前库（bankStore.currentBankId，空则 ''）。
 - 组卷时 `practicePool({limit,type,bankId})`；其余逻辑不动。
+- 错题重练：`/practice?retry=1` + sessionStorage['qbank.retryIds'] → `practicePool({ids})` 直达作答；另修复本轮结束页「错题重做」未切回作答页的问题。
 
 ### Review.vue（W3b）
 - 顶部设置同 Practice（题库下拉）；`reviewDue({limit:20, bankId})`；其余不动。
 
 ### Home.vue（W3c）
+- 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。
 - 新增「题库管理」卡：
   - 列表：每行 = 名称 + 题数(question_count) + 当前徽章 + 设为当前(点行)/重命名(prompt 输入新名)/删除(confirm + 客户端也拦最后一个)。
   - 新增：输入框 + 按钮（name trim 非空）。

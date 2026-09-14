@@ -82,6 +82,7 @@ const navItems = [
   { to: '/', label: '首页', icon: 'i-lucide-home' },
   { to: '/banks', label: '题库', icon: 'i-lucide-book-open' },
   { to: '/practice', label: '刷题', icon: 'i-lucide-zap' },
+  { to: '/wrong', label: '错题本', icon: 'i-lucide-circle-x' },
   { to: '/review', label: '复习', icon: 'i-lucide-repeat' }
 ]
 

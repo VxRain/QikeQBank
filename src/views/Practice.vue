@@ -209,7 +209,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore } from '@/stores/bank.js'
@@ -227,6 +228,8 @@ const COUNT_OPTIONS = [
 ]
 
 const phase = ref('setup') // setup | card | done
+const route = useRoute()
+const router = useRouter()
 const error = ref('')
 const recordError = ref('')
 const fetching = ref(false)
@@ -530,7 +533,52 @@ function startRedo() {
   round.value = { total: pool.value.length, correct: 0, wrong: [], ms: 0 }
   resetAnswer()
   startedAt.value = Date.now()
+  phase.value = 'card'
 }
+
+// 错题本重练：按指定 id 组卷，跳过 setup 直达作答
+async function startFromIds(ids) {
+  if (fetching.value) return
+  error.value = ''
+  fetching.value = true
+  try {
+    const questions = await practicePool({ ids })
+    pool.value = buildItems(questions)
+    if (!pool.value.length) {
+      error.value = '重练题目已不存在（可能被删除），请从错题本重新发起。'
+      return
+    }
+    curIdx.value = 0
+    round.value = { total: pool.value.length, correct: 0, wrong: [], ms: 0 }
+    resetAnswer()
+    startedAt.value = Date.now()
+    phase.value = 'card'
+  } catch (e) {
+    console.error(e)
+    error.value = '抽题失败：' + (e?.message || e)
+  } finally {
+    fetching.value = false
+  }
+}
+
+onMounted(() => {
+  if (route.query.retry) {
+    let ids = []
+    try {
+      const raw = sessionStorage.getItem('qbank.retryIds')
+      if (raw) ids = JSON.parse(raw)
+    } catch {
+      ids = []
+    }
+    sessionStorage.removeItem('qbank.retryIds')
+    router.replace('/practice')
+    if (Array.isArray(ids) && ids.filter(Boolean).length) {
+      startFromIds(ids.filter(Boolean))
+    } else {
+      error.value = '没有收到重练题目，请从错题本重新发起。'
+    }
+  }
+})
 
 function fmtMs(ms) {
   const s = Math.max(0, Math.round((ms || 0) / 1000))

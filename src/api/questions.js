@@ -7,6 +7,8 @@ export function list(params = {}) {
   const tf = params.typeFilter ?? params.type
   if (tf) args.typeFilter = tf
   if (params.bankId) args.bankId = params.bankId
+  if (params.limit != null) args.limit = params.limit
+  if (params.offset != null) args.offset = params.offset
   return cmd('questions_list', args)
 }
 

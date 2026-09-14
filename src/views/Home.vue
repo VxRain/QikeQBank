@@ -22,14 +22,14 @@
     </div>
 
     <div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3.5">
-      <div class="card flex flex-col gap-1">
+      <div class="card card-interactive cursor-pointer flex flex-col gap-1" role="link" tabindex="0" title="进入题库列表" @click="go('/library')" @keyup.enter="go('/library')">
         <div class="flex items-start justify-between gap-2">
           <div class="text-[30px] font-800 tracking-[-0.02em] leading-none font-[var(--serif)] text-text">{{ stats?.total ?? '—' }}</div>
           <i class="i-lucide-library text-[16px] text-muted-light" />
         </div>
         <div class="text-[13px] font-500 text-muted">题库总题数</div>
       </div>
-      <div class="card flex flex-col gap-1">
+      <div class="card card-interactive cursor-pointer flex flex-col gap-1" role="link" tabindex="0" title="进入间隔复习" @click="go('/review')" @keyup.enter="go('/review')">
         <div class="flex items-start justify-between gap-2">
           <div class="text-[30px] font-800 tracking-[-0.02em] leading-none font-[var(--serif)] text-primary">{{ stats?.due_total ?? '—' }}</div>
           <i class="i-lucide-clock text-[16px] text-muted-light" />
@@ -37,7 +37,7 @@
         <div class="text-[13px] font-500 text-muted">待复习总数</div>
         <div class="text-[12px] text-muted-light">今日到期 {{ stats?.due_today ?? '—' }}</div>
       </div>
-      <div class="card flex flex-col gap-1">
+      <div class="card card-interactive cursor-pointer flex flex-col gap-1" role="link" tabindex="0" title="进入刷题" @click="go('/practice')" @keyup.enter="go('/practice')">
         <div class="flex items-start justify-between gap-2">
           <div class="text-[30px] font-800 tracking-[-0.02em] leading-none font-[var(--serif)] text-text">{{ stats?.practiced_total ?? '—' }}</div>
           <i class="i-lucide-zap text-[16px] text-muted-light" />
@@ -53,6 +53,15 @@
         <div class="text-[13px] font-500 text-muted">总正确率</div>
         <div class="text-[12px] text-muted-light">练习 + 复习</div>
       </div>
+    </div>
+
+    <div v-if="(stats?.due_total ?? 0) > 0" class="card flex flex-wrap items-center gap-3 !border-primary-border !bg-primary-bg">
+      <i class="i-lucide-repeat text-primary text-[20px]" />
+      <span class="text-[14px] text-text font-500">有 <b class="text-primary text-[17px]">{{ stats.due_total }}</b> 题待复习，别让遗忘曲线得逞</span>
+      <span class="flex gap-2 ml-auto">
+        <button type="button" class="btn btn-primary" @click="go('/review')"><i class="i-lucide-play" />开始复习</button>
+        <button type="button" class="btn" @click="go('/practice')"><i class="i-lucide-zap" />去刷题</button>
+      </span>
     </div>
 
     <div class="card">
@@ -99,8 +108,14 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { stats as fetchStats } from '@/api/practice.js'
 import { toast } from '@/stores/ui.js'
+
+const router = useRouter()
+function go(path) {
+  router.push(path)
+}
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
 const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '简答', material: '材料' }

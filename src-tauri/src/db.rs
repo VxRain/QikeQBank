@@ -892,11 +892,12 @@ pub fn questions_list(
     query: Option<String>,
     type_filter: Option<String>,
     bank_id: Option<String>,
+    limit: Option<u64>,
+    offset: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    let rows = questions_list_impl(&conn, query, type_filter, bank_id)?;
-    ok(json!(rows))
+    ok(questions_list_impl(&conn, query, type_filter, bank_id, limit, offset)?)
 }
 
 fn questions_list_impl(
@@ -904,18 +905,32 @@ fn questions_list_impl(
     query: Option<String>,
     type_filter: Option<String>,
     bank_id: Option<String>,
-) -> Result<Vec<Value>, String> {
+    limit: Option<u64>,
+    offset: Option<u64>,
+) -> Result<Value, String> {
     let query = query.filter(|s| !s.trim().is_empty());
     let type_filter = type_filter.filter(|s| !s.is_empty());
     let bank_id = bank_id.filter(|s| !s.is_empty());
+    let limit = limit.unwrap_or(50).min(500) as i64;
+    let offset = offset.unwrap_or(0) as i64;
+    let where_sql = "(?1 IS NULL OR plain_text LIKE '%'||?1||'%')
+           AND (?2 IS NULL OR type = ?2)
+           AND (?3 IS NULL OR bank_id = ?3)";
+    let total: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM questions WHERE {where_sql}"),
+            params![query, type_filter, bank_id],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
     let sql = format!(
         "SELECT {SELECT_FIELDS} FROM questions
-         WHERE (?1 IS NULL OR plain_text LIKE '%'||?1||'%')
-           AND (?2 IS NULL OR type = ?2)
-           AND (?3 IS NULL OR bank_id = ?3)
-         ORDER BY created_at DESC"
+         WHERE {where_sql}
+         ORDER BY created_at DESC
+         LIMIT ?4 OFFSET ?5"
     );
-    query_questions(conn, &sql, params![query, type_filter, bank_id])
+    let items = query_questions(conn, &sql, params![query, type_filter, bank_id, limit, offset])?;
+    Ok(json!({ "total": total, "items": items }))
 }
 
 #[tauri::command]
@@ -1060,10 +1075,11 @@ pub fn practice_pool(
     limit: Option<u64>,
     type_filter: Option<String>,
     bank_id: Option<String>,
+    ids: Option<Vec<String>>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    let rows = practice_pool_impl(&conn, limit, type_filter, bank_id)?;
+    let rows = practice_pool_impl(&conn, limit, type_filter, bank_id, ids)?;
     ok(json!(rows))
 }
 
@@ -1072,7 +1088,20 @@ fn practice_pool_impl(
     limit: Option<u64>,
     type_filter: Option<String>,
     bank_id: Option<String>,
+    ids: Option<Vec<String>>,
 ) -> Result<Vec<Value>, String> {
+    // 指定 ids（错题重练）：按传入顺序返回存在的题目，忽略题型/随机逻辑
+    if let Some(ids) = ids.map(|v| v.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>()) {
+        if !ids.is_empty() {
+            let mut out = Vec::new();
+            for id in ids.into_iter().take(500) {
+                if let Some(q) = fetch_question(conn, &id)? {
+                    out.push(q);
+                }
+            }
+            return Ok(out);
+        }
+    }
     let limit = limit.unwrap_or(20).min(500) as i64;
     let type_filter = type_filter.filter(|s| !s.is_empty());
     let bank_id = bank_id.filter(|s| !s.is_empty());
@@ -1188,6 +1217,68 @@ fn review_due_impl(
          LIMIT ?2"
     );
     query_questions(conn, &sql, params![cutoff, limit, bank_id])
+}
+
+/// 错题本 CTE：每题取最近一次作答（answered_at DESC, id DESC）及累计错次数/最近错时间
+const WRONG_RANKED_CTE: &str = "WITH ranked AS (
+  SELECT question_id, correct, answered_at,
+         ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC, id DESC) AS rn,
+         SUM(CASE WHEN correct = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY question_id) AS wrong_count,
+         MAX(CASE WHEN correct = 0 THEN answered_at END) OVER (PARTITION BY question_id) AS last_wrong_at
+  FROM practice_records
+)";
+const WRONG_WHERE: &str = "ranked.rn = 1 AND ranked.correct = 0
+  AND (?1 IS NULL OR q.bank_id = ?1) AND (?2 IS NULL OR q.type = ?2)";
+
+#[tauri::command]
+pub fn wrong_list(
+    bank_id: Option<String>,
+    type_filter: Option<String>,
+    limit: Option<u64>,
+    offset: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(wrong_list_impl(&conn, bank_id, type_filter, limit, offset)?)
+}
+
+/// 错题本：最近一次作答仍为 wrong 的题（答对后自动移出；删题经 FK 级联自动消失）
+fn wrong_list_impl(
+    conn: &Connection,
+    bank_id: Option<String>,
+    type_filter: Option<String>,
+    limit: Option<u64>,
+    offset: Option<u64>,
+) -> Result<Value, String> {
+    let bank_id = bank_id.filter(|s| !s.is_empty());
+    let type_filter = type_filter.filter(|s| !s.is_empty());
+    let limit = limit.unwrap_or(50).min(500) as i64;
+    let offset = offset.unwrap_or(0) as i64;
+    let total: i64 = conn
+        .query_row(
+            &format!("{WRONG_RANKED_CTE} SELECT COUNT(*) FROM questions q JOIN ranked ON ranked.question_id = q.id WHERE {WRONG_WHERE}"),
+            params![bank_id, type_filter],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
+    // row_to_question 按列名取值，会忽略多出的列；wrong_count/last_wrong_at 需手动附加
+    let sql = format!(
+        "{WRONG_RANKED_CTE} SELECT {SELECT_FIELDS_Q}, ranked.wrong_count AS wrong_count, ranked.last_wrong_at AS last_wrong_at
+         FROM questions q JOIN ranked ON ranked.question_id = q.id
+         WHERE {WRONG_WHERE}
+         ORDER BY ranked.last_wrong_at DESC
+         LIMIT ?3 OFFSET ?4"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+    let mut rows = stmt.query(params![bank_id, type_filter, limit, offset]).map_err(to_str)?;
+    let mut items = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        let mut q = row_to_question(row).map_err(to_str)?;
+        q["wrong_count"] = json!(row.get::<_, i64>("wrong_count").map_err(to_str)?);
+        q["last_wrong_at"] = json!(row.get::<_, Option<String>>("last_wrong_at").map_err(to_str)?);
+        items.push(q);
+    }
+    Ok(json!({ "total": total, "items": items }))
 }
 
 #[tauri::command]
@@ -1964,27 +2055,51 @@ mod tests {
         insert_question(&conn, &qa).unwrap();
         insert_question(&conn, &qb).unwrap();
 
-        // questions_list
-        assert_eq!(questions_list_impl(&conn, None, None, None).unwrap().len(), 2);
-        let in_b = questions_list_impl(&conn, None, None, Some(bid.clone())).unwrap();
-        assert_eq!(in_b.len(), 1);
-        assert_eq!(in_b[0]["id"], "q_b_1");
-        assert_eq!(in_b[0]["bank_id"], bid);
-        let in_default = questions_list_impl(&conn, None, None, Some("bank_default".to_string())).unwrap();
-        assert_eq!(in_default.len(), 1);
-        assert_eq!(in_default[0]["id"], "q_test_1");
-        let as_all = questions_list_impl(&conn, None, None, Some(String::new())).unwrap();
-        assert_eq!(as_all.len(), 2);
+        // questions_list（分页形状 {total, items}）
+        let all = questions_list_impl(&conn, None, None, None, None, None).unwrap();
+        assert_eq!(all["total"], 2);
+        assert_eq!(all["items"].as_array().unwrap().len(), 2);
+        let in_b = questions_list_impl(&conn, None, None, Some(bid.clone()), None, None).unwrap();
+        assert_eq!(in_b["total"], 1);
+        assert_eq!(in_b["items"][0]["id"], "q_b_1");
+        assert_eq!(in_b["items"][0]["bank_id"], bid);
+        let in_default = questions_list_impl(&conn, None, None, Some("bank_default".to_string()), None, None).unwrap();
+        assert_eq!(in_default["total"], 1);
+        assert_eq!(in_default["items"][0]["id"], "q_test_1");
+        let as_all = questions_list_impl(&conn, None, None, Some(String::new()), None, None).unwrap();
+        assert_eq!(as_all["total"], 2);
+        // 分页：limit 1 取两页，total 不变
+        let p1 = questions_list_impl(&conn, None, None, None, Some(1), Some(0)).unwrap();
+        let p2 = questions_list_impl(&conn, None, None, None, Some(1), Some(1)).unwrap();
+        assert_eq!(p1["total"], 2);
+        assert_eq!(p1["items"].as_array().unwrap().len(), 1);
+        assert_eq!(p2["items"].as_array().unwrap().len(), 1);
+        assert_ne!(p1["items"][0]["id"], p2["items"][0]["id"]);
+        let p3 = questions_list_impl(&conn, None, None, None, Some(1), Some(2)).unwrap();
+        assert_eq!(p3["total"], 2);
+        assert_eq!(p3["items"].as_array().unwrap().len(), 0);
 
         // practice_pool
-        let pool_b = practice_pool_impl(&conn, Some(20), None, Some(bid.clone())).unwrap();
+        let pool_b = practice_pool_impl(&conn, Some(20), None, Some(bid.clone()), None).unwrap();
         assert_eq!(pool_b.len(), 1);
         assert_eq!(pool_b[0]["id"], "q_b_1");
         let pool_default =
-            practice_pool_impl(&conn, Some(20), None, Some("bank_default".to_string())).unwrap();
+            practice_pool_impl(&conn, Some(20), None, Some("bank_default".to_string()), None).unwrap();
         assert_eq!(pool_default.len(), 1);
         assert_eq!(pool_default[0]["id"], "q_test_1");
-        assert_eq!(practice_pool_impl(&conn, Some(20), None, None).unwrap().len(), 2);
+        assert_eq!(practice_pool_impl(&conn, Some(20), None, None, None).unwrap().len(), 2);
+        // practice_pool 按 ids 指定组卷：保持传入顺序，不存在的跳过
+        let by_ids = practice_pool_impl(
+            &conn,
+            None,
+            None,
+            None,
+            Some(vec!["q_b_1".to_string(), "q_nope".to_string(), "q_test_1".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(by_ids.len(), 2);
+        assert_eq!(by_ids[0]["id"], "q_b_1");
+        assert_eq!(by_ids[1]["id"], "q_test_1");
 
         // review_due: both due immediately, filtered per bank
         conn.execute_batch(
@@ -2046,6 +2161,49 @@ mod tests {
         let stats = review_stats_impl(&conn, None).unwrap();
         assert_eq!(stats["due_total"], 1);
         assert_eq!(stats["due_today"], 2);
+    }
+
+    #[test]
+    fn wrong_list_tracks_latest_wrong_only() {
+        // 错题本：最近一次仍错才收录；答对后自动移出；bank 过滤；分页 total/items 一致
+        let conn = test_conn();
+        for id in ["q_w_1", "q_w_2", "q_w_3"] {
+            let mut q = sample_question();
+            q["id"] = json!(id);
+            q["bank_id"] = json!("bank_default");
+            insert_question(&conn, &q).unwrap();
+        }
+        let rec = |qid: &str, correct: i64, at: &str| {
+            conn.execute(
+                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES (?1, 'practice', 'good', ?2, ?3)",
+                params![qid, correct, at],
+            )
+            .unwrap();
+        };
+        rec("q_w_1", 0, "2026-09-10T10:00:00.000Z"); // 错 → 在册
+        rec("q_w_1", 0, "2026-09-11T10:00:00.000Z"); // 又错 → wrong_count=2
+        rec("q_w_2", 0, "2026-09-10T10:00:00.000Z"); // 错
+        rec("q_w_2", 1, "2026-09-12T10:00:00.000Z"); // 后答对 → 移出
+        rec("q_w_3", 1, "2026-09-10T10:00:00.000Z"); // 一直对 → 不进
+        let w = wrong_list_impl(&conn, None, None, None, None).unwrap();
+        assert_eq!(w["total"], 1);
+        assert_eq!(w["items"][0]["id"], "q_w_1");
+        assert_eq!(w["items"][0]["wrong_count"], 2);
+        assert_eq!(w["items"][0]["last_wrong_at"], "2026-09-11T10:00:00.000Z");
+        // 分页：total 不变，页外为空
+        let p = wrong_list_impl(&conn, None, None, Some(1), Some(1)).unwrap();
+        assert_eq!(p["total"], 1);
+        assert_eq!(p["items"].as_array().unwrap().len(), 0);
+        // bank 过滤：错题在 bank_default，换库查不到
+        let other = wrong_list_impl(&conn, Some("bank_nope".to_string()), None, None, None).unwrap();
+        assert_eq!(other["total"], 0);
+        let mine = wrong_list_impl(&conn, Some("bank_default".to_string()), None, None, None).unwrap();
+        assert_eq!(mine["total"], 1);
+        // type 过滤
+        let typed = wrong_list_impl(&conn, None, Some("single".to_string()), None, None).unwrap();
+        assert_eq!(typed["total"], 1);
+        let typed_no = wrong_list_impl(&conn, None, Some("multi".to_string()), None, None).unwrap();
+        assert_eq!(typed_no["total"], 0);
     }
 
     #[test]

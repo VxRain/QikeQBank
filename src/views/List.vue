@@ -21,7 +21,7 @@
             @keyup.enter="fetchList"
           />
         </div>
-        <select v-model="type" class="select min-w-[130px]" @change="fetchList">
+        <select v-model="type" class="select min-w-[130px]" @change="search">
           <option value="">全部类型</option>
           <option value="single">单选</option>
           <option value="multi">多选</option>
@@ -34,12 +34,12 @@
           v-model="bankStore.currentBankId"
           class="select min-w-[130px]"
           :disabled="!bankStore.loaded"
-          @change="fetchList"
+          @change="search"
         >
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
-        <button class="btn btn-primary" @click="fetchList">
+        <button class="btn btn-primary" @click="search">
           <i class="i-lucide-search" />搜索
         </button>
         <button class="btn" @click="reset">
@@ -103,6 +103,16 @@
           </tbody>
         </table>
       </div>
+
+      <div v-if="!loading && !error && total > 0" class="flex items-center justify-center gap-3 py-4">
+        <button type="button" class="btn btn-small" :disabled="page <= 1" @click="gotoPage(page - 1)">
+          <i class="i-lucide-chevron-left" />上一页
+        </button>
+        <span class="text-[13px] text-muted font-500">第 {{ page }} / {{ pageCount }} 页 · 共 {{ total }} 题</span>
+        <button type="button" class="btn btn-small" :disabled="page >= pageCount" @click="gotoPage(page + 1)">
+          下一页<i class="i-lucide-chevron-right" />
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -121,6 +131,10 @@ const query = ref('')
 const type = ref('')
 const questions = ref([])
 const showImport = ref(false)
+const PAGE_SIZE = 50
+const page = ref(1)
+const total = ref(0)
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 async function onImportDone() {
   showImport.value = false
@@ -130,7 +144,7 @@ async function onImportDone() {
 const loading = ref(false)
 const error = ref('')
 
-const filteredCount = computed(() => questions.value.length)
+const filteredCount = computed(() => total.value)
 
 const currentBankName = computed(() => {
   const b = bankStore.banks.find((x) => x.id === bankStore.currentBankId)
@@ -210,26 +224,46 @@ async function fetchList() {
     if (query.value.trim()) params.query = query.value.trim()
     if (type.value) params.type = type.value
     params.bankId = bankStore.currentBankId  // 空串 = 全部题库，由 api 层不传 bank_id
+    params.limit = PAGE_SIZE
+    params.offset = (page.value - 1) * PAGE_SIZE
     const res = await list(params)
-    // handle various response shapes: array, { data: [] }, { questions: [] }, { items: [] }
-    let data = res
-    if (res && Array.isArray(res.data)) data = res.data
-    else if (res && Array.isArray(res.questions)) data = res.questions
-    else if (res && Array.isArray(res.items)) data = res.items
-    else if (res && res.data && Array.isArray(res.data.data)) data = res.data.data
-    if (!Array.isArray(data)) {
-      // if res is object with question array inside unknown key, try first array value
-      const arrVal = res && typeof res === 'object' ? Object.values(res).find(v => Array.isArray(v)) : null
-      if (arrVal) data = arrVal
-      else data = []
+    // 信封 {success, data:{total, items}}；兼容旧数组形状兜底
+    const envelope = res?.data ?? res
+    if (envelope && typeof envelope === 'object' && Array.isArray(envelope.items)) {
+      total.value = Number(envelope.total) || 0
+      questions.value = envelope.items
+    } else if (Array.isArray(envelope)) {
+      total.value = envelope.length
+      questions.value = envelope
+    } else {
+      let data = envelope
+      if (envelope && Array.isArray(envelope.data)) data = envelope.data
+      else if (envelope && Array.isArray(envelope.questions)) data = envelope.questions
+      if (!Array.isArray(data)) {
+        const arrVal = envelope && typeof envelope === 'object' ? Object.values(envelope).find(v => Array.isArray(v)) : null
+        data = arrVal || []
+      }
+      total.value = data.length
+      questions.value = data
     }
-    questions.value = data
   } catch (e) {
     console.error(e)
     error.value = e?.response?.data?.error || e?.response?.data?.message || e.message || '加载失败'
   } finally {
     loading.value = false
   }
+}
+
+function gotoPage(p) {
+  const next = Math.min(Math.max(1, p), pageCount.value)
+  if (next === page.value && questions.value.length) return
+  page.value = next
+  fetchList().then(() => window.scrollTo(0, 0))
+}
+
+function search() {
+  page.value = 1
+  fetchList()
 }
 
 function onAdd() {
@@ -259,6 +293,7 @@ async function onMove(id, bankId) {
 function reset() {
   query.value = ''
   type.value = ''
+  page.value = 1
   fetchList()
 }
 
