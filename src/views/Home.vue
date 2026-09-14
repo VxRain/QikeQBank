@@ -22,7 +22,7 @@
     </div>
 
     <div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3.5">
-      <div class="card card-interactive cursor-pointer flex flex-col gap-1" role="link" tabindex="0" title="进入题库列表" @click="go('/library')" @keyup.enter="go('/library')">
+      <div class="card card-interactive cursor-pointer flex flex-col gap-1" role="link" tabindex="0" title="进入试题列表" @click="go('/library')" @keyup.enter="go('/library')">
         <div class="flex items-start justify-between gap-2">
           <div class="text-[30px] font-800 tracking-[-0.02em] leading-none font-[var(--serif)] text-text">{{ stats?.total ?? '—' }}</div>
           <i class="i-lucide-library text-[16px] text-muted-light" />

@@ -3,7 +3,7 @@
     <div class="card">
       <div class="card-head">
         <h2 class="section-title flex items-center gap-2">
-          <i class="i-lucide-list text-primary" />题库列表
+          <i class="i-lucide-list text-primary" />试题列表
         </h2>
         <div class="flex gap-2 items-center">
           <span v-if="currentBankName" class="badge badge-cur">当前：{{ currentBankName }}</span>
