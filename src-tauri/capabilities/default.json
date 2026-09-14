@@ -7,7 +7,7 @@
     "core:default",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "$APPDATA/export/**" }]
+      "allow": [{ "path": "$APPDATA/export" }, { "path": "$APPDATA/export/**" }]
     }
   ]
 }
