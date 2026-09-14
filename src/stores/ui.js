@@ -8,7 +8,7 @@ let uid = 0
 
 export const ui = reactive({
   toasts: [],
-  dialog: null // { type: 'confirm'|'prompt', title, message, okText, cancelText, danger, placeholder, initial, resolve }
+  dialog: null // { type: 'confirm'|'prompt'|'select', title, message, okText, cancelText, danger, placeholder, initial, options, resolve }
 })
 
 /* ---------- Toast ---------- */
@@ -61,14 +61,37 @@ export function promptDialog(opts = {}) {
   })
 }
 
-/** 关闭当前弹层：confirm → resolve(true/false)；prompt → resolve(字符串或 null) */
+/** 关闭当前弹层：confirm → resolve(true/false)；prompt → resolve(字符串或 null)；select → resolve(选中 value 或 null) */
 export function closeDialog(value) {
   const d = ui.dialog
   if (!d) return
   ui.dialog = null
   if (d.type === 'prompt') {
     d.resolve(typeof value === 'string' ? value.trim() : null)
+  } else if (d.type === 'select') {
+    d.resolve(typeof value === 'string' && value ? value : null)
   } else {
     d.resolve(Boolean(value))
   }
+}
+
+/**
+ * 下拉选择弹层：options=[{value,label}]，resolve 选中 value，取消为 null
+ * 用法：const bankId = await selectDialog({ title:'移动到', options: banks.map(...) })
+ */
+export function selectDialog(opts = {}) {
+  return new Promise((resolve) => {
+    ui.dialog = {
+      type: 'select',
+      title: opts.title || '请选择',
+      message: opts.message || '',
+      okText: opts.okText || '确定',
+      cancelText: opts.cancelText || '取消',
+      danger: false,
+      placeholder: '',
+      initial: '',
+      options: Array.isArray(opts.options) ? opts.options : [],
+      resolve
+    }
+  })
 }

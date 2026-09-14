@@ -21,13 +21,23 @@
             @keyup.esc="onCancel"
           />
 
+          <select
+            v-if="ui.dialog.type === 'select'"
+            ref="inputEl"
+            v-model="inputValue"
+            class="select w-full mb-4"
+          >
+            <option value="" disabled>请选择…</option>
+            <option v-for="o in ui.dialog.options" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+
           <div class="flex justify-end gap-2.5">
             <button type="button" class="btn" @click="onCancel">{{ ui.dialog.cancelText }}</button>
             <button
               type="button"
               class="btn"
               :class="ui.dialog.danger ? 'btn-danger' : 'btn-primary'"
-              :disabled="ui.dialog.type === 'prompt' && !inputValue.trim()"
+              :disabled="(ui.dialog.type === 'prompt' || ui.dialog.type === 'select') && !inputValue.trim()"
               @click="onOk"
             >{{ ui.dialog.okText }}</button>
           </div>
@@ -50,7 +60,7 @@ watch(
     if (d) {
       inputValue.value = d.initial || ''
       await nextTick()
-      if (d.type === 'prompt' && inputEl.value) inputEl.value.focus()
+      if ((d.type === 'prompt' || d.type === 'select') && inputEl.value) inputEl.value.focus()
     }
   }
 )
@@ -59,6 +69,9 @@ function onOk() {
   const d = ui.dialog
   if (!d) return
   if (d.type === 'prompt') {
+    if (!inputValue.value.trim()) return
+    closeDialog(inputValue.value)
+  } else if (d.type === 'select') {
     if (!inputValue.value.trim()) return
     closeDialog(inputValue.value)
   } else {

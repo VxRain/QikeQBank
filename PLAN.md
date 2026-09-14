@@ -215,6 +215,11 @@ export function persistBankFilter(page, id)
 - 无题库下拉：上下文只认 `?bank=`（从题库页进入，须仍存在）；直访无 bank 显示空态引导去题库页挑库。
 - 工具栏：搜索 + 题型下拉 + 「导入试题」+ 「新增试题」，归属均为进入的库。
 - 分页：50/页，表格下方「上一页/下一页 + 第 X/Y 页 · 共 N 题」；筛选/搜索/重置时回第 1 页。
+- 多选：首列勾选（表头全选本页）+ 选中条（批量移动 / 批量删除 / 取消选择），表格常驻不隐藏；多选时行内编辑禁用，移动/删除可用；翻页/重查后清空。
+- 移动（单题/批量共用）：行内「移动」按钮或选中条「移动」→ `selectDialog` 弹窗选目标库 → 确定执行。
+
+### stores/ui.js（弹层服务）
+- `selectDialog({title,message,options:[{value,label}],okText})` → resolve 选中 value，取消为 null；DialogHost 新增 select 类型（下拉 + 确定）。与 confirm/prompt 同视觉语言。
 
 ### Banks.vue（题库管理）
 - 卡片点击进入单库试题页；右键菜单：进入/重命名/删除。

@@ -69,10 +69,21 @@
       </div>
       <div v-else-if="error" class="error-box mb-3">{{ error }}</div>
 
-      <div v-else class="overflow-x-auto border border-line rounded-[12px]">
+      <template v-else>
+      <div v-if="selected.size" class="flex flex-wrap items-center gap-2 px-3.5 py-2.5 mb-3 bg-primary-bg border border-primary-border rounded-[10px] text-[13px]">
+        <span class="font-600 text-primary">已选 {{ selected.size }} 题</span>
+        <button type="button" class="btn btn-small" :disabled="batchBusy" @click="onBatchMove"><i class="i-lucide-folder-input" />移动</button>
+        <button type="button" class="btn btn-small btn-danger" :disabled="batchBusy" @click="onBatchDelete"><i class="i-lucide-trash-2" />删除</button>
+        <button type="button" class="btn btn-small btn-ghost" @click="clearSelection">取消选择</button>
+      </div>
+
+      <div class="overflow-x-auto border border-line rounded-[12px]">
         <table class="w-full border-collapse text-[14px]">
           <thead>
             <tr>
+              <th class="px-3 py-3 border-b border-line bg-bg-accent" style="width: 40px">
+                <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" title="全选本页" :checked="allChecked" :indeterminate="someChecked && !allChecked" @change="toggleAll($event.target.checked)" />
+              </th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 80px">类型</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">分值</th>
@@ -81,23 +92,31 @@
           </thead>
           <tbody>
             <tr v-if="questions.length === 0">
-              <td colspan="4" class="text-center py-6 text-muted">暂无数据</td>
+              <td colspan="5" class="text-center py-6 text-muted">暂无数据</td>
             </tr>
-            <tr v-for="q in questions" :key="q.id" class="transition-[background-color] duration-100 hover:bg-card-hover">
+            <template v-for="q in questions" :key="q.id">
+            <tr class="transition-[background-color] duration-100 hover:bg-card-hover" :class="selected.has(q.id) && 'bg-primary-bg'">
+              <td class="px-3 py-3 border-b border-line text-center">
+                <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, $event.target.checked)" />
+              </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
               <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
               <td class="px-3.5 py-3 border-b border-line">{{ q.score ?? (q.children ? q.children.reduce((s,c)=>s+(c.score||0),0) : '-') }}</td>
               <td class="px-3.5 py-3 border-b border-line">
                 <div class="flex gap-1.5 flex-wrap">
-                  <router-link :to="`/edit/${q.id}`" class="btn btn-small"><i class="i-lucide-pencil" />编辑</router-link>
-                  <select class="select px-1.5 py-1 text-[11px] w-[104px] min-w-0" :value="''" title="移动题库" @change="onMove(q.id, $event.target.value)">
-                    <option value="" disabled>移动题库…</option>
-                    <option v-for="b in otherBanks(q.bank_id)" :key="b.id" :value="b.id">{{ b.name }}</option>
-                  </select>
+                  <router-link :to="`/edit/${q.id}`" class="btn btn-small" title="编辑"><i class="i-lucide-pencil" />编辑</router-link>
+                  <button type="button" class="btn btn-small" :title="previewId === q.id ? '收起预览' : '预览渲染效果'" @click="togglePreview(q.id)"><i :class="previewId === q.id ? 'i-lucide-eye-off' : 'i-lucide-eye'" />预览</button>
+                  <button type="button" class="btn btn-small" title="移动到其他题库" @click="onMoveOne(q.id)"><i class="i-lucide-folder-input" />移动</button>
                   <button class="btn btn-small btn-danger" @click="onDelete(q)"><i class="i-lucide-trash-2" />删除</button>
                 </div>
               </td>
             </tr>
+            <tr v-if="previewId === q.id" :key="q.id + '_preview'">
+              <td colspan="5" class="px-3.5 py-3 border-b border-line bg-bg-accent">
+                <QuestionPreview :question="q" />
+              </td>
+            </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -112,6 +131,7 @@
         </button>
       </div>
       </template>
+      </template>
     </div>
   </div>
 </template>
@@ -121,8 +141,9 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { list, remove, update } from '@/api/questions.js'
 import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
-import { toast, confirmDialog } from '@/stores/ui.js'
+import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
+import QuestionPreview from '@/components/QuestionPreview.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,6 +154,7 @@ const showImport = ref(false)
 const PAGE_SIZE = 50
 const page = ref(1)
 const total = ref(0)
+const previewId = ref(null)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 // 本页题库上下文：只从 ?bank= 来（从题库页进入），无选择器；直访无 bank 则提示去挑库
 const bankId = ref('')
@@ -147,6 +169,109 @@ const loading = ref(false)
 const error = ref('')
 
 const filteredCount = computed(() => total.value)
+
+// 多选：勾选 + 批量删除/移库（翻页/筛选后清空）
+const selected = ref(new Set())
+const batchBusy = ref(false)
+const allChecked = computed(() => questions.value.length > 0 && questions.value.every((q) => selected.value.has(q.id)))
+const someChecked = computed(() => questions.value.some((q) => selected.value.has(q.id)))
+function toggleOne(id, checked) {
+  const s = new Set(selected.value)
+  if (checked) s.add(id)
+  else s.delete(id)
+  selected.value = s
+}
+function toggleAll(checked) {
+  const s = new Set(selected.value)
+  for (const q of questions.value) {
+    if (checked) s.add(q.id)
+    else s.delete(q.id)
+  }
+  selected.value = s
+}
+function clearSelection() {
+  selected.value = new Set()
+}
+
+function togglePreview(id) {
+  previewId.value = previewId.value === id ? null : id
+}
+
+// 移动（单题/批量共用）：弹窗选目标库，确定后执行
+async function moveQuestions(ids) {
+  if (!ids.length || batchBusy.value) return
+  const options = bankStore.banks
+    .filter((b) => b.id !== bankId.value)
+    .map((b) => ({ value: b.id, label: `${b.name}（${b.question_count ?? 0} 题）` }))
+  if (!options.length) {
+    toast('没有其他题库可移入', 'info')
+    return
+  }
+  const target = await selectDialog({
+    title: `移动 ${ids.length} 道试题`,
+    message: '选择目标题库',
+    options,
+    okText: '移动'
+  })
+  if (!target) return
+  const targetName = bankStore.banks.find((b) => b.id === target)?.name || target
+  batchBusy.value = true
+  let fail = 0
+  try {
+    for (const id of ids) {
+      try {
+        await update(id, { bank_id: target })
+      } catch (e) {
+        fail++
+        console.error('move failed', id, e)
+      }
+    }
+    clearSelection()
+    await fetchList()
+    await loadBanks()
+    toast(fail ? `移动完成，${fail} 道失败` : `已将 ${ids.length} 道试题移到「${targetName}」`, fail ? 'error' : 'success')
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+function onMoveOne(id) {
+  moveQuestions([id])
+}
+
+async function onBatchDelete() {
+  const ids = [...selected.value]
+  if (!ids.length || batchBusy.value) return
+  const ok = await confirmDialog({
+    title: '批量删除',
+    message: `确定删除选中的 ${ids.length} 道试题？此操作不可撤销。`,
+    okText: '删除',
+    danger: true
+  })
+  if (!ok) return
+  batchBusy.value = true
+  let fail = 0
+  try {
+    for (const id of ids) {
+      try {
+        await remove(id)
+      } catch (e) {
+        fail++
+        console.error('batch delete failed', id, e)
+      }
+    }
+    clearSelection()
+    await fetchList()
+    await loadBanks()
+    toast(fail ? `删除完成，${fail} 道失败` : `已删除 ${ids.length} 道试题`, fail ? 'error' : 'success')
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+async function onBatchMove() {
+  await moveQuestions([...selected.value])
+}
 
 function typeLabel(t) {
   const map = {
@@ -249,6 +374,8 @@ async function fetchList() {
     error.value = e?.response?.data?.error || e?.response?.data?.message || e.message || '加载失败'
   } finally {
     loading.value = false
+    clearSelection()
+    previewId.value = null
   }
 }
 
@@ -267,21 +394,6 @@ function search() {
 function onAdd() {
   if (!bankId.value) return
   router.push(`/create?bank=${bankId.value}`)
-}
-
-function otherBanks(bankId) {
-  return bankStore.banks.filter((b) => b.id !== bankId)
-}
-
-async function onMove(id, bankId) {
-  if (!bankId) return
-  try {
-    await update(id, { bank_id: bankId })
-    await fetchList()
-    await loadBanks()
-  } catch (e) {
-    toast('移动失败：' + (e?.response?.data?.error || e?.message || e), 'error')
-  }
 }
 
 function reset() {
