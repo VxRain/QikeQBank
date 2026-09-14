@@ -170,8 +170,10 @@ practice 映射：correct=true→good / false→again。`correct` 落地 = grade
 ```json
 {"success":true,"data":{"total":n,"by_type":{...},"due_total":n,"due_today":n,
  "practiced_total":n,"practiced_today":n,"correct_rate":82.5|null,
- "records_7d":[{"date":"2026-09-04","count":20,"correct":16}]}}
+ "records_7d":[{"date":"2026-09-04","count":20,"correct":16}]}}}
 ```
+
+口径：`due_total` = 到期时刻 ≤ 此刻（已逾期）；`due_today` = 到期时刻 ≤ 今天结束；`review_due` 拉题截止与 `due_today` 同口径（今天结束），今日到期的题点“开始复习”都能直接练。
 
 ## 7. 前端模块契约
 

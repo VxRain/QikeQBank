@@ -182,6 +182,16 @@ fn now_iso() -> String {
     fmt_iso(Utc::now())
 }
 
+/// 今天起止（UTC 天）：review_stats 的 due_today 与 review_due 拉题共用，保证“今日到期”口径一致
+fn today_bounds() -> (DateTime<Utc>, DateTime<Utc>) {
+    let start = Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|d| d.and_utc())
+        .expect("invalid date");
+    (start, start + Duration::days(1))
+}
+
 fn ok(data: Value) -> Result<Value, String> {
     Ok(json!({ "success": true, "data": data }))
 }
@@ -1167,7 +1177,8 @@ fn review_due_impl(
 ) -> Result<Vec<Value>, String> {
     let limit = limit.unwrap_or(20).min(500) as i64;
     let bank_id = bank_id.filter(|s| !s.is_empty());
-    let now = now_iso();
+    // 截止放宽到今天结束（与 stats.due_today 同口径）：今日到期、即使还没到具体时刻也能立即复习
+    let cutoff = fmt_iso(today_bounds().1);
     let sql = format!(
         "SELECT {SELECT_FIELDS_Q} FROM questions q
          JOIN review_state r ON r.question_id = q.id
@@ -1176,7 +1187,7 @@ fn review_due_impl(
          ORDER BY r.due_at ASC
          LIMIT ?2"
     );
-    query_questions(conn, &sql, params![now, limit, bank_id])
+    query_questions(conn, &sql, params![cutoff, limit, bank_id])
 }
 
 #[tauri::command]
@@ -1188,12 +1199,7 @@ pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Resu
 fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value, String> {
     let bank_id = bank_id.filter(|s| !s.is_empty());
     let now = Utc::now();
-    let start_today = now
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .map(|d| d.and_utc())
-        .ok_or("invalid date")?;
-    let end_today = start_today + Duration::days(1);
+    let (start_today, end_today) = today_bounds();
     let start_7d = start_today - Duration::days(6);
 
     let total: i64 = conn
@@ -2013,6 +2019,33 @@ mod tests {
         let stats_def = review_stats_impl(&conn, Some("bank_default".to_string())).unwrap();
         assert_eq!(stats_def["practiced_total"], 0);
         assert_eq!(stats_def["correct_rate"], Value::Null);
+    }
+
+    #[test]
+    fn review_due_includes_items_due_later_today() {
+        // 回归：due_at 在“此刻之后、今天结束之前”的题属于今日到期，开始复习必须能拉出来
+        //（与 stats.due_today 同口径；旧逻辑用 now 作截止会导致“今日到期 N 题却拉出空列表”）
+        let conn = test_conn();
+        for id in ["q_due_overdue", "q_due_later_today", "q_due_tomorrow"] {
+            let mut q = sample_question();
+            q["id"] = json!(id);
+            insert_question(&conn, &q).unwrap();
+        }
+        let (_, end_today) = today_bounds();
+        conn.execute_batch(&format!(
+            "INSERT INTO review_state (question_id, due_at) VALUES
+             ('q_due_overdue', '2000-01-01T00:00:00.000Z'),
+             ('q_due_later_today', '{}'),
+             ('q_due_tomorrow', '{}');",
+            fmt_iso(end_today),
+            fmt_iso(end_today + Duration::days(1))
+        ))
+        .unwrap();
+        let due = review_due_impl(&conn, Some(50), None).unwrap();
+        assert_eq!(due.len(), 2);
+        let stats = review_stats_impl(&conn, None).unwrap();
+        assert_eq!(stats["due_total"], 1);
+        assert_eq!(stats["due_today"], 2);
     }
 
     #[test]

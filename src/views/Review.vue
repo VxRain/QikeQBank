@@ -9,13 +9,13 @@
         <span class="badge badge-type">SM-2</span>
       </div>
       <p class="text-text-secondary text-[14px] leading-[1.8] m-0 mb-4.5">
-        当前待复习 <b class="text-primary text-[18px]">{{ dueTotal }}</b> 题，今日到期 <b class="text-primary text-[18px]">{{ dueToday }}</b> 题。
+        {{ bankName ? `「${bankName}」` : '全部题库' }}当前待复习 <b class="text-primary text-[18px]">{{ dueTotal }}</b> 题，今日到期 <b class="text-primary text-[18px]">{{ dueToday }}</b> 题。
         按遗忘曲线安排，每次最多复习 20 题。
       </p>
 
       <div class="mb-4.5">
         <div class="field-label">题库</div>
-        <select v-model="bankId" class="select w-full max-w-[320px]">
+        <select v-model="bankId" class="select w-full max-w-[320px]" @change="refreshDue">
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
@@ -201,6 +201,7 @@ const TYPE_LABELS = {
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref(bankStore.currentBankId || '')
+const bankName = computed(() => bankStore.banks.find((b) => b.id === bankId.value)?.name || '')
 const error = ref('')
 const recordError = ref('')
 const dueLoading = ref(false)
@@ -330,7 +331,8 @@ function buildItems(questions) {
 
 async function refreshDue() {
   try {
-    const s = await fetchStats()
+    // 统计跟随当前选中的题库（与开始复习的拉题范围一致，避免计数和实际可复习对不上）
+    const s = await fetchStats(bankId.value || undefined)
     dueTotal.value = s?.due_total ?? 0
     dueToday.value = s?.due_today ?? 0
     remainingDue.value = dueTotal.value
@@ -351,7 +353,9 @@ async function start() {
     if (!pool.value.length) {
       phase.value = 'due'
       dueTotal.value = 0
-      error.value = '当前没有待复习的题目，先在“刷题”中练习吧！'
+      error.value = bankName.value
+        ? `「${bankName.value}」中没有待复习的题目，切换到全部题库看看，或先在“刷题”中练习吧！`
+        : '当前没有待复习的题目，先在“刷题”中练习吧！'
       return
     }
     reviewedCount.value = 0
