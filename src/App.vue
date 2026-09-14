@@ -49,8 +49,7 @@
               @click="settings.keepContentOnTypeChange = !settings.keepContentOnTypeChange"
             >
               <span class="min-w-0">
-                <span class="block text-[14px] font-600 text-text">切换题型时保留内容</span>
-                <span class="block text-[12px] text-muted leading-[1.6] mt-1">启用后，切换试题类型时选项 / 答案 / 解析尽量复用而不重置（如单选切多选保留选项与答案，问答参考答案转存为解析）</span>
+                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">切换题型时保留内容<InfoTip text="启用后，切换试题类型时选项 / 答案 / 解析尽量复用而不重置（如单选切多选保留选项与答案，问答参考答案转存为解析）" /></span>
               </span>
               <span
                 class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
@@ -78,6 +77,7 @@ import { loadBanks } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
+import InfoTip from '@/components/ui/InfoTip.vue'
 
 const showSettings = ref(false)
 
