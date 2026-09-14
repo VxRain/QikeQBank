@@ -6,10 +6,19 @@
           <i class="i-lucide-list text-primary" />试题列表
         </h2>
         <div class="flex gap-2 items-center">
-          <span v-if="currentBankName" class="badge badge-cur">当前：{{ currentBankName }}</span>
+          <span v-if="bankName" class="badge badge-cur">{{ bankName }}</span>
           <span class="badge">{{ filteredCount }} 题</span>
+          <router-link to="/banks" class="btn btn-small"><i class="i-lucide-arrow-left" />题库管理</router-link>
         </div>
       </div>
+
+      <div v-if="!bankId" class="text-center py-8 text-muted flex flex-col items-center gap-3">
+        <i class="i-lucide-folder-open text-[28px]" />
+        <div class="text-[14px]">请先到题库管理选择一个题库</div>
+        <router-link to="/banks" class="btn btn-primary btn-small"><i class="i-lucide-library" />去题库管理</router-link>
+      </div>
+
+      <template v-else>
 
       <div class="flex flex-wrap gap-2 items-center p-3 mb-4 bg-bg-accent border border-line rounded-[12px]">
         <div class="relative flex-1 min-w-[180px]">
@@ -18,7 +27,7 @@
             v-model="query"
             class="input w-full pl-9"
             placeholder="搜索题干..."
-            @keyup.enter="fetchList"
+            @keyup.enter="search"
           />
         </div>
         <select v-model="type" class="select min-w-[130px]" @change="search">
@@ -30,15 +39,6 @@
           <option value="short">问答</option>
           <option value="material">材料</option>
         </select>
-        <select
-          v-model="bankStore.currentBankId"
-          class="select min-w-[130px]"
-          :disabled="!bankStore.loaded"
-          @change="search"
-        >
-          <option value="">全部题库</option>
-          <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
-        </select>
         <button class="btn btn-primary" @click="search">
           <i class="i-lucide-search" />搜索
         </button>
@@ -47,21 +47,19 @@
         </button>
         <button
           class="btn"
-          :disabled="!bankStore.loaded || !bankStore.currentBankId"
-          :title="bankStore.currentBankId ? '从模板文件导入到当前题库' : '请先选择一个题库'"
+          :title="'导入试题到「' + bankName + '」'"
           @click="showImport = true"
-        ><i class="i-lucide-file-up" />导入文件</button>
+        ><i class="i-lucide-file-up" />导入试题</button>
         <button
           class="btn btn-primary ml-auto"
-          :disabled="!bankStore.loaded || !bankStore.currentBankId"
-          :title="bankStore.currentBankId ? '新增到当前题库' : '请先选择一个题库'"
+          :title="'新增到「' + bankName + '」'"
           @click="onAdd"
         ><i class="i-lucide-plus" />新增试题</button>
       </div>
       <ImportFileBox
         :open="showImport"
-        :bank-id="bankStore.currentBankId"
-        :bank-name="currentBankName"
+        :bank-id="bankId"
+        :bank-name="bankName"
         @done="onImportDone"
         @close="showImport = false"
       />
@@ -113,6 +111,7 @@
           下一页<i class="i-lucide-chevron-right" />
         </button>
       </div>
+      </template>
     </div>
   </div>
 </template>
@@ -121,7 +120,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { list, remove, update } from '@/api/questions.js'
-import { bankStore, setCurrentBank, loadBanks } from '@/stores/bank.js'
+import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 
@@ -135,6 +134,9 @@ const PAGE_SIZE = 50
 const page = ref(1)
 const total = ref(0)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+// 本页题库上下文：只从 ?bank= 来（从题库页进入），无选择器；直访无 bank 则提示去挑库
+const bankId = ref('')
+const bankName = computed(() => bankStore.banks.find((x) => x.id === bankId.value)?.name || '')
 
 async function onImportDone() {
   showImport.value = false
@@ -145,11 +147,6 @@ const loading = ref(false)
 const error = ref('')
 
 const filteredCount = computed(() => total.value)
-
-const currentBankName = computed(() => {
-  const b = bankStore.banks.find((x) => x.id === bankStore.currentBankId)
-  return b ? b.name : ''
-})
 
 function typeLabel(t) {
   const map = {
@@ -217,13 +214,14 @@ function getPlainText(q) {
 }
 
 async function fetchList() {
+  if (!bankId.value) return
   loading.value = true
   error.value = ''
   try {
     const params = {}
     if (query.value.trim()) params.query = query.value.trim()
     if (type.value) params.type = type.value
-    params.bankId = bankStore.currentBankId  // 空串 = 全部题库，由 api 层不传 bank_id
+    params.bankId = bankId.value
     params.limit = PAGE_SIZE
     params.offset = (page.value - 1) * PAGE_SIZE
     const res = await list(params)
@@ -267,12 +265,8 @@ function search() {
 }
 
 function onAdd() {
-  const bid = bankStore.currentBankId
-  if (!bid) {
-    toast('新增试题需要先选择一个题库', 'info')
-    return
-  }
-  router.push(`/create?bank=${bid}`)
+  if (!bankId.value) return
+  router.push(`/create?bank=${bankId.value}`)
 }
 
 function otherBanks(bankId) {
@@ -316,9 +310,16 @@ async function onDelete(q) {
 }
 
 onMounted(async () => {
-  // 从题库页进入：/library?bank=<id> → 设为当前库再加载
+  if (!bankStore.loaded) {
+    try {
+      await loadBanks()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  // 题库上下文只认 ?bank=（须仍存在），直访无 bank 则提示去题库页挑库
   const qb = route.query.bank
-  if (typeof qb === 'string' && qb) setCurrentBank(qb)
+  bankId.value = typeof qb === 'string' && bankExists(qb) ? qb : ''
   await fetchList()
 })
 

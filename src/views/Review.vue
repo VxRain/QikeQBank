@@ -15,7 +15,7 @@
 
       <div class="mb-4.5">
         <div class="field-label">题库</div>
-        <select v-model="bankId" class="select w-full max-w-[320px]" @change="refreshDue">
+        <select v-model="bankId" class="select w-full max-w-[320px]" @change="onBankChange">
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
@@ -193,14 +193,14 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
-import { bankStore } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 
 const TYPE_LABELS = {
   single: '单选题', multi: '多选题', judge: '判断题', fill: '填空题', short: '简答题', material: '材料题'
 }
 
 const phase = ref('due') // due | loading | card | done
-const bankId = ref(bankStore.currentBankId || '')
+const bankId = ref('')
 const bankName = computed(() => bankStore.banks.find((b) => b.id === bankId.value)?.name || '')
 const error = ref('')
 const recordError = ref('')
@@ -327,6 +327,11 @@ function buildItems(questions) {
     }
   }
   return items.map((it, idx) => ({ ...it, uid: `${it.q.id}_${idx}` }))
+}
+
+function onBankChange() {
+  persistBankFilter('review', bankId.value)
+  refreshDue()
 }
 
 async function refreshDue() {
@@ -481,7 +486,17 @@ function fmtMs(ms) {
   return `${sec}秒`
 }
 
-onMounted(refreshDue)
+onMounted(async () => {
+  if (!bankStore.loaded) {
+    try {
+      await loadBanks()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  bankId.value = resolveBankFilter('review')
+  await refreshDue()
+})
 </script>
 
 <style scoped>

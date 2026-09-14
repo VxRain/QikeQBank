@@ -27,6 +27,8 @@ export const settings = reactive({
   autoNextOnCorrect: saved.autoNextOnCorrect ?? false,
   // 自动下一题前的停留时长（毫秒），默认 1200
   autoNextDelayMs: normalizeDelay(saved.autoNextDelayMs),
+  // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
+  rememberBankFilter: saved.rememberBankFilter ?? false,
 })
 
 watch(

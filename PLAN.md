@@ -12,10 +12,10 @@ QikeQBank/
 ├── src/                           ← 前端
 │   ├── main.js  App.vue  router/index.js
 │   ├── api/    bridge.js  questions.js  practice.js  banks.js
-│   ├── stores/ bank.js            ← 全局题库状态（currentBankId，localStorage 持久化）
+│   ├── stores/ bank.js            ← 题库列表 + 各页筛选记忆（无“当前库”概念）
 │   ├── utils/  render.js validate.js normalize.js parsePureText.js
 │   ├── components/*               ← 编辑器组件（不变）
-│   └── views/  Home(v1+题库管理) List(题库下拉) Form(带 bank_id) Practice(题库下拉) Review(题库下拉)
+│   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
 ├── src-tauri/                     ← Rust（db.rs 承载全部逻辑）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
 └── tools/  migrate-dbjson.mjs  smoke-test.mjs
@@ -192,10 +192,15 @@ removeBank(id)         → cmd('banks_remove',{id}) → .data
 ### stores/bank.js（W2 新建）
 ```js
 import { reactive } from 'vue'
-export const bankStore = reactive({ banks: [], currentBankId: localStorage.getItem('qbank.currentBankId') || '', loaded: false })
-export async function loadBanks()      // 拉 banks；banks 非空且 currentBankId 不在其中 → 默认第一个；写 localStorage
-export function setCurrentBank(id)     // 更新 + localStorage
+export const bankStore = reactive({ banks: [], loaded: false })
+export async function loadBanks()      // 拉 banks，仅列表数据
+// 各页题库筛选：默认全部题库；?bank=（从题库页进入）优先，其次按设置记忆
+// 设置 rememberBankFilter 开启才记忆（load/save/clearBankFilters，key=qbank.bankFilter.<页>）
+export function resolveBankFilter(page, queryBank)
+export function persistBankFilter(page, id)
 ```
+
+题库筛选规则（List/Practice/Review/Wrong/Form 新建共用）：默认全部；设置开启记忆时按页记住上次选择；关闭记忆时切换开关即清掉各页记忆。新建试题必须显式归属（?bank= 或顶部下拉二选一，不再静默回退首库）。
 
 ### api/questions.js（W2 改）
 `list({query, type, bankId, limit, offset})` → args 带 `bank_id`（bankId falsy 时不传=全部）；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
@@ -206,23 +211,26 @@ export function setCurrentBank(id)     // 更新 + localStorage
 ### App.vue（W2 改）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；导航不变。
 
-### List.vue（W3a）
-- 工具栏加「题库」下拉：选项 = 「全部题库」(值为 '') + bankStore.banks 各项；绑定 bankStore.currentBankId。
-- 切换即重新 fetchList（携带 bankId）；搜索/筛选逻辑不变。
-- 未加载完成时下拉禁用（disabled）。
+### List.vue（W3a，单库视图）
+- 无题库下拉：上下文只认 `?bank=`（从题库页进入，须仍存在）；直访无 bank 显示空态引导去题库页挑库。
+- 工具栏：搜索 + 题型下拉 + 「导入试题」+ 「新增试题」，归属均为进入的库。
 - 分页：50/页，表格下方「上一页/下一页 + 第 X/Y 页 · 共 N 题」；筛选/搜索/重置时回第 1 页。
 
+### Banks.vue（题库管理）
+- 卡片点击进入单库试题页；右键菜单：进入/重命名/删除。
+- 卡片自带「录题」（`/create?bank=<id>`）与「导入」（本页直接弹 ImportFileBox，目标即该库，完成后刷新计数）。
+
 ### Form.vue（W3a）
-- `onSave`：新建时 `payload.bank_id = bankStore.currentBankId || bankStore.banks[0]?.id`；编辑时不覆盖（保留 DB 行的 bank_id）。
+- 新建：顶部题库下拉必选（?bank= 预选或按设置记忆），`onSave` 无归属直接报错，不再回退首库；编辑时不覆盖（保留 DB 行的 bank_id）。
 - 顶部展示「所属题库」小徽章（编辑时显示当前 bank 名，只读）。
 
 ### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）
-- 筛选条：题库下拉（默认当前库）+ 题型下拉 + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页）。
+- 筛选条：题库下拉（默认全部，按上规则记忆）+ 题型下拉 + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页）。
 - 「重练全部」：按当前筛选取最多 500 个 id → sessionStorage['qbank.retryIds'] → `/practice?retry=1`；Practice 绕过 setup 直接组卷（`practicePool({ids})`），读完即清 storage；空结果回 setup 并提示。
 - 收录规则：最近一次作答仍错才在册，答对自动移出，删题经 FK 级联自动消失（无手动移出）。
 
 ### Practice.vue（W3b）
-- 设置面板加「题库」下拉：全部(值为 '') + 各库；默认当前库（bankStore.currentBankId，空则 ''）。
+- 设置面板加「题库」下拉：全部(值为 '') + 各库；默认全部（按上规则记忆）。
 - 组卷时 `practicePool({limit,type,bankId})`；其余逻辑不动。
 - 错题重练：`/practice?retry=1` + sessionStorage['qbank.retryIds'] → `practicePool({ids})` 直达作答；另修复本轮结束页「错题重做」未切回作答页的问题。
 

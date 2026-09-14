@@ -1,6 +1,7 @@
 /**
  * 题库管理页（/banks）
- * 卡片网格：点击卡片进入题库；右键菜单承载进入/设为当前/重命名/删除；
+ * 卡片网格：点击卡片进入题库；右键菜单承载进入/重命名/删除；
+ * 每张卡片自带录题/导入按钮，归属零歧义。
  * 新建/重命名共用应用内弹窗（名字 + 描述）。
  */
 <template>
@@ -33,7 +34,6 @@
           role="button"
           tabindex="0"
           class="card card-interactive flex flex-col gap-2 cursor-pointer !p-4"
-          :class="b.id === bankStore.currentBankId && '!border-primary-border !bg-primary-bg'"
           :title="`进入「${b.name}」`"
           @click="onEnter(b)"
           @keyup.enter="onEnter(b)"
@@ -41,21 +41,21 @@
         >
           <div class="flex items-start justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
-              <i
-                class="i-lucide-folder text-[18px] shrink-0"
-                :class="b.id === bankStore.currentBankId ? 'text-primary' : 'text-muted-light'"
-              />
+              <i class="i-lucide-folder text-[18px] shrink-0 text-muted-light" />
               <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
             </div>
-            <span v-if="b.id === bankStore.currentBankId" class="badge badge-cur shrink-0">当前</span>
           </div>
           <div v-if="b.description" class="text-[12px] text-muted leading-[1.6] line-clamp-2 min-h-[19px]">
             {{ b.description }}
           </div>
           <div class="flex items-center justify-between gap-2 mt-auto pt-1">
             <span class="text-[12px] text-muted-light">{{ b.question_count ?? 0 }} 题</span>
-            <span class="inline-flex items-center gap-1 text-[12px] font-500 text-primary">
-              进入<i class="i-lucide-arrow-right text-[13px]" />
+            <span class="inline-flex items-center gap-1.5">
+              <button type="button" class="btn btn-tiny" title="录题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus" />录题</button>
+              <button type="button" class="btn btn-tiny" title="导入试题到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up" />导入</button>
+              <span class="inline-flex items-center gap-1 text-[12px] font-500 text-primary">
+                进入<i class="i-lucide-arrow-right text-[13px]" />
+              </span>
             </span>
           </div>
         </div>
@@ -74,14 +74,6 @@
           <button type="button" class="ctx-item" @click="onCtxEnter">
             <i class="i-lucide-arrow-right" />进入题库
           </button>
-          <button
-            v-if="ctx.bank.id !== bankStore.currentBankId"
-            type="button"
-            class="ctx-item"
-            @click="onCtxSetCurrent"
-          >
-            <i class="i-lucide-check" />设为当前
-          </button>
           <button type="button" class="ctx-item" @click="onCtxRename">
             <i class="i-lucide-pen-line" />重命名
           </button>
@@ -92,6 +84,15 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- 导入试题：直接在此页弹窗，目标即所选库 -->
+    <ImportFileBox
+      :open="showImport"
+      :bank-id="importBank.id"
+      :bank-name="importBank.name"
+      @done="onImportDone"
+      @close="showImport = false"
+    />
 
     <!-- 新建 / 重命名弹窗：名字 + 描述，复用 DialogHost 视觉语言 -->
     <Teleport to="body">
@@ -141,24 +142,38 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { bankStore, loadBanks, setCurrentBank } from '@/stores/bank.js'
+import { bankStore, loadBanks } from '@/stores/bank.js'
 import { createBank, updateBank, removeBank } from '@/api/banks.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
+import ImportFileBox from '@/components/ImportFileBox.vue'
 
 const router = useRouter()
+
+// 导入弹窗：直接在此页打开，目标即所选库
+const showImport = ref(false)
+const importBank = ref({ id: '', name: '' })
 
 const totalCount = computed(() =>
   bankStore.banks.reduce((s, b) => s + (b.question_count ?? 0), 0)
 )
 
-// ── 进入 / 设为当前 ──
+// ── 进入 ──
 function onEnter(b) {
   router.push(`/library?bank=${b.id}`)
 }
 
-function onSelectBank(b) {
-  if (b.id === bankStore.currentBankId) return
-  setCurrentBank(b.id)
+function goCreate(b) {
+  router.push(`/create?bank=${b.id}`)
+}
+
+function openImport(b) {
+  importBank.value = { id: b.id, name: b.name }
+  showImport.value = true
+}
+
+async function onImportDone() {
+  showImport.value = false
+  await loadBanks()
 }
 
 // ── 右键菜单 ──
@@ -195,12 +210,6 @@ function onCtxEnter() {
   if (b) onEnter(b)
 }
 
-function onCtxSetCurrent() {
-  const b = ctx.value?.bank
-  closeCtx()
-  if (b) onSelectBank(b)
-}
-
 function onCtxRename() {
   const b = ctx.value?.bank
   closeCtx()
@@ -235,10 +244,9 @@ async function onDlgOk() {
   d.saving = true
   try {
     if (d.mode === 'create') {
-      const created = await createBank(name, description)
+      await createBank(name, description)
       await loadBanks()
-      if (created?.id) setCurrentBank(created.id)
-      toast(`题库「${name}」已创建`, 'success')
+      toast(`题库「${name}」已创建，去卡片点录题开始加题`, 'success')
     } else {
       if (name === d._origName && description === (d._origDesc || '')) {
         dlg.value = null

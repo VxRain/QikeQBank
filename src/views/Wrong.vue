@@ -24,7 +24,7 @@
       </div>
 
       <div class="flex flex-wrap gap-2 items-center p-3 mb-4 bg-bg-accent border border-line rounded-[12px]">
-        <select v-model="bankId" class="select min-w-[130px]" @change="search">
+        <select v-model="bankId" class="select min-w-[130px]" @change="onBankChange">
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
@@ -103,12 +103,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { wrongList } from '@/api/practice.js'
-import { bankStore } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { toast } from '@/stores/ui.js'
 
 const router = useRouter()
 const type = ref('')
-const bankId = ref(bankStore.currentBankId || '')
+const bankId = ref('')
 const questions = ref([])
 const loading = ref(false)
 const retrying = ref(false)
@@ -202,6 +202,11 @@ function gotoPage(p) {
   fetchList().then(() => window.scrollTo(0, 0))
 }
 
+function onBankChange() {
+  persistBankFilter('wrong', bankId.value)
+  search()
+}
+
 function search() {
   page.value = 1
   fetchList()
@@ -254,5 +259,15 @@ async function retryAll() {
   }
 }
 
-onMounted(fetchList)
+onMounted(async () => {
+  if (!bankStore.loaded) {
+    try {
+      await loadBanks()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  bankId.value = resolveBankFilter('wrong')
+  await fetchList()
+})
 </script>

@@ -5,7 +5,11 @@
         <h2 class="section-title m-0 flex items-center gap-2 flex-wrap">
           <i class="i-lucide-pen-line text-primary" />{{ isEdit ? '编辑试题' : '新增试题' }}
           <span class="badge badge-type">{{ form.type }}</span>
-          <span class="badge">所属题库：{{ bankBadgeText }}</span>
+          <span v-if="isEdit" class="badge">所属题库：{{ bankBadgeText }}</span>
+          <select v-else v-model="newBankId" class="select !py-1.5 !px-2.5 text-[12px]" @change="persistBankFilter('create', newBankId)">
+            <option value="">请选择题库…</option>
+            <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}（新题将存入）</option>
+          </select>
         </h2>
         <div class="flex gap-2 items-center">
           <button class="btn" @click="goBack"><i class="i-lucide-arrow-left" />返回列表</button>
@@ -49,7 +53,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { get, create, update } from '@/api/questions.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
-import { bankStore, setCurrentBank } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import QuestionEditor from '@/components/QuestionEditor.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { validateQuestion } from '@/utils/validate.js'
@@ -90,24 +94,14 @@ const validation = computed(()=>{
 })
 const prettyJSON = computed(()=> JSON.stringify(form.value, null, 2))
 
-// 卡头「所属题库」徽章文案
-// 编辑：显示该题 bank_id 对应的库名，找不到则回退显示 bank_id 原文
-// 新建：优先 ?bank= 路由参数，其次 currentBankId，均无回退 banks[0]
-const targetBankId = computed(()=>{
-  if(isEdit.value) return form.value?.bank_id || ''
-  const qb = route.query.bank
-  if (typeof qb === 'string' && qb) return qb
-  return bankStore.currentBankId || bankStore.banks[0]?.id || ''
-})
+// 卡头「所属题库」徽章文案（编辑模式只读显示）
+// 新建归属：?bank= 参数优先，其次按设置记忆，否则必须手动选（不再静默回退首库）
+const newBankId = ref('')
 const bankBadgeText = computed(()=>{
-  if(isEdit.value){
-    const bid = form.value?.bank_id
-    if(!bid) return '未归属'
-    const bank = bankStore.banks.find(b=> b.id === bid)
-    return bank ? bank.name : bid
-  }
-  const bank = bankStore.banks.find(b=> b.id === targetBankId.value)
-  return (bank ? bank.name : (targetBankId.value || '未选择')) + '（新题将存入）'
+  const bid = form.value?.bank_id
+  if(!bid) return '未归属'
+  const bank = bankStore.banks.find(b=> b.id === bid)
+  return bank ? bank.name : bid
 })
 
 // 返回目标：从题库语境进入则回到该库列表，否则回首页
@@ -116,17 +110,22 @@ function backTarget(){
     const bid = form.value?.bank_id
     return bid ? `/library?bank=${bid}` : '/library'
   }
-  const qb = route.query.bank
-  if (typeof qb === 'string' && qb) return `/library?bank=${qb}`
-  return '/'
+  const bid = newBankId.value || (typeof route.query.bank === 'string' ? route.query.bank : '')
+  return bid ? `/library?bank=${bid}` : '/'
 }
 function goBack(){ router.push(backTarget()) }
 
 onMounted(async ()=>{
-  // 从题库语境进入（/create?bank=xxx）：同步当前库，让归属与返回路径一致
+  if (!bankStore.loaded) {
+    try {
+      await loadBanks()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  // 新建归属：?bank= 优先，其次按设置记忆
   if(!isEdit.value){
-    const qb = route.query.bank
-    if (typeof qb === 'string' && qb) setCurrentBank(qb)
+    newBankId.value = resolveBankFilter('create', route.query.bank)
   }
   if(isEdit.value){
     loading.value=true
@@ -147,8 +146,13 @@ async function onSave(){
     const payload = isEdit.value ? form.value : { ...form.value }
     if(!isEdit.value){
       delete payload.id   // id 留空由后端生成
-      // 新建：归属优先 ?bank=，其次当前题库，空回退第一个（后端再兜底 bank_default）
-      payload.bank_id = targetBankId.value || bankStore.banks[0]?.id
+      if (!newBankId.value) {
+        error.value = '请先在顶部选择所属题库'
+        saving.value = false
+        return
+      }
+      payload.bank_id = newBankId.value
+      persistBankFilter('create', newBankId.value)
     }
     normalizeQuestion(payload)
     payload.plain_text = getAggregatedPlainText(payload)

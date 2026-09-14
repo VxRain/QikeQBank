@@ -11,7 +11,7 @@
 
       <div class="mb-5">
         <div class="field-label">题库</div>
-        <select v-model="bankId" class="select w-full max-w-[320px]">
+        <select v-model="bankId" class="select w-full max-w-[320px]" @change="persistBankFilter('practice', bankId)">
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
@@ -225,7 +225,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
-import { bankStore } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
@@ -249,7 +249,7 @@ const fetching = ref(false)
 
 const selectedTypes = ref([...ALL_TYPES])
 const count = ref(5)
-const bankId = ref(bankStore.currentBankId || '')
+const bankId = ref('')
 
 const pool = ref([]) // 子题队列：普通题=1 项，material=每子题 1 项
 const curIdx = ref(0)
@@ -598,7 +598,15 @@ async function startFromIds(ids) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  if (!bankStore.loaded) {
+    try {
+      await loadBanks()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  bankId.value = resolveBankFilter('practice')
   if (route.query.retry) {
     let ids = []
     try {

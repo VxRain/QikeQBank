@@ -98,6 +98,26 @@
               </div>
             </div>
             </div>
+            <button
+              type="button"
+              role="switch"
+              :aria-checked="settings.rememberBankFilter"
+              class="w-full flex items-start justify-between gap-3 p-3.5 border border-line rounded-[10px] bg-card cursor-pointer transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-bg-accent text-left"
+              @click="toggleRememberBankFilter"
+            >
+              <span class="min-w-0">
+                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">记住各页题库选择<InfoTip text="开启后，刷题 / 复习 / 错题本 / 试题列表 / 新建试题的题库下拉会记住上次选择；关闭则每次默认全部题库（新建时须手动选库）" /></span>
+              </span>
+              <span
+                class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
+                :class="settings.rememberBankFilter ? 'bg-primary' : 'bg-[var(--line-strong)]'"
+              >
+                <span
+                  class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
+                  :class="settings.rememberBankFilter ? 'left-[22px]' : 'left-[3px]'"
+                />
+              </span>
+            </button>
             </div>
             <div class="flex justify-end gap-2.5 mt-4">
               <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
@@ -111,7 +131,7 @@
 
 <script setup>
 import { onMounted, ref, watch } from 'vue'
-import { loadBanks } from '@/stores/bank.js'
+import { loadBanks, clearBankFilters } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 import { toast } from '@/stores/ui.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
@@ -119,6 +139,12 @@ import ToastHost from '@/components/ui/ToastHost.vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
 
 const showSettings = ref(false)
+
+// 关闭“记住题库选择”时顺手清掉各页记忆，下次全回默认全部题库
+function toggleRememberBankFilter() {
+  settings.rememberBankFilter = !settings.rememberBankFilter
+  if (!settings.rememberBankFilter) clearBankFilters()
+}
 
 // 停留时长输入框：文本态本地持有，change/blur/回车时校验落盘，非法回滚
 const delayText = ref((settings.autoNextDelayMs / 1000).toString())
