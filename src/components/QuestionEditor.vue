@@ -109,7 +109,11 @@ const materialDifficulty = computed(()=>{
 })
 
 function createDoc(text){
-  return { type:'doc', content:[{ type:'paragraph', content:[{type:'text', text:text||''}]}]}
+  // 空文本产出空段落（不带 content），而非空 text 节点——后者被 ProseMirror 视为非法
+  const t = String(text||'')
+  return t
+    ? { type:'doc', content:[{ type:'paragraph', content:[{type:'text', text:t}]}]}
+    : { type:'doc', content:[{ type:'paragraph' }]}
 }
 function createDefault(type){
   if(type==='material'){

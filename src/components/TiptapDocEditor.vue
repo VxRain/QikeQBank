@@ -76,6 +76,27 @@ import katex from 'katex'
 const props = defineProps({ modelValue: { type: Object, required: true }, showBlank: { type: Boolean, default: true }, compact: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue','blankInserted'])
 
+// ============ 脏数据清洗 ============
+// ProseMirror 禁止空文本节点（text 缺失或 ''），旧数据/解析器可能产出，
+// 不洗会刷 warn 且编辑保存时被静默丢弃。规则：只删空 text 节点，其余原样保留。
+function sanitizeNode(node) {
+  if (!node || typeof node !== 'object') return node
+  if (Array.isArray(node.content)) {
+    node.content = node.content
+      .filter((c) => !(c && c.type === 'text' && !(typeof c.text === 'string' && c.text.length)))
+      .map(sanitizeNode)
+  }
+  return node
+}
+function sanitizeDoc(doc) {
+  if (!doc || typeof doc !== 'object') return { type: 'doc', content: [{ type: 'paragraph' }] }
+  try {
+    return sanitizeNode(JSON.parse(JSON.stringify(doc)))
+  } catch {
+    return { type: 'doc', content: [{ type: 'paragraph' }] }
+  }
+}
+
 // ============ 自定义节点 ============
 // —— InlineMath ——
 const InlineMath = Node.create({
@@ -236,15 +257,16 @@ const editor = new Editor({
     Placeholder.configure({ placeholder:'输入题干… 选中文本可加粗/变色' }),
     InlineMath, Blank, InlineImage, ImageBlock, MathBlock
   ],
-  content: props.modelValue,
+  content: sanitizeDoc(props.modelValue),
   onUpdate: ({editor})=>{
     emit('update:modelValue', editor.getJSON())
   }
 })
 watch(()=>props.modelValue, (val)=>{
+  const clean = sanitizeDoc(val)
   const cur = editor.getJSON()
-  if(JSON.stringify(cur) !== JSON.stringify(val)){
-    editor.commands.setContent(val, false)
+  if(JSON.stringify(cur) !== JSON.stringify(clean)){
+    editor.commands.setContent(clean, false)
   }
 }, {deep:true})
 onBeforeUnmount(()=> editor.destroy())
