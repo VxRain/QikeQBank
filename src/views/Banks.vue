@@ -287,13 +287,12 @@ async function onRemoveBank(b) {
 }
 
 onMounted(async () => {
-  if (!bankStore.loaded) {
-    try {
-      await loadBanks()
-    } catch (e) {
-      console.error(e)
-      toast('加载题库失败：' + (e?.message || e), 'error')
-    }
+  // 每次进入都刷新：新增/导入/删除试题后返回，题数徽章才对得上
+  try {
+    await loadBanks()
+  } catch (e) {
+    console.error(e)
+    toast('加载题库失败：' + (e?.message || e), 'error')
   }
 })
 </script>

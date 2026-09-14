@@ -6,10 +6,7 @@
           <i class="i-lucide-pen-line text-primary" />{{ isEdit ? '编辑试题' : '新增试题' }}
           <span class="badge badge-type">{{ form.type }}</span>
           <span v-if="isEdit" class="badge">所属题库：{{ bankBadgeText }}</span>
-          <select v-else v-model="newBankId" class="select !py-1.5 !px-2.5 text-[12px]" @change="persistBankFilter('create', newBankId)">
-            <option value="">请选择题库…</option>
-            <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}（新题将存入）</option>
-          </select>
+          <span v-else class="badge">将存入：{{ newBankName }}</span>
         </h2>
         <div class="flex gap-2 items-center">
           <button class="btn" @click="goBack"><i class="i-lucide-arrow-left" />返回列表</button>
@@ -97,6 +94,10 @@ const prettyJSON = computed(()=> JSON.stringify(form.value, null, 2))
 // 卡头「所属题库」徽章文案（编辑模式只读显示）
 // 新建归属：?bank= 参数优先，其次按设置记忆，否则必须手动选（不再静默回退首库）
 const newBankId = ref('')
+const newBankName = computed(()=>{
+  const bank = bankStore.banks.find(b=> b.id === newBankId.value)
+  return bank ? bank.name : '未选择'
+})
 const bankBadgeText = computed(()=>{
   const bid = form.value?.bank_id
   if(!bid) return '未归属'
@@ -147,7 +148,7 @@ async function onSave(){
     if(!isEdit.value){
       delete payload.id   // id 留空由后端生成
       if (!newBankId.value) {
-        error.value = '请先在顶部选择所属题库'
+        error.value = '未确定所属题库，请从题库页进入后重试'
         saving.value = false
         return
       }

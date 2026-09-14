@@ -221,7 +221,7 @@ export function persistBankFilter(page, id)
 - 卡片自带「录题」（`/create?bank=<id>`）与「导入」（本页直接弹 ImportFileBox，目标即该库，完成后刷新计数）。
 
 ### Form.vue（W3a）
-- 新建：顶部题库下拉必选（?bank= 预选或按设置记忆），`onSave` 无归属直接报错，不再回退首库；编辑时不覆盖（保留 DB 行的 bank_id）。
+- 新建：顶部只读徽章显示目标库（?bank= 预选或按设置记忆）；无归属（直访无参数且无记忆）则保存时报错，不再回退首库；编辑时不覆盖（保留 DB 行的 bank_id）。
 - 顶部展示「所属题库」小徽章（编辑时显示当前 bank 名，只读）。
 
 ### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）
