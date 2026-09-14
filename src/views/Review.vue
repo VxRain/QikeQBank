@@ -46,14 +46,16 @@
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
-      <div v-if="cur.isChild" class="border border-dashed border-primary-border bg-bg-accent rounded-[12px] px-3.5 py-3">
-        <div class="flex justify-end mb-2">
-          <button type="button" class="btn btn-small" @click="materialOpen = !materialOpen">
-            <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}材料
+      <div v-if="cur.isChild" class="border border-dashed border-primary-border bg-bg-accent rounded-[12px] px-3.5 py-2">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[12px] font-600 text-muted flex items-center gap-1.5 min-w-0">
+            <i class="i-lucide-book-open shrink-0" />材料 · 共 {{ cur.childCount }} 问 · 第 {{ cur.childIdx + 1 }} 问
+          </span>
+          <button type="button" class="btn btn-small shrink-0" @click="materialOpen = !materialOpen">
+            <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}
           </button>
         </div>
-        <div v-if="materialOpen" class="text-[13px] text-text-secondary" v-html="materialStemHtml"></div>
-        <div v-else class="text-[12px] text-muted">共 {{ cur.childCount }} 问 · 正在作答第 {{ cur.childIdx + 1 }} 问</div>
+        <div v-if="materialOpen" class="text-[13px] text-text-secondary pt-2" v-html="materialStemHtml"></div>
       </div>
 
       <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput"></div>
