@@ -5,11 +5,8 @@
     >
       <div class="max-w-[1140px] mx-auto px-7 flex items-center gap-6 h-[60px]">
         <div class="flex items-center gap-2.5 shrink-0" style="font-family:var(--serif)">
-          <span
-            class="w-8 h-8 rounded-[7px] flex items-center justify-center text-white text-[17px] font-700 bg-primary shadow-[0_2px_6px_rgba(31,77,58,0.28)]"
-          >Q</span>
-          <span class="text-[20px] font-700 tracking-[-0.01em] text-text">QBank</span>
-          <span class="text-[12px] text-muted ml-1 tracking-normal font-400 hidden sm:inline">题库 · Blocks JSON</span>
+          <span class="text-[20px] font-700 tracking-[-0.01em] text-text">奇客题库</span>
+          <span class="text-[12px] text-muted ml-1 tracking-normal font-400 hidden sm:inline">本地版</span>
         </div>
         <nav class="flex items-center gap-1 h-full ml-2">
           <router-link
