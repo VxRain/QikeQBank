@@ -4,9 +4,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 
 // ---------------------------------------------------------------------------
@@ -196,21 +194,9 @@ fn ok(data: Value) -> Result<Value, String> {
     Ok(json!({ "success": true, "data": data }))
 }
 
-static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// q_{unixms}_{4hex}
+/// 试题 id：UUIDv7（前 48 位即毫秒时间戳，有序且可读）
 fn generate_id() -> String {
-    let ms = Utc::now().timestamp_millis();
-    let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let mix = (nanos as u64)
-        .wrapping_mul(0x9E37_79B9)
-        .wrapping_add((std::process::id() as u64) << 16)
-        .wrapping_add(n << 8);
-    format!("q_{}_{:04x}", ms, mix & 0xFFFF)
+    uuid::Uuid::now_v7().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -663,18 +649,9 @@ fn upsert_question(conn: &Connection, q: &Value) -> Result<(), String> {
 // Bank row helpers
 // ---------------------------------------------------------------------------
 /// bank_{unixms}_{4hex}
+/// 题库 id：UUIDv7（默认库固定为 bank_default，不走此函数）
 fn generate_bank_id() -> String {
-    let ms = Utc::now().timestamp_millis();
-    let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let mix = (nanos as u64)
-        .wrapping_mul(0x5851_F42D)
-        .wrapping_add((std::process::id() as u64) << 16)
-        .wrapping_add(n << 8);
-    format!("bank_{}_{:04x}", ms, mix & 0xFFFF)
+    uuid::Uuid::now_v7().to_string()
 }
 
 fn bank_row_to_value(row: &rusqlite::Row) -> rusqlite::Result<Value> {
@@ -1726,9 +1703,9 @@ mod tests {
     #[test]
     fn generate_id_shape() {
         let id = generate_id();
-        assert!(id.starts_with("q_"));
-        let _parts: Vec<&str> = id.split('_').collect();
-        assert!(id.len() > 5);
+        // UUIDv7：可解析、版本号为 7（前 48 位即毫秒时间戳，有序可读）
+        let parsed = uuid::Uuid::parse_str(&id).unwrap();
+        assert_eq!(parsed.get_version(), Some(uuid::Version::SortRand));
         let id2 = generate_id();
         assert_ne!(id, id2);
     }
@@ -1898,7 +1875,7 @@ mod tests {
         // create: name trimmed, description kept
         let b1 = banks_create_impl(&conn, "  数学题库  ", None).unwrap();
         let b2 = banks_create_impl(&conn, "英语题库", Some("CET-4")).unwrap();
-        assert!(b1["id"].as_str().unwrap().starts_with("bank_"));
+        assert!(uuid::Uuid::parse_str(b1["id"].as_str().unwrap()).is_ok());
         assert_eq!(b1["name"], "数学题库");
         assert_eq!(b2["description"], "CET-4");
         assert_eq!(b1["question_count"], 0);
