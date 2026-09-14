@@ -38,6 +38,7 @@
             <h3 class="m-0 mb-4 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2">
               <i class="i-lucide-settings-2 text-primary" />设置
             </h3>
+            <div class="flex flex-col gap-2.5">
             <button
               type="button"
               role="switch"
@@ -58,6 +59,46 @@
                 />
               </span>
             </button>
+            <div class="border border-line rounded-[10px] bg-card transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-bg-accent">
+            <button
+              type="button"
+              role="switch"
+              :aria-checked="settings.autoNextOnCorrect"
+              class="w-full flex items-start justify-between gap-3 p-3.5 pb-3 cursor-pointer text-left bg-transparent border-0"
+              @click="settings.autoNextOnCorrect = !settings.autoNextOnCorrect"
+            >
+              <span class="min-w-0">
+                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">答对自动下一题<InfoTip text="仅刷题模式生效：答对后短暂停留展示结果再自动下一题，等待时点击结果条可取消；答错停留看解析；复习模式仍需手动自评" /></span>
+              </span>
+              <span
+                class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
+                :class="settings.autoNextOnCorrect ? 'bg-primary' : 'bg-[var(--line-strong)]'"
+              >
+                <span
+                  class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
+                  :class="settings.autoNextOnCorrect ? 'left-[22px]' : 'left-[3px]'"
+                />
+              </span>
+            </button>
+            <div v-if="settings.autoNextOnCorrect" class="px-3.5 pb-3.5">
+              <div class="border-t border-line pt-3 flex items-center gap-2">
+              <span class="text-[12px] text-muted font-600">停留时长</span>
+              <input
+                v-model="delayText"
+                class="input w-[76px] px-2.5 py-1.5 text-[13px] text-center"
+                type="text"
+                inputmode="decimal"
+                autocomplete="off"
+                @change="commitDelay"
+                @blur="commitDelay"
+                @keyup.enter="commitDelay"
+                @keyup.esc="delayText = (settings.autoNextDelayMs / 1000).toString()"
+              />
+              <span class="text-[12px] text-muted">秒</span>
+              </div>
+            </div>
+            </div>
+            </div>
             <div class="flex justify-end gap-2.5 mt-4">
               <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
             </div>
@@ -69,14 +110,31 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { loadBanks } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
+import { toast } from '@/stores/ui.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
 
 const showSettings = ref(false)
+
+// 停留时长输入框：文本态本地持有，change/blur/回车时校验落盘，非法回滚
+const delayText = ref((settings.autoNextDelayMs / 1000).toString())
+watch(() => settings.autoNextDelayMs, (v) => {
+  delayText.value = (v / 1000).toString()
+})
+function commitDelay() {
+  const v = parseFloat(delayText.value)
+  if (Number.isFinite(v) && v >= 0.3 && v <= 5) {
+    settings.autoNextDelayMs = Math.round(v * 1000)
+    delayText.value = (settings.autoNextDelayMs / 1000).toString()
+  } else {
+    delayText.value = (settings.autoNextDelayMs / 1000).toString()
+    toast('停留时长请输入 0.3～5 之间的数字（秒）', 'error')
+  }
+}
 
 const navItems = [
   { to: '/', label: '首页', icon: 'i-lucide-home' },

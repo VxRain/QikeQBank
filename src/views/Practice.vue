@@ -136,8 +136,20 @@
 
       <!-- 判分结果（判分前绝不展示答案/解析） -->
       <div v-if="graded" class="border-t border-line pt-4 flex flex-col gap-3">
-        <div class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px]" :class="gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]'">
-          <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />{{ gradeResult.correct ? '回答正确' : '回答错误' }}
+        <div
+          class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px] relative overflow-hidden"
+          :class="[gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]', autoNextPending && 'cursor-pointer select-none']"
+          :role="autoNextPending ? 'button' : undefined"
+          :tabindex="autoNextPending ? 0 : undefined"
+          :title="autoNextPending ? '点击取消自动下一题' : undefined"
+          @click="autoNextPending && cancelAutoNext()"
+          @keydown.enter="autoNextPending && cancelAutoNext()"
+          @keydown.space.prevent="autoNextPending && cancelAutoNext()"
+        >
+          <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />
+          <span>{{ gradeResult.correct ? '回答正确' : '回答错误' }}</span>
+          <span v-if="autoNextPending" class="text-[12px] font-500 opacity-75">· {{ (autoNextMs / 1000).toFixed(1) }}s 后自动下一题，点击取消</span>
+          <span v-if="autoNextPending" class="auto-next-track" aria-hidden="true"><span class="auto-next-fill" :style="{ animationDuration: autoNextMs + 'ms' }"></span></span>
         </div>
 
         <div v-if="isChoice && gradeResult" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
@@ -209,11 +221,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore } from '@/stores/bank.js'
+import { settings } from '@/stores/settings.js'
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
 const TYPE_LABELS = {
@@ -246,7 +259,19 @@ const gradeResult = ref(null)
 const startedAt = ref(0)
 const materialOpen = ref(true)
 
-// 作答状态
+// 答对自动下一题（设置 autoNextOnCorrect 开启时，时长取 autoNextDelayMs）
+// 计时（setTimeout）与进度条（CSS 动画）分离：条只负责展示，取消/翻页只停计时器
+let autoNextTimer = null
+const autoNextPending = ref(false)
+const autoNextMs = ref(0)
+function cancelAutoNext() {
+  if (autoNextTimer) {
+    clearTimeout(autoNextTimer)
+    autoNextTimer = null
+  }
+  autoNextPending.value = false
+}
+onBeforeUnmount(cancelAutoNext)
 const singlePick = ref('')
 const multiPick = ref([])
 const fillValues = reactive({})
@@ -337,6 +362,7 @@ function toggleMulti(id) {
 }
 
 function resetAnswer() {
+  cancelAutoNext()
   singlePick.value = ''
   multiPick.value = []
   for (const k in fillValues) delete fillValues[k]
@@ -490,6 +516,16 @@ function commit(it, grade, elapsed, res) {
     console.error('record_answer failed', e)
     recordError.value = (e?.message || e)
   })
+  // 答对自动下一题：短暂停留展示结果（答错停留看解析；手动点下一题/点结果条会取消）
+  if (res.correct && settings.autoNextOnCorrect) {
+    autoNextMs.value = settings.autoNextDelayMs
+    autoNextPending.value = true
+    autoNextTimer = setTimeout(() => {
+      autoNextPending.value = false
+      autoNextTimer = null
+      next()
+    }, autoNextMs.value)
+  }
 }
 
 function submit() {
@@ -515,6 +551,7 @@ function shortSubmit(grade) {
 }
 
 function next() {
+  cancelAutoNext()
   if (curIdx.value < pool.value.length - 1) {
     curIdx.value++
     resetAnswer()
@@ -610,4 +647,15 @@ function fmtMs(ms) {
 .answer-view :deep(.key) { font-weight: 700; color: var(--primary); margin-right: 6px; }
 .answer-view :deep(p) { margin: 4px 0; }
 .analysis :deep(p) { margin: 6px 0; }
+/* 自动下一题倒计时条：长在结果条底部，只负责展示，计时由 JS 定时器驱动 */
+.auto-next-track {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: rgba(47, 125, 79, 0.18);
+}
+.auto-next-fill {
+  display: block; height: 100%; width: 100%;
+  background: var(--success);
+  animation: auto-next-shrink linear forwards;
+}
+@keyframes auto-next-shrink { from { width: 100%; } to { width: 0%; } }
 </style>
