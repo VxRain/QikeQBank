@@ -154,6 +154,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局 |
 | `record_answer` | 不变 | 不变 |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
+| `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 
 **导入导出（v3）**
 
@@ -215,7 +216,7 @@ export function persistBankFilter(page, id)
 `list({query, type, bankId, limit, offset})` → args 带 `bank_id`（bankId falsy 时不传=全部）；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
 
 ### api/practice.js（W2 改）
-`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`。其余不变。
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`。其余不变。
 
 ### App.vue（W2 改）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；导航不变。

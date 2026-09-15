@@ -39,7 +39,8 @@ pub fn run() {
             db::records_overview,
             db::export_dbjson,
             db::save_text_file,
-            db::import_dbjson
+            db::import_dbjson,
+            db::import_questions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

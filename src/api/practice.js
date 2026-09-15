@@ -49,6 +49,13 @@ export async function recordsOverview() {
   return res?.data
 }
 
+export async function importQuestions(items, bankId) {
+  const args = { items }
+  if (bankId) args.bankId = bankId
+  const res = await cmd('import_questions', args)
+  return res?.data
+}
+
 export async function exportData() {
   const res = await cmd('export_dbjson')
   return res?.data

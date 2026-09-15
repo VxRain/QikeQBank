@@ -40,24 +40,37 @@
               <span class="text-[12px] text-muted truncate">{{ fileName }}</span>
             </div>
             <div v-if="failCount" class="error-box">
-              有误的块须修改文件后重新选择（整文件一票否决，不入库脏数据）
+              {{ failCount }} 块有误不会入库，可直接导入通过的部分，或改完文件重来
             </div>
             <div class="overflow-y-auto flex flex-col gap-1.5 min-h-0 max-h-[320px] pr-0.5">
+              <template v-for="b in blocks" :key="b.index">
               <div
-                v-for="b in blocks"
-                :key="b.index"
                 class="flex items-start gap-2 px-3 py-2 border rounded-[8px] text-[13px]"
                 :class="b.error ? 'border-[#e3c9c5] bg-danger-bg' : 'border-line bg-card'"
               >
                 <span class="text-muted-light text-[12px] w-7 shrink-0 pt-0.5">#{{ b.index }}</span>
-                <span v-if="!b.error" class="badge badge-type shrink-0">{{ b.typeLabel }}{{ b.question?.type === 'material' ? `·${b.question.children.length}子题` : '' }}</span>
-                <span v-else class="badge badge-bad shrink-0">有误</span>
+                <span v-if="!b.error" class="badge badge-type shrink-0 !py-0 h-[22px] inline-flex items-center">{{ b.typeLabel }}{{ b.question?.type === 'material' ? `·${b.question.children.length}子题` : '' }}</span>
+                <span v-else class="badge badge-bad shrink-0 !py-0 h-[22px] inline-flex items-center">有误</span>
                 <span class="min-w-0 flex-1 text-text-secondary leading-[1.6] break-all">{{ b.error || b.stemText }}</span>
+                <button
+                  v-if="b.error || b.question"
+                  type="button"
+                  class="btn btn-tiny shrink-0 !py-0 h-[22px] inline-flex items-center"
+                  :title="openIdx === b.index ? '收起' : (b.error ? '查看原文' : '预览题目')"
+                  @click="openIdx = openIdx === b.index ? null : b.index"
+                >{{ openIdx === b.index ? '收起' : (b.error ? '原文' : '预览') }}</button>
               </div>
+              <div v-if="openIdx === b.index" class="px-3 py-2 border border-line rounded-[8px] bg-bg-accent">
+                <pre v-if="b.error" class="m-0 text-[12px] leading-[1.6] text-text-secondary whitespace-pre-wrap break-all font-inherit">{{ b.raw || '(无原文)' }}
+<span class="text-danger font-600">{{ b.error }}</span></pre>
+                <QuestionPreview v-else-if="b.question" :question="b.question" />
+              </div>
+              </template>
             </div>
-            <div class="flex justify-end gap-2.5">
+            <div class="flex justify-end gap-2.5 items-center">
+              <span v-if="failCount" class="text-[12px] text-muted mr-auto">{{ failCount }} 块有误将被跳过</span>
               <button type="button" class="btn" @click="phase = 'pick'">重选文件</button>
-              <button type="button" class="btn btn-primary" :disabled="failCount > 0 || !blocks.length" @click="onImport">
+              <button type="button" class="btn btn-primary" :disabled="!okCount" @click="onImport">
                 <i class="i-lucide-check" />确认导入 {{ okCount }} 题
               </button>
             </div>
@@ -66,16 +79,21 @@
           <!-- importing -->
           <div v-else-if="phase === 'importing'" class="flex flex-col gap-3 py-4">
             <div class="text-[14px] text-text-secondary flex items-center gap-2">
-              <i class="i-lucide-loader-circle animate-spin text-primary" />正在导入 {{ doneCount }} / {{ blocks.length }}…
+              <i class="i-lucide-loader-circle animate-spin text-primary" />正在批量导入 {{ validTotal }} 题…
             </div>
-            <div class="progress-track"><div class="progress-inner" :style="{ width: Math.round((doneCount / blocks.length) * 100) + '%' }"></div></div>
           </div>
 
           <!-- result -->
           <div v-else class="flex flex-col gap-3">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="badge badge-ok">成功 {{ successCount }} 题</span>
+              <span v-if="dupCount" class="badge badge-type">跳过重复 {{ dupCount }} 题</span>
               <span v-if="failed.length" class="badge badge-bad">失败 {{ failed.length }} 题</span>
+            </div>
+            <div v-if="dups.length" class="overflow-y-auto flex flex-col gap-1.5 max-h-[120px]">
+              <div v-for="(d, i) in dups" :key="'d'+i" class="px-3 py-2 border border-line bg-bg-accent rounded-[8px] text-[12px] text-muted break-all">
+                #{{ d.index }} 已跳过（{{ d.reason }})
+              </div>
             </div>
             <div v-if="failed.length" class="overflow-y-auto flex flex-col gap-1.5 max-h-[200px]">
               <div v-for="(f, i) in failed" :key="i" class="px-3 py-2 border border-[#e3c9c5] bg-danger-bg rounded-[8px] text-[12px] text-text-secondary break-all">
@@ -83,6 +101,9 @@
               </div>
             </div>
             <div class="flex justify-end gap-2.5">
+              <button v-if="insertedIds.length" type="button" class="btn btn-danger" :disabled="undoing" @click="onUndo">
+                <i class="i-lucide-rotate-ccw" />{{ undoing ? '撤销中…' : `撤销本次导入（${insertedIds.length} 题）` }}
+              </button>
               <button type="button" class="btn btn-primary" @click="onFinish">完成</button>
             </div>
           </div>
@@ -97,10 +118,11 @@ import { ref } from 'vue'
 import { parseTemplateFile } from '@/utils/parseTemplate.js'
 import { TEMPLATE_SAMPLE } from '@/utils/parseTemplate.js'
 import { stripMarkdown } from '@/utils/stripMarkdown.js'
-import { saveTextFile } from '@/api/practice.js'
+import { saveTextFile, importQuestions } from '@/api/practice.js'
 import { validateQuestion } from '@/utils/validate.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
-import { create } from '@/api/questions.js'
+import { remove } from '@/api/questions.js'
+import QuestionPreview from '@/components/QuestionPreview.vue'
 import { toast, confirmDialog } from '@/stores/ui.js'
 import { openPath } from '@tauri-apps/plugin-opener'
 
@@ -115,12 +137,18 @@ const phase = ref('pick') // pick | preview | importing | result
 const fileEl = ref(null)
 const fileName = ref('')
 const fileError = ref('')
-const blocks = ref([]) // [{index,type,typeLabel,stemText,question,error}]
+const blocks = ref([]) // [{index,type,typeLabel,stemText,raw,startLine,question,error}]
 const okCount = ref(0)
 const failCount = ref(0)
-const doneCount = ref(0)
+const openIdx = ref(null)
+const validTotal = ref(0)
 const successCount = ref(0)
+const dupCount = ref(0)
+const dups = ref([])
 const failed = ref([])
+const insertedIds = ref([])
+const batchId = ref('')
+const undoing = ref(false)
 
 function reset() {
   phase.value = 'pick'
@@ -129,9 +157,15 @@ function reset() {
   blocks.value = []
   okCount.value = 0
   failCount.value = 0
-  doneCount.value = 0
+  openIdx.value = null
+  validTotal.value = 0
   successCount.value = 0
+  dupCount.value = 0
+  dups.value = []
   failed.value = []
+  insertedIds.value = []
+  batchId.value = ''
+  undoing.value = false
   if (fileEl.value) fileEl.value.value = ''
 }
 
@@ -237,26 +271,68 @@ async function onImport() {
   const valids = blocks.value.filter((b) => !b.error && b.question)
   if (!valids.length) return
   phase.value = 'importing'
-  doneCount.value = 0
+  validTotal.value = valids.length
   successCount.value = 0
+  dupCount.value = 0
+  dups.value = []
   failed.value = []
-  for (const b of valids) {
-    try {
+  insertedIds.value = []
+  try {
+    // 前端归一化 + 纯文本聚合，后端单命令事务批量入库（含库内判重）
+    const items = valids.map((b) => {
       const q = JSON.parse(JSON.stringify(b.question))
       delete q.id
-      q.bank_id = props.bankId
       normalizeQuestion(q)
       q.plain_text = getAggregatedPlainText(q)
-      await create(q)
-      successCount.value++
-    } catch (err) {
-      console.error(err)
-      failed.value.push({ stem: `#${b.index} ${b.stemText.slice(0, 40)}`, reason: err?.message || String(err) })
-    } finally {
-      doneCount.value++
+      return { q, index: b.index, stemText: b.stemText }
+    })
+    const data = await importQuestions(items.map((x) => x.q), props.bankId)
+    batchId.value = data?.batch_id || ''
+    for (const r of data?.items || []) {
+      const src = items[r.index - 1]
+      if (r.status === 'inserted') {
+        successCount.value++
+        if (r.id) insertedIds.value.push(r.id)
+      } else if (r.status === 'duplicate') {
+        dupCount.value++
+        dups.value.push({ index: r.index, reason: r.message || '重复' })
+      } else {
+        failed.value.push({ stem: `#${r.index} ${(src?.stemText || '').slice(0, 40)}`, reason: r.message || '未知错误' })
+      }
     }
+  } catch (err) {
+    console.error(err)
+    failed.value.push({ stem: '批量导入', reason: err?.message || String(err) })
   }
   phase.value = 'result'
+}
+
+async function onUndo() {
+  if (!insertedIds.value.length || undoing.value) return
+  const ok = await confirmDialog({
+    title: '撤销本次导入',
+    message: `确定删除本次导入的 ${insertedIds.value.length} 道试题？此操作不可撤销。`,
+    okText: '撤销导入',
+    danger: true
+  })
+  if (!ok) return
+  undoing.value = true
+  let fail = 0
+  try {
+    for (const id of insertedIds.value) {
+      try {
+        await remove(id)
+      } catch (e) {
+        fail++
+        console.error('undo failed', id, e)
+      }
+    }
+    toast(fail ? `撤销完成，${fail} 道失败` : `已撤销本次导入（${insertedIds.value.length} 题）`, fail ? 'error' : 'success')
+  } finally {
+    undoing.value = false
+  }
+  reset()
+  emit('done')
 }
 
 function onFinish() {

@@ -11,7 +11,7 @@
  *   问答用 参考答案：（必填，可多行）；填空占位 ___/( )，答案空之间用 ；分隔、空内多解用 , 分隔；
  *   材料正文后子题格式：1. 【单选】子题干……（子题标记必填，不支持嵌套材料）
  *
- * 对外：parseTemplateFile(text) -> { blocks: [{ index, type, typeLabel, stemText, question|null, error|null }] }
+ * 对外：parseTemplateFile(text) -> { blocks: [{ index, type, typeLabel, stemText, raw, startLine, question|null, error|null }] }
  * question 为可直接 normalize → plain_text → bank_id → create 的形状（id 由后端生成）。
  */
 
@@ -285,8 +285,10 @@ export function parseTemplateFile(text) {
   const blocks = rawBlocks.map((b, i) => {
     const index = i + 1
     const ctx = `第 ${index} 块`
+    const raw = [(b.head ? b.head[0] : ''), ...b.lines].join('\n')
+    const base = { index, raw, startLine: b.startLine }
     if (!b.head) {
-      return { index, type: '', typeLabel: '', stemText: '', question: null, error: `${ctx}：缺少题型标记（须以【单选/多选/判断/填空/问答/材料】开头）` }
+      return { ...base, type: '', typeLabel: '', stemText: '', question: null, error: `${ctx}：缺少题型标记（须以【单选/多选/判断/填空/问答/材料】开头）` }
     }
     const typeLabel = b.head[1]
     const type = TYPE_MAP[typeLabel]
@@ -294,12 +296,12 @@ export function parseTemplateFile(text) {
     const body = b.head[2] ? [b.head[2], ...b.lines] : b.lines
     if (type === 'material') {
       const r = buildMaterial(body, ctx)
-      if (r.error) return { index, type, typeLabel, stemText: '', question: null, error: r.error }
-      return { index, type, typeLabel, stemText: r.stemText, question: r.question, error: null }
+      if (r.error) return { ...base, type, typeLabel, stemText: '', question: null, error: r.error }
+      return { ...base, type, typeLabel, stemText: r.stemText, question: r.question, error: null }
     }
     const r = buildSingle(type, typeLabel, body, ctx)
-    if (r.error) return { index, type, typeLabel, stemText: '', question: null, error: r.error }
-    return { index, type, typeLabel, stemText: r.stemText, question: r.question, error: null }
+    if (r.error) return { ...base, type, typeLabel, stemText: '', question: null, error: r.error }
+    return { ...base, type, typeLabel, stemText: r.stemText, question: r.question, error: null }
   })
   return { blocks }
 }

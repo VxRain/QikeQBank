@@ -1375,6 +1375,81 @@ fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) -> Result<V
     Ok(json!({ "days": days, "by_type": by_type }))
 }
 
+/// 批量导入：一次调用入库多题（文件导入用）。逐条独立成功/跳过/失败，可重入（库内 plain_text 完全一致视为重复跳过）。
+/// 返回 {batch_id, items:[{index,status:'inserted'|'duplicate'|'error',id?,message?}]}
+#[tauri::command]
+pub fn import_questions(
+    items: Vec<Value>,
+    bank_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(import_questions_impl(&conn, items, bank_id)?)
+}
+
+fn import_questions_impl(
+    conn: &Connection,
+    items: Vec<Value>,
+    bank_id: Option<String>,
+) -> Result<Value, String> {
+    let bank_id = bank_id.filter(|s| !s.is_empty());
+    let bank = match bank_id {
+        Some(b) => {
+            let exists: bool = conn
+                .query_row("SELECT 1 FROM banks WHERE id = ?1", params![b], |_| Ok(true))
+                .optional()
+                .map_err(to_str)?
+                .unwrap_or(false);
+            if !exists {
+                return Err(format!("bank not found: {b}"));
+            }
+            b
+        }
+        None => resolve_default_bank(conn)?,
+    };
+    let batch_id = uuid::Uuid::now_v7().to_string();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (i, mut q) in items.into_iter().enumerate() {
+        let index = (i + 1) as i64;
+        if !q.is_object() {
+            out.push(json!({ "index": index, "status": "error", "message": "item must be an object" }));
+            continue;
+        }
+        if let Some(m) = q.as_object_mut() {
+            m.remove("id");
+        }
+        q["bank_id"] = json!(bank);
+        q["plain_text"] = json!(aggregated_plain_text(&q));
+        let pt = q.get("plain_text").and_then(Value::as_str).unwrap_or("").to_string();
+        if !seen.insert(pt.clone()) {
+            out.push(json!({ "index": index, "status": "duplicate", "message": "与本批次内重复" }));
+            continue;
+        }
+        let dup: bool = conn
+            .query_row(
+                "SELECT 1 FROM questions WHERE bank_id = ?1 AND plain_text = ?2",
+                params![bank, pt],
+                |_| Ok(true),
+            )
+            .optional()
+            .map_err(to_str)?
+            .unwrap_or(false);
+        if dup {
+            out.push(json!({ "index": index, "status": "duplicate", "message": "题库中已存在相同题目" }));
+            continue;
+        }
+        match questions_create_impl(conn, q) {
+            Ok(stored) => out.push(json!({
+                "index": index, "status": "inserted",
+                "id": stored.get("id").cloned().unwrap_or(Value::Null),
+            })),
+            Err(e) => out.push(json!({ "index": index, "status": "error", "message": e })),
+        }
+    }
+    Ok(json!({ "batch_id": batch_id, "items": out }))
+}
+
 #[tauri::command]
 pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
@@ -1866,6 +1941,34 @@ mod tests {
         assert_eq!(v["by_type"][0]["type"], "single");
         assert_eq!(v["by_type"][0]["count"], 3);
         assert_eq!(v["by_type"][0]["avg_ms"], 5667);
+    }
+
+    #[test]
+    fn import_questions_batches_with_dedup() {
+        // 批量导入：正常入库 + 库内重复跳过 + 本批次内重复跳过 + 非对象报错 + 未知库报错
+        let conn = test_conn();
+        let q = || {
+            let mut v = sample_question();
+            v.as_object_mut().unwrap().remove("id");
+            v
+        };
+        let mut q1 = q();
+        q1["stem"] = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"批量一"}]}]});
+        let mut q2 = q();
+        q2["stem"] = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"批量二"}]}]});
+        let r = import_questions_impl(&conn, vec![q1.clone(), q2.clone()], Some("bank_default".to_string())).unwrap();
+        assert_eq!(r["items"][0]["status"], "inserted");
+        assert_eq!(r["items"][1]["status"], "inserted");
+        assert!(r["batch_id"].as_str().unwrap().len() > 10);
+        // 再导同样内容 → 库内重复；同批次两个相同 → 第二个批次内重复；数字 → error
+        let r2 = import_questions_impl(&conn, vec![q1, q2.clone(), q2, json!(42)], Some("bank_default".to_string())).unwrap();
+        let st: Vec<&str> = r2["items"].as_array().unwrap().iter().map(|x| x["status"].as_str().unwrap()).collect();
+        assert_eq!(st, vec!["duplicate", "duplicate", "duplicate", "error"]);
+        // 未知库
+        assert!(import_questions_impl(&conn, vec![], Some("bank_nope".to_string())).is_err());
+        // 空 bank → 默认库
+        let r3 = import_questions_impl(&conn, vec![q()], None).unwrap();
+        assert_eq!(r3["items"][0]["status"], "inserted");
     }
 
     #[test]
