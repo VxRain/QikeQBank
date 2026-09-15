@@ -249,9 +249,11 @@ export function persistBankFilter(page, id)
 - 设置面板加「题库」下拉：全部(值为 '') + 各库；默认全部（按上规则记忆）。
 - 组卷时 `practicePool({limit,type,bankId})`；其余逻辑不动。
 - 错题重练：`/practice?retry=1` + sessionStorage['qbank.retryIds'] → `practicePool({ids})` 直达作答；另修复本轮结束页「错题重做」未切回作答页的问题。
+- 键盘流：未判分 A–F 选题 / M 切材料 / 简答看答案后 1-2 自评 / Enter 提交；判分后 Enter 下一题，Esc 取消自动下一题；输入区/组词/弹窗/修饰键不劫持。
 
 ### Review.vue（W3b）
 - 顶部设置同 Practice（题库下拉）；`reviewDue({limit:20, bankId})`；其余不动。
+- 键盘流：未判分 A–F 选题 / M 切材料 / Enter 判分；判分后 1-4 自评（Enter 无动作）；规则同 Practice。
 
 ### Home.vue（W3c）
 - 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。

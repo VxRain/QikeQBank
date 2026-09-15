@@ -30,6 +30,9 @@
         >
           <i class="i-lucide-play" />{{ dueLoading ? '正在拉取复习题目…' : '开始复习' }}
         </button>
+        <div class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
+          <i class="i-lucide-keyboard" />键盘：A–F 选题，Enter 判分，判分后 1–4 自评
+        </div>
       </div>
     </section>
 
@@ -39,7 +42,7 @@
     </section>
 
     <!-- 作答卡片 -->
-    <section v-else-if="phase === 'card'" class="card flex flex-col gap-3.5">
+    <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card flex flex-col gap-3.5" @keydown="onCardKeydown">
       <div class="flex items-center justify-between gap-3">
         <span class="badge badge-type">{{ curBadge }}</span>
         <span class="text-[13px] text-muted font-500">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
@@ -51,14 +54,14 @@
           <span class="text-[12px] font-600 text-muted flex items-center gap-1.5 min-w-0">
             <i class="i-lucide-book-open shrink-0" />材料 · 共 {{ cur.childCount }} 问 · 第 {{ cur.childIdx + 1 }} 问
           </span>
-          <button type="button" class="btn btn-small shrink-0" @click="materialOpen = !materialOpen">
+          <button type="button" class="btn btn-small shrink-0" title="M 展开/收起" @click="materialOpen = !materialOpen">
             <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}
           </button>
         </div>
         <div v-if="materialOpen" class="text-[13px] text-text-secondary pt-2" v-html="materialStemHtml"></div>
       </div>
 
-      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput"></div>
+      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput" @keydown="onStemKeydown"></div>
 
       <!-- 选择类 -->
       <div v-if="isChoice" class="flex flex-col gap-2">
@@ -67,6 +70,7 @@
           :key="o.id"
           type="button"
           class="option-btn"
+          title="空格/A–F 选择，回车判分"
           :class="singlePick === o.id && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
           @click="singlePick = o.id"
         >
@@ -80,6 +84,7 @@
           :key="o.id"
           type="button"
           class="option-btn"
+          title="空格/A–F 选择，回车判分"
           :class="multiPick.includes(o.id) && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
           @click="toggleMulti(o.id)"
         >
@@ -110,7 +115,7 @@
       </div>
 
       <!-- 判分结果（判分前绝不展示答案/解析） -->
-      <div v-if="graded" class="border-t border-line pt-4 flex flex-col gap-3">
+      <div v-if="graded" ref="resultRef" tabindex="-1" class="border-t border-line pt-4 flex flex-col gap-3">
         <div class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px]" :class="gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]'">
           <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />{{ gradeResult.correct ? '回答正确' : '回答错误' }}
         </div>
@@ -136,7 +141,7 @@
 
       <!-- 四键自评：判分后(选择/填空)或查看参考答案后(简答)出现 -->
       <div v-if="canSelfGrade" class="flex items-center gap-2 flex-wrap border-t border-line pt-3.5">
-        <span class="text-[13px] text-muted font-600">自评记忆效果：</span>
+        <span class="text-[13px] text-muted font-600">自评记忆效果：<span class="font-400 text-muted-light">（键盘 1–4）</span></span>
         <button type="button" class="btn btn-danger" :disabled="submitting" @click="reviewGrade('again')"><i class="i-lucide-rotate-ccw" />忘记</button>
         <button type="button" class="btn border-[#d9c4a3] text-[#a06a2a] bg-[#f0e6d6] hover:bg-[#f0e6d6] hover:border-[#c4a87f]" :disabled="submitting" @click="reviewGrade('hard')"><i class="i-lucide-frown" />困难</button>
         <button type="button" class="btn border-[#bcd9c4] text-success bg-success-bg hover:bg-success-bg hover:border-[#9bc4ad]" :disabled="submitting" @click="reviewGrade('good')"><i class="i-lucide-meh" />良好</button>
@@ -192,10 +197,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { ui } from '@/stores/ui.js'
 
 const TYPE_LABELS = {
   single: '单选题', multi: '多选题', judge: '判断题', fill: '填空题', short: '简答题', material: '材料题'
@@ -219,6 +225,20 @@ const gradeResult = ref(null)
 const startedAt = ref(0)
 const materialOpen = ref(true)
 const submitting = ref(false)
+
+// 焦点锚点：切题/判分后把焦点送进作答区，Tab 不再掉回导航栏
+const cardRef = ref(null)
+const resultRef = ref(null)
+function focusCard() {
+  nextTick(() => {
+    if (cardRef.value && cardRef.value.focus) cardRef.value.focus({ preventScroll: true })
+  })
+}
+function focusResult() {
+  nextTick(() => {
+    if (resultRef.value && resultRef.value.focus) resultRef.value.focus({ preventScroll: true })
+  })
+}
 
 // 作答状态
 const singlePick = ref('')
@@ -298,6 +318,70 @@ function onStemInput(e) {
   const b = e.target && e.target.dataset && e.target.dataset.blank
   if (b) fillValues[b] = e.target.value
 }
+// 卡片级键盘流（状态机互斥，同一键不在两套状态同时有效）：
+// 未判分：A–F 选择类选题（单选设值/多选切换）、M 切材料、Enter 判分；
+// 判分后：1 忘记 / 2 困难 / 3 良好 / 4 简单（自评并自动下一题）；Enter 无动作。
+// 输入区（文本域/输入框/下拉/编辑器）/组词中/弹窗开着/带修饰键，一律不劫持。
+function onCardKeydown(e) {
+  if (e.isComposing || e.keyCode === 229) return
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  if (ui.dialog) return
+  if (phase.value !== 'card') return
+  const t = e.target
+  const isFillInput = !!(t && t.classList && t.classList.contains('qb-fill-input'))
+  const inField = isFillInput || !!(t && t.closest && t.closest('textarea, select, input, [contenteditable], .tiptap, .ProseMirror'))
+  if (e.key === 'Enter') {
+    if (isFillInput) return // 填空走 stem 跳空逻辑
+    if (inField) return
+    if (graded.value) return // 复习判分后 Enter 无动作，坚持显式自评
+    if (t && t.closest && t.closest('button.option-btn')) {
+      // 选项按钮上回车：阻止原生切换，只判分（选择用空格/字母键/鼠标）
+      e.preventDefault()
+      if (!canSubmit.value) return
+      submit()
+      return
+    }
+    if (!canSubmit.value) return
+    e.preventDefault()
+    submit()
+    return
+  }
+  if (inField) return
+  const k = typeof e.key === 'string' ? e.key.toUpperCase() : ''
+  if (k === 'M' && cur.value?.isChild) {
+    materialOpen.value = !materialOpen.value
+    return
+  }
+  if (!graded.value && /^[A-F]$/.test(k)) {
+    const q = cur.value?.q
+    if (q && ['single', 'judge', 'multi'].includes(q.type)) {
+      const opt = (q.options || [])[k.charCodeAt(0) - 65]
+      if (opt) {
+        if (q.type === 'multi') toggleMulti(opt.id)
+        else singlePick.value = opt.id
+      }
+    }
+    return
+  }
+  if (/^[1-4]$/.test(k) && canSelfGrade.value) {
+    reviewGrade({ 1: 'again', 2: 'hard', 3: 'good', 4: 'easy' }[k])
+  }
+}
+// 填空回车：跳下一空并全选（直接覆盖写）；末空回车直接判分
+function onStemKeydown(e) {
+  if (e.key !== 'Enter') return
+  const t = e.target
+  if (!t || !t.classList || !t.classList.contains('qb-fill-input')) return
+  e.preventDefault()
+  const inputs = [...e.currentTarget.querySelectorAll('.qb-fill-input')]
+  const i = inputs.indexOf(t)
+  if (i >= 0 && i < inputs.length - 1) {
+    inputs[i + 1].focus()
+    if (inputs[i + 1].select) inputs[i + 1].select()
+  } else {
+    submit()
+  }
+}
 function toggleMulti(id) {
   const i = multiPick.value.indexOf(id)
   if (i >= 0) multiPick.value.splice(i, 1)
@@ -372,6 +456,7 @@ async function start() {
     resetAnswer()
     startedAt.value = Date.now()
     phase.value = 'card'
+    focusCard()
   } catch (e) {
     console.error(e)
     phase.value = 'due'
@@ -417,6 +502,7 @@ function submit() {
   error.value = ''
   graded.value = true
   gradeResult.value = res
+  focusResult()
 }
 
 function buildDetail(it, g, autoCorrect, elapsed) {
@@ -466,6 +552,7 @@ function next() {
     curIdx.value++
     resetAnswer()
     startedAt.value = Date.now()
+    focusCard()
   } else {
     phase.value = 'done'
     refreshDue().catch(() => {})

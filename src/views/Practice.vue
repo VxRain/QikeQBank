@@ -57,11 +57,14 @@
         >
           <i class="i-lucide-play" />{{ fetching ? '正在抽题…' : '开始刷题' }}
         </button>
+        <div class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
+          <i class="i-lucide-keyboard" />键盘：A–F 选题，Enter 提交，M 切换材料
+        </div>
       </div>
     </section>
 
     <!-- 作答卡片 -->
-    <section v-else-if="phase === 'card'" class="card flex flex-col gap-3.5">
+    <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card flex flex-col gap-3.5" @keydown="onCardKeydown">
       <div class="flex items-center justify-between gap-3">
         <span class="badge badge-type">{{ curBadge }}</span>
         <span class="text-[13px] text-muted font-500">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
@@ -73,14 +76,14 @@
           <span class="text-[12px] font-600 text-muted flex items-center gap-1.5 min-w-0">
             <i class="i-lucide-book-open shrink-0" />材料 · 共 {{ cur.childCount }} 问 · 第 {{ cur.childIdx + 1 }} 问
           </span>
-          <button type="button" class="btn btn-small shrink-0" @click="materialOpen = !materialOpen">
+          <button type="button" class="btn btn-small shrink-0" title="M 展开/收起" @click="materialOpen = !materialOpen">
             <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}
           </button>
         </div>
         <div v-if="materialOpen" class="text-[13px] text-text-secondary pt-2" v-html="materialStemHtml"></div>
       </div>
 
-      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput"></div>
+      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput" @keydown="onStemKeydown"></div>
 
       <!-- 选择类 -->
       <div v-if="isChoice" class="flex flex-col gap-2">
@@ -89,6 +92,7 @@
           :key="o.id"
           type="button"
           class="option-btn"
+          title="空格/A–F 选择，回车提交"
           :class="singlePick === o.id && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
           @click="singlePick = o.id"
         >
@@ -102,6 +106,7 @@
           :key="o.id"
           type="button"
           class="option-btn"
+          title="空格/A–F 选择，回车提交"
           :class="multiPick.includes(o.id) && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
           @click="toggleMulti(o.id)"
         >
@@ -123,7 +128,7 @@
           <div v-html="refHtml"></div>
         </div>
         <div v-if="showRef && !graded" class="flex items-center gap-2.5 flex-wrap">
-          <span class="text-[13px] text-muted">这道题你会吗？</span>
+          <span class="text-[13px] text-muted">这道题你会吗？<span class="text-muted-light">（键盘 1 不会 · 2 会）</span></span>
           <button type="button" class="btn btn-danger" @click="shortSubmit('不会')"><i class="i-lucide-x" />不会</button>
           <button type="button" class="btn btn-primary" @click="shortSubmit('会')"><i class="i-lucide-check" />会</button>
         </div>
@@ -173,7 +178,7 @@
         <div v-if="recordError" class="text-[12px] text-danger flex items-center gap-1"><i class="i-lucide-triangle-alert" />记录失败：{{ recordError }}</div>
 
         <div class="flex justify-end">
-          <button type="button" class="btn btn-primary btn-big" @click="next"><i class="i-lucide-arrow-right" />下一题</button>
+          <button ref="nextBtnRef" type="button" class="btn btn-primary btn-big" @click="next"><i class="i-lucide-arrow-right" />下一题</button>
         </div>
       </div>
     </section>
@@ -223,12 +228,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
+import { ui } from '@/stores/ui.js'
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
 const TYPE_LABELS = {
@@ -260,6 +266,20 @@ const graded = ref(false)
 const gradeResult = ref(null)
 const startedAt = ref(0)
 const materialOpen = ref(true)
+
+// 焦点锚点：切题/判分后把焦点送进作答区，Tab 不再掉回导航栏
+const cardRef = ref(null)
+const nextBtnRef = ref(null)
+function focusCard() {
+  nextTick(() => {
+    if (cardRef.value && cardRef.value.focus) cardRef.value.focus({ preventScroll: true })
+  })
+}
+function focusNextBtn() {
+  nextTick(() => {
+    if (nextBtnRef.value && nextBtnRef.value.focus) nextBtnRef.value.focus({ preventScroll: true })
+  })
+}
 
 // 答对自动下一题（设置 autoNextOnCorrect 开启时，时长取 autoNextDelayMs）
 // 计时（setTimeout）与进度条（CSS 动画）分离：条只负责展示，取消/翻页只停计时器
@@ -357,6 +377,81 @@ function onStemInput(e) {
   const b = e.target && e.target.dataset && e.target.dataset.blank
   if (b) fillValues[b] = e.target.value
 }
+// 卡片级键盘流（状态机互斥，同一键不在两套状态同时有效）：
+// 未判分：A–F 选择类选题（单选设值/多选切换）、M 切材料、简答看答案后 1/2 自评、Enter 提交；
+// 判分后：Enter 下一题；Esc 取消自动下一题。
+// 输入区（文本域/输入框/下拉/编辑器）/组词中/弹窗开着/带修饰键，一律不劫持。
+function onCardKeydown(e) {
+  if (e.isComposing || e.keyCode === 229) return
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  if (ui.dialog) return
+  if (phase.value !== 'card') return
+  const t = e.target
+  const isFillInput = !!(t && t.classList && t.classList.contains('qb-fill-input'))
+  const inField = isFillInput || !!(t && t.closest && t.closest('textarea, select, input, [contenteditable], .tiptap, .ProseMirror'))
+  if (e.key === 'Escape') {
+    if (autoNextPending) {
+      e.preventDefault()
+      cancelAutoNext()
+    }
+    return
+  }
+  if (e.key === 'Enter') {
+    if (isFillInput) return // 填空走 stem 跳空逻辑
+    if (inField) return
+    if (graded.value) {
+      e.preventDefault()
+      next()
+      return
+    }
+    if (t && t.closest && t.closest('button.option-btn')) {
+      // 选项按钮上回车：阻止原生切换，只提交（选择用空格/字母键/鼠标）
+      e.preventDefault()
+      if (!canSubmit.value) return
+      submit()
+      return
+    }
+    if (!canSubmit.value) return
+    e.preventDefault()
+    submit()
+    return
+  }
+  if (inField || graded.value) return
+  const k = typeof e.key === 'string' ? e.key.toUpperCase() : ''
+  if (k === 'M' && cur.value?.isChild) {
+    materialOpen.value = !materialOpen.value
+    return
+  }
+  if (/^[A-F]$/.test(k)) {
+    const q = cur.value?.q
+    if (q && ['single', 'judge', 'multi'].includes(q.type)) {
+      const opt = (q.options || [])[k.charCodeAt(0) - 65]
+      if (opt) {
+        if (q.type === 'multi') toggleMulti(opt.id)
+        else singlePick.value = opt.id
+      }
+    }
+    return
+  }
+  if ((k === '1' || k === '2') && isShort.value && showRef.value) {
+    shortSubmit(k === '1' ? '不会' : '会')
+  }
+}
+// 填空回车：跳下一空并全选（直接覆盖写）；末空回车直接提交
+function onStemKeydown(e) {
+  if (e.key !== 'Enter') return
+  const t = e.target
+  if (!t || !t.classList || !t.classList.contains('qb-fill-input')) return
+  e.preventDefault()
+  const inputs = [...e.currentTarget.querySelectorAll('.qb-fill-input')]
+  const i = inputs.indexOf(t)
+  if (i >= 0 && i < inputs.length - 1) {
+    inputs[i + 1].focus()
+    if (inputs[i + 1].select) inputs[i + 1].select()
+  } else {
+    submit()
+  }
+}
 function toggleMulti(id) {
   const i = multiPick.value.indexOf(id)
   if (i >= 0) multiPick.value.splice(i, 1)
@@ -449,6 +544,7 @@ async function start() {
     resetAnswer()
     startedAt.value = Date.now()
     phase.value = 'card'
+    focusCard()
   } catch (e) {
     console.error(e)
     error.value = '抽题失败：' + (e?.message || e)
@@ -507,6 +603,7 @@ function buildDetail(it, res) {
 function commit(it, grade, elapsed, res) {
   graded.value = true
   gradeResult.value = res
+  focusNextBtn()
   round.value.correct += res.correct ? 1 : 0
   round.value.ms += elapsed
   if (!res.correct) round.value.wrong.push(it)
@@ -560,6 +657,7 @@ function next() {
     curIdx.value++
     resetAnswer()
     startedAt.value = Date.now()
+    focusCard()
   } else {
     rounds.value.push({ ...round.value, rate: round.value.total ? Math.round((round.value.correct / round.value.total) * 100) : 0 })
     phase.value = 'done'
@@ -575,6 +673,7 @@ function startRedo() {
   resetAnswer()
   startedAt.value = Date.now()
   phase.value = 'card'
+  focusCard()
 }
 
 // 错题本重练：按指定 id 组卷，跳过 setup 直达作答
@@ -594,6 +693,7 @@ async function startFromIds(ids) {
     resetAnswer()
     startedAt.value = Date.now()
     phase.value = 'card'
+    focusCard()
   } catch (e) {
     console.error(e)
     error.value = '抽题失败：' + (e?.message || e)
