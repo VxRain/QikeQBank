@@ -32,7 +32,8 @@ export async function wrongList({ limit = 50, offset = 0, bankId, type = '', lea
 }
 
 export async function wrongDismiss(questionId) {
-  const res = await cmd('wrong_dismiss', { question_id: questionId })
+  // 注意：顶层命令参数必须 camelCase（#[command] 宏默认转驼峰查键）；结构体字段才按原名
+  const res = await cmd('wrong_dismiss', { questionId })
   return res?.data
 }
 

@@ -187,7 +187,7 @@ practice 映射：correct=true→good / false→again。`correct` 落地 = grade
 ## 7. 前端模块契约
 
 ### api/bridge.js（不变）
-`cmd(name, args)` 封装 invoke。
+`cmd(name, args)` 封装 invoke。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。
 
 ### api/banks.js（W2 新建）
 ```js
