@@ -12,11 +12,28 @@
             <i class="i-lucide-file-up text-primary" />导入试题文件
           </h3>
           <p class="m-0 mb-4 text-[12px] text-muted">
-            目标题库：<b class="text-text">{{ bankName }}</b> · 支持 .txt / .md（模板）、.xlsx 表格与 .docx 文档
-            <button type="button" class="ml-2 text-primary hover:underline bg-transparent border-none cursor-pointer text-[12px] p-0" @click="downloadSample">
-              下载模板示例
-            </button>
+            目标题库：<b class="text-text">{{ bankName }}</b>
           </p>
+
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <div class="field-label !mb-0">模板示例（照着格式准备好再导入）</div>
+            <button type="button" class="btn btn-small shrink-0" @click="openDir"><i class="i-lucide-folder-open" />打开文件夹</button>
+          </div>
+          <div class="flex flex-col gap-2 mb-4">
+            <div
+              v-for="t in templates"
+              :key="t.file"
+              class="flex items-center gap-2.5 px-3 py-2 border border-line rounded-[8px] bg-bg-accent"
+            >
+              <i class="i-lucide-file-text text-primary text-[16px] shrink-0" />
+              <span class="min-w-0 flex-1">
+                <span class="block text-[13px] font-600 text-text">{{ t.title }}</span>
+                <span class="block text-[12px] text-muted leading-[1.5]">{{ t.desc }}</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="field-label">从文件导入</div>
 
           <!-- pick -->
           <div v-if="phase === 'pick'">
@@ -123,15 +140,35 @@ import { parseSheetRows } from '@/utils/parseSheet.js'
 import { parseDocxFile } from '@/utils/parseDocxTemplate.js'
 import * as XLSX from 'xlsx'
 import mammoth from 'mammoth'
-import { TEMPLATE_SAMPLE } from '@/utils/parseTemplate.js'
 import { stripMarkdown } from '@/utils/stripMarkdown.js'
-import { saveTextFile, importQuestions } from '@/api/practice.js'
+import { openTemplatesDir as openTemplatesDirApi, importQuestions } from '@/api/practice.js'
 import { validateQuestion } from '@/utils/validate.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { remove } from '@/api/questions.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { toast, confirmDialog } from '@/stores/ui.js'
 import { openPath } from '@tauri-apps/plugin-opener'
+
+const templates = [
+  { file: 'MD模板.md', title: 'MD模板.md', desc: '记事本手写：每题以【单选/多选/判断/填空/问答/材料】开头，适合少量精编' },
+  { file: 'Excel模板.xlsx', title: 'Excel模板.xlsx', desc: '表格批量：按 ID/题目/题型/答案列填写，适合大批量' },
+  { file: 'Word模板.docx', title: 'Word模板.docx', desc: 'Word 章节题号排版，老师现有卷子直接改' },
+]
+
+async function openDir() {
+  try {
+    const res = await openTemplatesDirApi()
+    const path = res?.path || ''
+    if (!path) {
+      toast('打开失败：未返回路径', 'error')
+      return
+    }
+    await openPath(path)
+  } catch (err) {
+    console.error(err)
+    toast('打开文件夹失败：' + (err?.message || err), 'error')
+  }
+}
 
 const props = defineProps({
   bankId: { type: String, required: true },
@@ -182,46 +219,6 @@ function onClose() {
   if (phase.value === 'importing') return
   reset()
   emit('close')
-}
-
-async function downloadSample() {
-  // Tauri 真机：blob <a download> 在 WebView 里无默认保存处理，走后端落盘返 path；
-  // 无后端环境（浏览器 dev）：回退前端 blob 下载
-  try {
-    const res = await saveTextFile(TEMPLATE_SAMPLE, '试题导入模板.md')
-    const path = res?.path || ''
-    const ok = await confirmDialog({
-      title: '模板已保存',
-      message: `${path}\n是否打开所在文件夹？`,
-      okText: '打开文件夹',
-      cancelText: '知道了',
-    })
-    if (ok && path) {
-      try {
-        await openPath(path.replace(/[/\\][^/\\]+$/, ''))
-      } catch (err) {
-        console.error(err)
-        toast('打开文件夹失败：' + (err?.message || err), 'error')
-      }
-    }
-    return
-  } catch (e) {
-    console.warn('save_text_file 不可用，回退 blob 下载', e)
-  }
-  try {
-    const blob = new Blob([TEMPLATE_SAMPLE], { type: 'text/markdown;charset=utf-8' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = '试题导入模板.md'
-    // 必须挂载到 DOM 再点：未挂载的程序化 click 在 WebView 里会被吞掉
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000)
-  } catch (err) {
-    console.error(err)
-    toast('模板下载失败：' + (err?.message || err), 'error')
-  }
 }
 
 async function onFile(e) {

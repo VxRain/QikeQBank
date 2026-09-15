@@ -18,6 +18,8 @@ pub fn run() {
         .setup(|app| {
             // ensure DB schema exists before any command can be invoked
             db::ensure_schema(app.handle())?;
+            // 补发缺失的导入模板示例（不覆盖用户已改文件）
+            db::ensure_template_files(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -39,6 +41,7 @@ pub fn run() {
             db::records_overview,
             db::export_dbjson,
             db::save_text_file,
+            db::open_templates_dir,
             db::import_dbjson,
             db::import_questions
         ])

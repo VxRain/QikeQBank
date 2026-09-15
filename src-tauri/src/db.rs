@@ -1602,6 +1602,42 @@ pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value
     ok(json!({ "path": path.to_string_lossy().to_string() }))
 }
 
+/// 导入模板示例（随包内嵌，缺失才补发，绝不覆盖用户已改过的文件）
+const TEMPLATE_FILES: &[(&str, &[u8])] = &[
+    ("MD模板.md", include_bytes!("../assets/templates/MD模板.md")),
+    ("Excel模板.xlsx", include_bytes!("../assets/templates/Excel模板.xlsx")),
+    ("Word模板.docx", include_bytes!("../assets/templates/Word模板.docx")),
+];
+
+fn export_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(to_str)?
+        .join("export"))
+}
+
+pub fn ensure_template_files(app: &AppHandle) -> Result<(), String> {
+    let dir = export_dir(app)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
+    for (name, bytes) in TEMPLATE_FILES {
+        let p = dir.join(name);
+        if !p.exists() {
+            fs::write(&p, bytes).map_err(|e| format!("write template {name} failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// 打开模板文件夹：返回 export/ path，前端 openPath 打开（模板只供查看示例）
+#[tauri::command]
+pub fn open_templates_dir(app: AppHandle) -> Result<Value, String> {
+    let dir = export_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
+    ensure_template_files(&app)?;
+    ok(json!({ "path": dir.to_string_lossy().to_string() }))
+}
+
 #[tauri::command]
 pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Result<Value, String> {
     // 通用文本落盘（导入模板下载等）：只允许纯文件名，防路径穿越；落到 export/ 目录
@@ -1969,6 +2005,14 @@ mod tests {
         // 空 bank → 默认库
         let r3 = import_questions_impl(&conn, vec![q()], None).unwrap();
         assert_eq!(r3["items"][0]["status"], "inserted");
+    }
+
+    #[test]
+    fn template_whitelist_rejects_unknown() {
+        assert!(TEMPLATE_FILES.iter().any(|(n, _)| *n == "MD模板.md"));
+        assert!(TEMPLATE_FILES.iter().any(|(n, _)| *n == "Excel模板.xlsx"));
+        assert!(TEMPLATE_FILES.iter().any(|(n, _)| *n == "Word模板.docx"));
+        assert!(!TEMPLATE_FILES.iter().any(|(n, _)| *n == "../qbank.db"));
     }
 
     #[test]

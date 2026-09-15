@@ -155,6 +155,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `record_answer` | 不变 | 不变 |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
+| `open_templates_dir` | — | 返回 export/ path（缺失模板自动从内嵌恢复），前端 openPath 打开文件夹看示例 |
 
 **导入导出（v3）**
 

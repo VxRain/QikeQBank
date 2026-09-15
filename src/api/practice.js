@@ -56,6 +56,11 @@ export async function importQuestions(items, bankId) {
   return res?.data
 }
 
+export async function openTemplatesDir() {
+  const res = await cmd('open_templates_dir', {})
+  return res?.data
+}
+
 export async function exportData() {
   const res = await cmd('export_dbjson')
   return res?.data
