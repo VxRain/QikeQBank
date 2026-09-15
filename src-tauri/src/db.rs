@@ -1432,7 +1432,8 @@ fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value
     }
     let mut records_7d = Vec::new();
     for i in 0..7 {
-        let day = start_today + Duration::days(i);
+        // 过去 6 天 + 今天（左旧右新），不是今天 + 未来 6 天
+        let day = start_today - Duration::days(6) + Duration::days(i);
         let key = day.format("%Y-%m-%d").to_string();
         let (cnt, cok) = day_map.get(&key).copied().unwrap_or((0, 0));
         records_7d.push(json!({ "date": key, "count": cnt, "correct": cok }));
@@ -2516,6 +2517,12 @@ mod tests {
         assert!(st.get("total").is_some());
         assert!(st.get("by_type").is_some());
         assert!(st.get("records_7d").is_some());
+        // 近 7 天：过去 6 天 + 今天，左旧右新
+        let days = st["records_7d"].as_array().unwrap();
+        assert_eq!(days.len(), 7);
+        let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
+        assert_eq!(days[6]["date"], json!(today));
+        assert_eq!(days[0]["date"], json!((Utc::now().date_naive() - Duration::days(6)).format("%Y-%m-%d").to_string()));
         let wrapped = ok(st).unwrap();
         assert_eq!(wrapped["success"], json!(true));
         assert!(wrapped.get("data").is_some());
