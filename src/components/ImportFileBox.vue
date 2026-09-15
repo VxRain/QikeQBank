@@ -12,7 +12,7 @@
             <i class="i-lucide-file-up text-primary" />导入试题文件
           </h3>
           <p class="m-0 mb-4 text-[12px] text-muted">
-            目标题库：<b class="text-text">{{ bankName }}</b> · 支持 .txt / .md（模板）与 .xlsx 表格
+            目标题库：<b class="text-text">{{ bankName }}</b> · 支持 .txt / .md（模板）、.xlsx 表格与 .docx 文档
             <button type="button" class="ml-2 text-primary hover:underline bg-transparent border-none cursor-pointer text-[12px] p-0" @click="downloadSample">
               下载模板示例
             </button>
@@ -22,9 +22,9 @@
           <div v-if="phase === 'pick'">
             <label class="flex flex-col items-center justify-center gap-2 border border-dashed border-line-strong rounded-[10px] bg-bg-accent px-4 py-8 cursor-pointer transition-[border-color,background-color] duration-150 hover:border-primary hover:bg-primary-bg">
               <i class="i-lucide-upload text-[28px] text-muted" />
-              <span class="text-[14px] font-600 text-text">点击选择 .txt / .md / .xlsx 文件</span>
-              <span class="text-[12px] text-muted">文本须按模板编写：每题以【单选/多选/判断/填空/问答/材料】开头；表格须含 ID/题目/题型/答案列</span>
-              <input ref="fileEl" type="file" accept=".txt,.md,.markdown,.text,.xlsx,.xls,.csv" class="hidden" @change="onFile" />
+              <span class="text-[14px] font-600 text-text">点击选择 .txt / .md / .xlsx / .docx 文件</span>
+              <span class="text-[12px] text-muted">文本须按模板编写：每题以【单选/多选/判断/填空/问答/材料】开头；表格须含 ID/题目/题型/答案列；文档按章节题号排版</span>
+              <input ref="fileEl" type="file" accept=".txt,.md,.markdown,.text,.xlsx,.xls,.csv,.docx" class="hidden" @change="onFile" />
             </label>
             <div v-if="fileError" class="error-box mt-3">{{ fileError }}</div>
             <div class="flex justify-end gap-2.5 mt-4">
@@ -38,6 +38,9 @@
               <span class="badge badge-ok">{{ okCount }} 块通过</span>
               <span v-if="failCount" class="badge badge-bad">{{ failCount }} 块有误</span>
               <span class="text-[12px] text-muted truncate">{{ fileName }}</span>
+            </div>
+            <div v-if="warnText" class="text-[12px] text-muted flex items-center gap-1.5 px-1">
+              <i class="i-lucide-triangle-alert" />{{ warnText }}
             </div>
             <div v-if="failCount" class="error-box">
               {{ failCount }} 块有误不会入库，可直接导入通过的部分，或改完文件重来
@@ -117,7 +120,9 @@
 import { ref } from 'vue'
 import { parseTemplateFile } from '@/utils/parseTemplate.js'
 import { parseSheetRows } from '@/utils/parseSheet.js'
+import { parseDocxFile } from '@/utils/parseDocxTemplate.js'
 import * as XLSX from 'xlsx'
+import mammoth from 'mammoth'
 import { TEMPLATE_SAMPLE } from '@/utils/parseTemplate.js'
 import { stripMarkdown } from '@/utils/stripMarkdown.js'
 import { saveTextFile, importQuestions } from '@/api/practice.js'
@@ -140,6 +145,7 @@ const fileEl = ref(null)
 const fileName = ref('')
 const fileError = ref('')
 const blocks = ref([]) // [{index,type,typeLabel,stemText,raw,startLine,question,error}]
+const warnText = ref('')
 const okCount = ref(0)
 const failCount = ref(0)
 const openIdx = ref(null)
@@ -160,6 +166,7 @@ function reset() {
   okCount.value = 0
   failCount.value = 0
   openIdx.value = null
+  warnText.value = ''
   validTotal.value = 0
   successCount.value = 0
   dupCount.value = 0
@@ -225,7 +232,9 @@ async function onFile(e) {
   try {
     const isMd = /\.(md|markdown)$/i.test(f.name)
     const isSheet = /\.(xlsx|xls|csv)$/i.test(f.name)
+    const isDocx = /\.docx$/i.test(f.name)
     let parsed
+    let docWarnings = null
     if (isSheet) {
       // Excel：首个 sheet → 二维数组 → 表格解析（表头定位，ID 分组）
       const buf = await f.arrayBuffer()
@@ -236,6 +245,12 @@ async function onFile(e) {
         return
       }
       parsed = parseSheetRows(XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }))
+    } else if (isDocx) {
+      // Word：mammoth 转 HTML → 章节/题号状态机组装；公式图片只计数跳过
+      const buf = await f.arrayBuffer()
+      const r = await parseDocxFile({ arrayBuffer: buf }, mammoth)
+      parsed = r
+      docWarnings = r.warnings
     } else {
       const buf = await f.arrayBuffer()
       let text = ''
@@ -251,9 +266,11 @@ async function onFile(e) {
       parsed = parseTemplateFile(isMd ? stripMarkdown(text) : text)
     }
     if (!parsed.blocks.length) {
-      fileError.value = isSheet ? '表中没有任何数据行' : '未识别到任何题块：每题须以【单选/多选/判断/填空/问答/材料】开头'
+      fileError.value = isSheet ? '表中没有任何数据行' : (isDocx ? '文档中未识别到任何题目' : '未识别到任何题块：每题须以【单选/多选/判断/填空/问答/材料】开头')
       return
     }
+    warnText.value = docWarnings && (docWarnings.images + docWarnings.formulas)
+      ? `文档中公式 ${docWarnings.formulas} 处、图片 ${docWarnings.images} 张暂不支持，已跳过` : ''
     const list = parsed.blocks
     // 补默认分值/难度（与 PasteBox 一致），validate 需临时 id
     for (const b of list) {

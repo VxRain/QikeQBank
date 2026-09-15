@@ -42,13 +42,16 @@ const cell = (row, i) => {
   return String(v).replace(/\r\n/g, '\n').trim()
 }
 const numOr = (raw, fb, min, max) => {
-  const n = Number(String(raw ?? '').trim())
+  const s = String(raw ?? '').trim()
+  if (!s) return fb
+  const n = Number(s)
   if (!Number.isFinite(n)) return fb
   return Math.min(max, Math.max(min, n))
 }
 const stripSubNum = (s) => String(s || '').replace(/^[(（]?\d{1,3}[)）]?[.、)]?\s*/, '')
+export { stripSubNum }
 
-function applyScoreDiff(q, typeKey, scoreRaw, diffRaw) {
+export function applyScoreDiff(q, typeKey, scoreRaw, diffRaw) {
   if (typeKey === 'judge') {
     if (!q.score) q.score = numOr(scoreRaw, 2, 0.5, 1000)
   } else if (!q.score) {
@@ -57,7 +60,7 @@ function applyScoreDiff(q, typeKey, scoreRaw, diffRaw) {
   if (!q.difficulty) q.difficulty = numOr(diffRaw, 2, 1, 5)
 }
 
-function buildOne({ type, typeLabel, stemText, optTexts, answerRaw, analysisRaw }, ctx) {
+export function buildOne({ type, typeLabel, stemText, optTexts, answerRaw, analysisRaw }, ctx) {
   const err = (msg) => `${ctx}：${msg}`
   if (!stemText) return { error: err(`【${typeLabel}】题干为空`) }
   const analysis = analysisRaw ? textToDoc(analysisRaw) : null

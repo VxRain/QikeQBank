@@ -29,7 +29,7 @@ const RE_TYPE_HEAD = /^\s*【\s*(单选|多选|判断|填空|问答|材料)[题�
 const RE_SEP_LINE = /^\s*(-{3,}|\*{3,})\s*$/
 const RE_OPTION = /^\s*(?:[(（]\s*([A-Za-z])\s*[)）]|([A-Za-z])\s*[.、)）．:：])\s*(\S.*)$/
 // RE_OPTION 捕获组：m[1] = 括号式字母，m[2] = 分隔符式字母，m[3] = 选项正文
-function optionMatch(ln) {
+export function optionMatch(ln) {
   const m = RE_OPTION.exec(ln)
   if (!m) return null
   return { letter: (m[1] || m[2]).toUpperCase(), text: m[3].trim() }
@@ -38,7 +38,7 @@ const RE_ANSWER = /^\s*答案\s*[:：]\s*(.*)$/
 const RE_REF = /^\s*参考答案\s*[:：]\s*(.*)$/
 const RE_ANALYSIS = /^\s*(解析|详解)\s*[:：]\s*(.*)$/
 const RE_QNUM = /^\s*(\d{1,3})[.、)]\s*(\S.*)$/
-const RE_BLANK = /(___+|__\s*__|\(\s*\)|\[\[\s*\]\]|\[\s*\]|【\s*】)/
+const RE_BLANK = /(___+|__\s*__|\(\s*\)|\[\[\s*\]\]|\[\s*\]|【\s*】|（\s*）)/
 const RE_JUDGE_OK = /^(正确|对|是|√|T|TRUE)$/i
 const RE_JUDGE_NO = /^(错误|错|否|×|F|FALSE)$/i
 
