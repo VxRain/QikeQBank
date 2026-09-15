@@ -236,6 +236,7 @@ export function persistBankFilter(page, id)
 
 ### Form.vue（W3a）
 - 新建：顶部只读徽章显示目标库（?bank= 预选或按设置记忆）；无归属（直访无参数且无记忆）则保存时报错，不再回退首库；编辑时不覆盖（保留 DB 行的 bank_id）。
+- 保存后：新建 toast 成功并留页连续录入（保留题型/难度/分值，清空题干作答，回顶部）；编辑 toast 成功后返回列表。
 - 顶部展示「所属题库」小徽章（编辑时显示当前 bank 名，只读）。
 
 ### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）

@@ -330,6 +330,17 @@ function replaceLocal(def){
   emitUpdate()
 }
 
+// 对外：整体重置为指定题型的新模板（连录下一题用，保留难度/分值）
+function resetTo(type, keep) {
+  const def = createDefault(type || 'single')
+  if (keep) {
+    if (keep.difficulty != null) def.difficulty = keep.difficulty
+    if (keep.score != null) def.score = keep.score
+  }
+  replaceLocal(def)
+}
+defineExpose({ resetTo })
+
 // ---------- material ----------
 const children = ref([])
 let uidSeq = 0

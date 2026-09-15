@@ -21,7 +21,7 @@
       </div>
       <div v-else class="grid grid-cols-1 gap-5 lg:grid-cols-[1.15fr_0.85fr]">
         <div class="min-w-0">
-          <QuestionEditor v-model="form" />
+          <QuestionEditor ref="editorRef" v-model="form" />
         </div>
         <div class="min-w-0 sticky top-[88px] self-start">
           <h3 class="m-0 mb-2 text-text font-700 text-[15px] flex items-center gap-1.5">
@@ -51,6 +51,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { get, create, update } from '@/api/questions.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { toast } from '@/stores/ui.js'
 import QuestionEditor from '@/components/QuestionEditor.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { validateQuestion } from '@/utils/validate.js'
@@ -85,6 +86,7 @@ function createDefault(){
 }
 
 const form = ref(createDefault())
+const editorRef = ref(null)
 
 const validation = computed(()=>{
   try{ return validateQuestion(form.value) } catch(e){ return { valid:false, errors:[String(e)] } }
@@ -159,10 +161,15 @@ async function onSave(){
     payload.plain_text = getAggregatedPlainText(payload)
     if(isEdit.value){
       await update(route.params.id, payload)
+      toast('已保存', 'success')
+      router.push(backTarget())
     } else {
       await create(payload)
+      toast(`已保存到「${bankStore.banks.find(b=> b.id === newBankId.value)?.name || ''}」，可继续录入`, 'success')
+      // 留页连续录入：走编辑器正规重置通道（各题型答案结构不同，不能直接改 type）
+      editorRef.value?.resetTo(form.value.type, { difficulty: form.value.difficulty, score: form.value.score })
+      window.scrollTo(0, 0)
     }
-    router.push(backTarget())
   } catch(e){
     error.value = e.response?.data?.error || e.message
   } finally{ saving.value=false }
