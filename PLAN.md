@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS review_state (
   last_result TEXT,
   last_reviewed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS wrong_dismiss (
+  question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+  dismissed_at TEXT NOT NULL
+);
 ```
 
 ### 3.2 MIGRATE 步骤（先 DDL 后按序执行；`<now>` 一律用 SQL `strftime('%Y-%m-%dT%H:%M:%fZ','now')`）
@@ -108,6 +113,8 @@ ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CAS
 
 -- M3 存量行回填
 UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;
+
+-- wrong_dismiss 为新表（无存量需回填）：存量库随幂等 DDL 自动建表，无需 M 步骤。
 ```
 
 - 连接设置：`PRAGMA foreign_keys=ON`、`PRAGMA journal_mode=WAL`。
@@ -141,7 +148,8 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | command | 参数 | 变更 |
 |---|---|---|
 | `practice_pool` | `limit?, type_filter?, bank_id?, ids?` | 有 bank_id 时过滤；ids 非空时按传入顺序返回存在的题（上限 500），忽略题型/随机逻辑（错题重练用） |
-| `wrong_list` | `bank_id?, type_filter?, limit?, offset?` | 错题本：最近一次作答仍为 wrong（correct=0）的题；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at）；分页默认 limit 50、上限 500 |
+| `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500 |
+| `wrong_dismiss` | `question_id` | 错题本手动移出（幂等）：记入 wrong_dismiss，不删练习记录；之后再答错自动解除 |
 | `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤 |
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局 |
 | `record_answer` | 不变 | 不变 |
@@ -206,7 +214,7 @@ export function persistBankFilter(page, id)
 `list({query, type, bankId, limit, offset})` → args 带 `bank_id`（bankId falsy 时不传=全部）；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
 
 ### api/practice.js（W2 改）
-`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type})` → `cmd('wrong_list',…)` 取 `.data`。其余不变。
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`。其余不变。
 
 ### App.vue（W2 改）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；导航不变。
@@ -232,7 +240,8 @@ export function persistBankFilter(page, id)
 ### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）
 - 筛选条：题库下拉（默认全部，按上规则记忆）+ 题型下拉 + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页）。
 - 「重练全部」：按当前筛选取最多 500 个 id → sessionStorage['qbank.retryIds'] → `/practice?retry=1`；Practice 绕过 setup 直接组卷（`practicePool({ids})`），读完即清 storage；空结果回 setup 并提示。
-- 收录规则：最近一次作答仍错才在册，答对自动移出，删题经 FK 级联自动消失（无手动移出）。
+- 收录规则：连续答对次数 < 设置阈值（默认 1）且错过才在册，中断重计；手动移除（单题/批量）：`wrong_dismiss` 记入 wrong_dismiss 表，不删练习记录故统计不受影响；之后再答错自动重回；删题经 FK 级联清掉移出记录。
+- 查看：展开行显示上次答错记录（选择类：你的选择 vs 正确答案；填空：每空你的答案 vs 正确答案；简答：作答原文/自评 + 参考答案；材料子题自动定位）+ 整题渲染预览。刷题模式简答作答原文已补入 detail.my_answer。
 
 ### Practice.vue（W3b）
 - 设置面板加「题库」下拉：全部(值为 '') + 各库；默认全部（按上规则记忆）。

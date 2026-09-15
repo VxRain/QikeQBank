@@ -11,6 +11,12 @@ function load() {
   }
 }
 
+// 错题移出阈值归一化：整数，钳制 1–10，非法回退 1
+function normalizeLeaveCount(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 1
+  return Math.min(10, Math.max(1, Math.round(n)))
+}
 // 自动下一题停留时长归一化：非法回退 1200ms，钳制在 300–5000ms
 function normalizeDelay(v) {
   const n = Number(v)
@@ -29,6 +35,8 @@ export const settings = reactive({
   autoNextDelayMs: normalizeDelay(saved.autoNextDelayMs),
   // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
   rememberBankFilter: saved.rememberBankFilter ?? false,
+  // 错题本：连续答对多少次后自动移出，默认 1
+  wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
 })
 
 watch(

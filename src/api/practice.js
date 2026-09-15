@@ -22,11 +22,17 @@ export async function reviewDue({ limit = 20, bankId } = {}) {
   return res?.data
 }
 
-export async function wrongList({ limit = 50, offset = 0, bankId, type = '' } = {}) {
+export async function wrongList({ limit = 50, offset = 0, bankId, type = '', leaveAfterCorrect } = {}) {
   const args = { limit, offset }
   if (bankId) args.bankId = bankId
   if (type) args.typeFilter = type
+  if (leaveAfterCorrect != null) args.leaveAfterCorrect = leaveAfterCorrect
   const res = await cmd('wrong_list', args)
+  return res?.data
+}
+
+export async function wrongDismiss(questionId) {
+  const res = await cmd('wrong_dismiss', { question_id: questionId })
   return res?.data
 }
 

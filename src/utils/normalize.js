@@ -57,7 +57,8 @@ export function normalizeQuestion(q){
   }
   if(Array.isArray(q.children)){
     q.children.forEach(normalizeQuestion)
-    q.children.forEach((c,i)=>{ if(!c.id) c.id = `${q.id}_c${i+1}` })
+    // 父题无 id 时（新建未入库）不拼子题 id，入库时后端按父 id 补排；编辑态 id 已存在可直接拼
+    if(q.id) q.children.forEach((c,i)=>{ if(!c.id) c.id = `${q.id}_c${i+1}` })
     // 派生字段：总分 + 分值加权难度（四舍五入对齐 1..5）
     const total = q.children.reduce((s,c)=> s + (Number(c.score)||0), 0)
     const weighted = q.children.reduce((s,c)=> s + (Number(c.score)||0)*(Number(c.difficulty)||3), 0) / (total||1)

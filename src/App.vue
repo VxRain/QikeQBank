@@ -118,6 +118,25 @@
                 />
               </span>
             </button>
+            <div class="border border-line rounded-[10px] bg-card p-3.5 flex items-center justify-between gap-3">
+              <span class="min-w-0">
+                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">连续答对自动移出错题<InfoTip text="错题连续答对该次数后自动移出错题本，中途答错重计；默认 1 次（答对即移出）" /></span>
+              </span>
+              <span class="flex items-center gap-1.5 shrink-0">
+                <input
+                  v-model="leaveText"
+                  class="input w-[56px] px-2 py-1.5 text-[13px] text-center"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  @change="commitLeave"
+                  @blur="commitLeave"
+                  @keyup.enter="commitLeave"
+                  @keyup.esc="leaveText = String(settings.wrongLeaveAfterCorrect)"
+                />
+                <span class="text-[12px] text-muted">次</span>
+              </span>
+            </div>
             </div>
             <div class="flex justify-end gap-2.5 mt-4">
               <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
@@ -159,6 +178,22 @@ function commitDelay() {
   } else {
     delayText.value = (settings.autoNextDelayMs / 1000).toString()
     toast('停留时长请输入 0.3～5 之间的数字（秒）', 'error')
+  }
+}
+
+// 错题移出阈值输入框：同上，整数 1–10
+const leaveText = ref(String(settings.wrongLeaveAfterCorrect))
+watch(() => settings.wrongLeaveAfterCorrect, (v) => {
+  leaveText.value = String(v)
+})
+function commitLeave() {
+  const v = Number(leaveText.value)
+  if (Number.isFinite(v) && Number.isInteger(v) && v >= 1 && v <= 10) {
+    settings.wrongLeaveAfterCorrect = v
+    leaveText.value = String(v)
+  } else {
+    leaveText.value = String(settings.wrongLeaveAfterCorrect)
+    toast('请输入 1～10 的整数（次）', 'error')
   }
 }
 

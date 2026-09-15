@@ -32,6 +32,7 @@ pub fn run() {
             db::questions_remove,
             db::practice_pool,
             db::record_answer,
+            db::wrong_dismiss,
             db::wrong_list,
             db::review_due,
             db::review_stats,

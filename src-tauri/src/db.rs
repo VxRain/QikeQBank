@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS review_state (
   due_at TEXT NOT NULL,
   last_result TEXT,
   last_reviewed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS wrong_dismiss (
+  question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+  dismissed_at TEXT NOT NULL
 );"#;
 
 // Migration statements (PLAN §3.2). `<now>` uses the SQL strftime expression.
@@ -959,6 +964,7 @@ fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<Value, Strin
         q["bank_id"] = json!(bid);
     }
     q["plain_text"] = json!(aggregated_plain_text(&q));
+    ensure_child_ids(&mut q, &id);
 
     let exists: bool = conn
         .query_row(
@@ -1029,6 +1035,7 @@ fn questions_update_impl(conn: &Connection, id: &str, data: Value) -> Result<Val
         merged["status"] = json!("published");
     }
     merged["plain_text"] = json!(aggregated_plain_text(&merged));
+    ensure_child_ids(&mut merged, id);
 
     upsert_question(conn, &merged)?;
     let stored = fetch_question(conn, id)?.ok_or("stored question missing")?;
@@ -1091,12 +1098,37 @@ fn practice_pool_impl(
     query_questions(conn, &sql, params![type_filter, limit, bank_id])
 }
 
+/// 判分结论解析：判分主体是前端（手握题目+答案），后端只做合法性校验后落库。
+/// practice 仅接受 good/again；review/exam 接受四键。缺失或非法一律报错，不静默兜底。
+fn resolve_grade(mode: &str, grade: Option<&str>) -> Result<String, String> {
+    let g = grade.ok_or_else(|| format!("grade is required for {mode} mode"))?;
+    let ok = match mode {
+        "practice" => matches!(g, "good" | "again"),
+        _ => ["again", "hard", "good", "easy"].contains(&g),
+    };
+    if !ok {
+        return Err(format!("invalid grade '{g}' for {mode} mode"));
+    }
+    Ok(g.to_string())
+}
+
+/// 子题 id 兜底：缺失才按父 id 补排（导入时父题尚无 id，入库时父 id 已定）
+fn ensure_child_ids(q: &mut Value, parent_id: &str) {
+    if let Some(children) = q.get_mut("children").and_then(|c| c.as_array_mut()) {
+        for (i, c) in children.iter_mut().enumerate() {
+            let missing = c.get("id").and_then(Value::as_str).map_or(true, |s| s.is_empty());
+            if missing {
+                c["id"] = json!(format!("{parent_id}_c{}", i + 1));
+            }
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct RecordItem {
     pub question_id: String,
     pub mode: String,
     pub grade: Option<String>,
-    pub correct: Option<bool>,
     pub elapsed_ms: Option<i64>,
     pub detail: Option<Value>,
 }
@@ -1116,27 +1148,8 @@ pub fn record_answer(
         if !matches!(item.mode.as_str(), "practice" | "review" | "exam") {
             return Err(format!("invalid mode: {}", item.mode));
         }
-        let grade = match item.mode.as_str() {
-            "practice" => {
-                if item.correct.unwrap_or(false) {
-                    "good".to_string()
-                } else {
-                    "again".to_string()
-                }
-            }
-            _ => {
-                let g = item
-                    .grade
-                    .clone()
-                    .ok_or_else(|| "grade is required for review/exam mode".to_string())?;
-                if !["again", "hard", "good", "easy"].contains(&g.as_str()) {
-                    return Err(format!("invalid grade: {g}"));
-                }
-                g
-            }
-        };
-        // correct lands as grade ∈ {good, easy}; frontend's correct field is
-        // only redundant reference.
+        let grade = resolve_grade(item.mode.as_str(), item.grade.as_deref())?;
+        // correct 落地 = grade ∈ {good,easy}
         let correct: i64 = if matches!(grade.as_str(), "good" | "easy") {
             1
         } else {
@@ -1162,6 +1175,10 @@ pub fn record_answer(
         )
         .map_err(to_str)?;
         inserted += 1;
+        // 答错 → 解除手动移出（重回错题本）
+        if correct == 0 {
+            undismiss_wrong(&tx, &item.question_id)?;
+        }
         sm2_update(&tx, &item.question_id, &grade, now).map_err(to_str)?;
     }
 
@@ -1196,15 +1213,23 @@ fn review_due_impl(
     query_questions(conn, &sql, params![cutoff, limit, bank_id])
 }
 
-/// 错题本 CTE：每题取最近一次作答（answered_at DESC, id DESC）及累计错次数/最近错时间
+/// 错题本 CTE：每题算连续答对 streak（从最近一次往回数，遇到错即断）、累计错次数、最近错时间
+/// detail 只对最终页的 50 行用关联子查询点查（idx_records_question），不进窗口排序
 const WRONG_RANKED_CTE: &str = "WITH ranked AS (
   SELECT question_id, correct, answered_at,
-         ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC, id DESC) AS rn,
-         SUM(CASE WHEN correct = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY question_id) AS wrong_count,
-         MAX(CASE WHEN correct = 0 THEN answered_at END) OVER (PARTITION BY question_id) AS last_wrong_at
+         ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC, id DESC) AS rn
   FROM practice_records
+),
+streak AS (
+  SELECT question_id,
+         COALESCE(MIN(CASE WHEN correct = 0 THEN rn END), COUNT(*) + 1) - 1 AS consec_correct,
+         SUM(CASE WHEN correct = 0 THEN 1 ELSE 0 END) AS wrong_count,
+         MAX(CASE WHEN correct = 0 THEN answered_at END) AS last_wrong_at
+  FROM ranked GROUP BY question_id
 )";
-const WRONG_WHERE: &str = "ranked.rn = 1 AND ranked.correct = 0
+const WRONG_WHERE: &str = "streak.consec_correct < ?3
+  AND streak.wrong_count > 0
+  AND NOT EXISTS (SELECT 1 FROM wrong_dismiss d WHERE d.question_id = q.id)
   AND (?1 IS NULL OR q.bank_id = ?1) AND (?2 IS NULL OR q.type = ?2)";
 
 #[tauri::command]
@@ -1213,49 +1238,91 @@ pub fn wrong_list(
     type_filter: Option<String>,
     limit: Option<u64>,
     offset: Option<u64>,
+    leave_after_correct: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(wrong_list_impl(&conn, bank_id, type_filter, limit, offset)?)
+    ok(wrong_list_impl(&conn, bank_id, type_filter, limit, offset, leave_after_correct)?)
 }
 
-/// 错题本：最近一次作答仍为 wrong 的题（答对后自动移出；删题经 FK 级联自动消失）
+/// 错题本：连续答对次数 < leave_after_correct（默认1，即现状：最近一次对就移出）且错过，且未被手动移出
 fn wrong_list_impl(
     conn: &Connection,
     bank_id: Option<String>,
     type_filter: Option<String>,
     limit: Option<u64>,
     offset: Option<u64>,
+    leave_after_correct: Option<u64>,
 ) -> Result<Value, String> {
     let bank_id = bank_id.filter(|s| !s.is_empty());
     let type_filter = type_filter.filter(|s| !s.is_empty());
     let limit = limit.unwrap_or(50).min(500) as i64;
     let offset = offset.unwrap_or(0) as i64;
+    let leave_after = leave_after_correct.unwrap_or(1).clamp(1, 10) as i64;
     let total: i64 = conn
         .query_row(
-            &format!("{WRONG_RANKED_CTE} SELECT COUNT(*) FROM questions q JOIN ranked ON ranked.question_id = q.id WHERE {WRONG_WHERE}"),
-            params![bank_id, type_filter],
+            &format!("{WRONG_RANKED_CTE} SELECT COUNT(*) FROM questions q JOIN streak ON streak.question_id = q.id WHERE {WRONG_WHERE}"),
+            params![bank_id, type_filter, leave_after],
             |r| r.get(0),
         )
         .map_err(to_str)?;
     // row_to_question 按列名取值，会忽略多出的列；wrong_count/last_wrong_at 需手动附加
     let sql = format!(
-        "{WRONG_RANKED_CTE} SELECT {SELECT_FIELDS_Q}, ranked.wrong_count AS wrong_count, ranked.last_wrong_at AS last_wrong_at
-         FROM questions q JOIN ranked ON ranked.question_id = q.id
+        "{WRONG_RANKED_CTE} SELECT {SELECT_FIELDS_Q}, streak.wrong_count AS wrong_count, streak.last_wrong_at AS last_wrong_at,
+         (SELECT p.detail_json FROM practice_records p
+          WHERE p.question_id = q.id AND p.correct = 0 ORDER BY p.answered_at DESC, p.id DESC LIMIT 1) AS last_wrong_detail
+         FROM questions q JOIN streak ON streak.question_id = q.id
          WHERE {WRONG_WHERE}
-         ORDER BY ranked.last_wrong_at DESC
-         LIMIT ?3 OFFSET ?4"
+         ORDER BY streak.last_wrong_at DESC
+         LIMIT ?4 OFFSET ?5"
     );
     let mut stmt = conn.prepare(&sql).map_err(to_str)?;
-    let mut rows = stmt.query(params![bank_id, type_filter, limit, offset]).map_err(to_str)?;
+    let mut rows = stmt.query(params![bank_id, type_filter, leave_after, limit, offset]).map_err(to_str)?;
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(to_str)? {
         let mut q = row_to_question(row).map_err(to_str)?;
         q["wrong_count"] = json!(row.get::<_, i64>("wrong_count").map_err(to_str)?);
         q["last_wrong_at"] = json!(row.get::<_, Option<String>>("last_wrong_at").map_err(to_str)?);
+        q["last_wrong_detail"] = parse_json_opt(row.get::<_, Option<String>>("last_wrong_detail").map_err(to_str)?);
         items.push(q);
     }
     Ok(json!({ "total": total, "items": items }))
+}
+
+/// 错题本手动移出（幂等；不删练习记录故不影响统计；之后再答错会自动重回）
+#[tauri::command]
+pub fn wrong_dismiss(question_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    dismiss_wrong(&conn, &question_id)?;
+    ok(json!({ "id": question_id }))
+}
+
+fn dismiss_wrong(conn: &Connection, question_id: &str) -> Result<(), String> {
+    // OR IGNORE 覆盖不了 FK 违规：不存在的题直接视为无操作成功
+    let exists: bool = conn
+        .query_row("SELECT 1 FROM questions WHERE id = ?1", params![question_id], |_| Ok(true))
+        .optional()
+        .map_err(to_str)?
+        .unwrap_or(false);
+    if !exists {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO wrong_dismiss (question_id, dismissed_at) VALUES (?1, ?2)",
+        params![question_id, now_iso()],
+    )
+    .map_err(to_str)?;
+    Ok(())
+}
+
+/// 答错时解除手动移出（重回错题本）
+fn undismiss_wrong(conn: &Connection, question_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM wrong_dismiss WHERE question_id = ?1",
+        params![question_id],
+    )
+    .map_err(to_str)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1698,6 +1765,33 @@ mod tests {
             s2 = sm2_next(&s2, "easy", t0());
         }
         assert!((s2.ease - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resolve_grade_trusts_frontend_for_practice() {
+        // 刷题判分以 grade 为准；缺失或非法直接报错，不静默兜底
+        assert_eq!(resolve_grade("practice", Some("good")).unwrap(), "good");
+        assert_eq!(resolve_grade("practice", Some("again")).unwrap(), "again");
+        assert!(resolve_grade("practice", None).is_err());
+        assert!(resolve_grade("practice", Some("hard")).is_err());
+        assert_eq!(resolve_grade("review", Some("hard")).unwrap(), "hard");
+        assert!(resolve_grade("review", None).is_err());
+        assert!(resolve_grade("review", Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn ensure_child_ids_fills_missing_only() {
+        // 子题 id 缺失才按父 id 补排；已有 id 不动
+        let mut q = json!({
+            "children": [
+                { "type": "single" },
+                { "type": "single", "id": "keep_me" }
+            ]
+        });
+        ensure_child_ids(&mut q, "parent1");
+        let ids: Vec<String> = q["children"].as_array().unwrap().iter()
+            .map(|c| c["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(ids, vec!["parent1_c1", "keep_me"]);
     }
 
     #[test]
@@ -2162,25 +2256,115 @@ mod tests {
         rec("q_w_2", 0, "2026-09-10T10:00:00.000Z"); // 错
         rec("q_w_2", 1, "2026-09-12T10:00:00.000Z"); // 后答对 → 移出
         rec("q_w_3", 1, "2026-09-10T10:00:00.000Z"); // 一直对 → 不进
-        let w = wrong_list_impl(&conn, None, None, None, None).unwrap();
+        let w = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
         assert_eq!(w["total"], 1);
         assert_eq!(w["items"][0]["id"], "q_w_1");
         assert_eq!(w["items"][0]["wrong_count"], 2);
         assert_eq!(w["items"][0]["last_wrong_at"], "2026-09-11T10:00:00.000Z");
         // 分页：total 不变，页外为空
-        let p = wrong_list_impl(&conn, None, None, Some(1), Some(1)).unwrap();
+        let p = wrong_list_impl(&conn, None, None, Some(1), Some(1), None).unwrap();
         assert_eq!(p["total"], 1);
         assert_eq!(p["items"].as_array().unwrap().len(), 0);
         // bank 过滤：错题在 bank_default，换库查不到
-        let other = wrong_list_impl(&conn, Some("bank_nope".to_string()), None, None, None).unwrap();
+        let other = wrong_list_impl(&conn, Some("bank_nope".to_string()), None, None, None, None).unwrap();
         assert_eq!(other["total"], 0);
-        let mine = wrong_list_impl(&conn, Some("bank_default".to_string()), None, None, None).unwrap();
+        let mine = wrong_list_impl(&conn, Some("bank_default".to_string()), None, None, None, None).unwrap();
         assert_eq!(mine["total"], 1);
         // type 过滤
-        let typed = wrong_list_impl(&conn, None, Some("single".to_string()), None, None).unwrap();
+        let typed = wrong_list_impl(&conn, None, Some("single".to_string()), None, None, None).unwrap();
         assert_eq!(typed["total"], 1);
-        let typed_no = wrong_list_impl(&conn, None, Some("multi".to_string()), None, None).unwrap();
+        let typed_no = wrong_list_impl(&conn, None, Some("multi".to_string()), None, None, None).unwrap();
         assert_eq!(typed_no["total"], 0);
+    }
+
+    #[test]
+    fn wrong_dismiss_hides_and_rewrong_returns() {
+        // 手动移出：不删记录（统计不受影响）、幂等、未知 id 忽略；再答错解除移出
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_w_d");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        conn.execute(
+            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at)
+             VALUES ('q_w_d', 'practice', 'again', 0, '2026-09-10T10:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 1);
+        dismiss_wrong(&conn, "q_w_d").unwrap();
+        assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 0);
+        // 幂等 + 未知 id 忽略
+        dismiss_wrong(&conn, "q_w_d").unwrap();
+        dismiss_wrong(&conn, "q_nope").unwrap();
+        // 练习记录还在（统计不受影响）
+        let recs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM practice_records WHERE question_id='q_w_d'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recs, 1);
+        // 再答错 → 解除移出，重回错题本
+        undismiss_wrong(&conn, "q_w_d").unwrap();
+        assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 1);
+        // 删题经 FK 级联清掉移出记录
+        conn.execute("DELETE FROM questions WHERE id='q_w_d'", []).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM wrong_dismiss WHERE question_id='q_w_d'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn wrong_list_leaves_after_n_consecutive_correct() {
+        // 连续答对 N 次才移出；中断重计；默认 N=1 即现状
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_w_n");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rec = |correct: i64, at: &str| {
+            conn.execute(
+                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES ('q_w_n', 'practice', 'good', ?1, ?2)",
+                params![correct, at],
+            )
+            .unwrap();
+        };
+        let total_with = |n: Option<u64>| {
+            wrong_list_impl(&conn, None, None, None, None, n).unwrap()["total"].as_i64().unwrap()
+        };
+        rec(0, "2026-09-10T10:00:00.000Z"); // 错
+        rec(1, "2026-09-11T10:00:00.000Z"); // 对（连对 1）
+        assert_eq!(total_with(None), 0); // 默认 N=1：已移出
+        assert_eq!(total_with(Some(2)), 1); // N=2：连对 1 < 2，仍在
+        assert_eq!(total_with(Some(0)), 0); // 非法值钳制为 1
+        rec(1, "2026-09-12T10:00:00.000Z"); // 对（连对 2）
+        assert_eq!(total_with(Some(2)), 0);
+        rec(0, "2026-09-13T10:00:00.000Z"); // 又错（连对清零）
+        assert_eq!(total_with(Some(3)), 1);
+        let w = wrong_list_impl(&conn, None, None, None, None, Some(3)).unwrap();
+        assert_eq!(w["items"][0]["wrong_count"], 2);
+    }
+
+    #[test]
+    fn wrong_list_includes_last_wrong_detail() {
+        // 查看上次答错记录：取最近一条 wrong 记录的 detail_json
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_w_v");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rec = |correct: i64, at: &str, detail: &str| {
+            conn.execute(
+                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, detail_json) VALUES ('q_w_v', 'practice', 'good', ?1, ?2, ?3)",
+                params![correct, at, detail],
+            )
+            .unwrap();
+        };
+        rec(0, "2026-09-10T10:00:00.000Z", r#"{"selected":["o2"]}"#);
+        rec(0, "2026-09-11T10:00:00.000Z", r#"{"selected":["o1"]}"#);
+        let w = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        assert_eq!(w["total"], 1);
+        assert_eq!(w["items"][0]["last_wrong_detail"]["selected"], json!(["o1"]));
+        assert_eq!(w["items"][0]["last_wrong_at"], "2026-09-11T10:00:00.000Z");
     }
 
     #[test]

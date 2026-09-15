@@ -499,6 +499,8 @@ function buildDetail(it, res) {
   if (res.selected) detail.selected = res.selected
   if (res.results) detail.blanks = res.results.map((r) => ({ id: r.id, value: r.value, correct: r.correct }))
   if (res.self) detail.self_grade = res.self
+  // 简答作答原文（复习模式本就有 my_answer；刷题模式补上，供错题本查看）
+  if (it.q.type === 'short' && shortText.value) detail.my_answer = shortText.value
   return detail
 }
 

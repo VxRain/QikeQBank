@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS review_state (
   due_at TEXT NOT NULL,
   last_result TEXT,
   last_reviewed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS wrong_dismiss (
+  question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+  dismissed_at TEXT NOT NULL
 );`;
 
 /** PLAN.md §3.2 MIGRATE —— M1/M2/M3，与 PLAN 逐字符一致（<now> 一律用 strftime 表达式） */
