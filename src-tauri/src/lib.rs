@@ -36,6 +36,7 @@ pub fn run() {
             db::wrong_list,
             db::review_due,
             db::review_stats,
+            db::records_overview,
             db::export_dbjson,
             db::save_text_file,
             db::import_dbjson

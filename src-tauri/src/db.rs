@@ -1325,6 +1325,56 @@ fn undismiss_wrong(conn: &Connection, question_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 全部练习统计：全量按天明细（倒序，上限）+ 按题型汇总（含平均用时）
+#[tauri::command]
+pub fn records_overview(limit_days: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(records_overview_impl(&conn, limit_days)?)
+}
+
+fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) -> Result<Value, String> {
+    let limit = limit_days.unwrap_or(365).min(1000) as i64;
+    let mut days = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT substr(answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(correct), 0),
+                 COALESCE(AVG(elapsed_ms), 0) FROM practice_records
+                 GROUP BY d ORDER BY d DESC LIMIT ?1",
+            )
+            .map_err(to_str)?;
+        let mut rows = stmt.query(params![limit]).map_err(to_str)?;
+        while let Some(row) = rows.next().map_err(to_str)? {
+            days.push(json!({
+                "date": row.get::<_, String>(0).map_err(to_str)?,
+                "count": row.get::<_, i64>(1).map_err(to_str)?,
+                "correct": row.get::<_, i64>(2).map_err(to_str)?,
+                "avg_ms": row.get::<_, f64>(3).map_err(to_str)?.round() as i64,
+            }));
+        }
+    }
+    let mut by_type = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT q.type, COUNT(*), COALESCE(SUM(p.correct), 0), COALESCE(AVG(p.elapsed_ms), 0)
+                 FROM practice_records p JOIN questions q ON q.id = p.question_id
+                 GROUP BY q.type ORDER BY COUNT(*) DESC",
+            )
+            .map_err(to_str)?;
+        let mut rows = stmt.query([]).map_err(to_str)?;
+        while let Some(row) = rows.next().map_err(to_str)? {
+            by_type.push(json!({
+                "type": row.get::<_, String>(0).map_err(to_str)?,
+                "count": row.get::<_, i64>(1).map_err(to_str)?,
+                "correct": row.get::<_, i64>(2).map_err(to_str)?,
+                "avg_ms": row.get::<_, f64>(3).map_err(to_str)?.round() as i64,
+            }));
+        }
+    }
+    Ok(json!({ "days": days, "by_type": by_type }))
+}
+
 #[tauri::command]
 pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
@@ -1793,6 +1843,29 @@ mod tests {
         let ids: Vec<String> = q["children"].as_array().unwrap().iter()
             .map(|c| c["id"].as_str().unwrap().to_string()).collect();
         assert_eq!(ids, vec!["parent1_c1", "keep_me"]);
+    }
+
+    #[test]
+    fn records_overview_groups_days_and_types() {
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        for (correct, at, ms) in [(1, "2026-09-10T10:00:00.000Z", 5000), (0, "2026-09-10T11:00:00.000Z", 8000), (1, "2026-09-12T10:00:00.000Z", 4000)] {
+            conn.execute(
+                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, elapsed_ms) VALUES ('q_test_1', 'practice', 'good', ?1, ?2, ?3)",
+                params![correct, at, ms],
+            )
+            .unwrap();
+        }
+        let v = records_overview_impl(&conn, None).unwrap();
+        assert_eq!(v["days"][0]["date"], "2026-09-12");
+        assert_eq!(v["days"][0]["count"], 1);
+        assert_eq!(v["days"][1]["count"], 2);
+        assert_eq!(v["days"][1]["correct"], 1);
+        assert_eq!(v["by_type"][0]["type"], "single");
+        assert_eq!(v["by_type"][0]["count"], 3);
+        assert_eq!(v["by_type"][0]["avg_ms"], 5667);
     }
 
     #[test]

@@ -82,6 +82,9 @@
         <h2 class="section-title flex items-center gap-2">
           <i class="i-lucide-bar-chart-3 text-primary" />近 7 天练习趋势
         </h2>
+        <button type="button" class="btn btn-small" @click="openOverview">
+          <i class="i-lucide-table" />查看详情
+        </button>
       </div>
       <div v-if="bars.length" class="flex items-end gap-2.5 pt-1.5">
         <div
@@ -103,13 +106,78 @@
         <i class="i-lucide-bar-chart-3" />近 7 天暂无练习记录
       </div>
     </div>
+
+    <!-- 全部练习统计弹窗 -->
+    <Teleport to="body">
+      <Transition name="dg">
+        <div v-if="showOverview" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="showOverview = false">
+          <div class="dg-card w-[min(640px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5 pb-4" role="dialog" aria-label="全部练习统计">
+            <h3 class="m-0 mb-3.5 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2">
+              <i class="i-lucide-table text-primary" />全部练习统计
+            </h3>
+            <div v-if="ovLoading" class="text-muted py-4 flex items-center gap-2">
+              <i class="i-lucide-loader-circle animate-spin" />加载中…
+            </div>
+            <div v-else-if="ovError" class="error-box mb-3">{{ ovError }}</div>
+            <div v-else class="overflow-y-auto flex flex-col gap-4 min-h-0 pr-0.5">
+              <div v-if="!ovDays.length && !ovTypes.length" class="text-muted py-2">暂无练习记录</div>
+              <div v-if="ovTypes.length">
+                <div class="field-label">按题型</div>
+                <table class="w-full border-collapse text-[13px]">
+                  <thead>
+                    <tr>
+                      <th class="text-left px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">题型</th>
+                      <th class="text-right px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">数量</th>
+                      <th class="text-right px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">正确率</th>
+                      <th class="text-right px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">平均用时</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="t in ovTypes" :key="t.type" class="hover:bg-card-hover">
+                      <td class="px-2.5 py-2 border-b border-line"><span class="badge badge-type">{{ typeLabel(t.type) }}</span></td>
+                      <td class="px-2.5 py-2 border-b border-line text-right">{{ t.count }}</td>
+                      <td class="px-2.5 py-2 border-b border-line text-right" :class="t.count && (t.correct / t.count) < 0.6 ? 'text-danger font-700' : 'text-success font-600'">{{ t.count ? Math.round((t.correct / t.count) * 100) + '%' : '—' }}</td>
+                      <td class="px-2.5 py-2 border-b border-line text-right text-muted">{{ fmtSec(t.avg_ms) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-if="ovDays.length">
+                <div class="field-label">按天（近 {{ ovDays.length }} 天有记录）</div>
+                <table class="w-full border-collapse text-[13px]">
+                  <thead>
+                    <tr>
+                      <th class="text-left px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">日期</th>
+                      <th class="text-right px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">数量</th>
+                      <th class="text-right px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">答对</th>
+                      <th class="text-right px-2.5 py-2 border-b border-line text-[12px] text-muted font-600 bg-bg-accent">平均用时</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="d in ovDays" :key="d.date" class="hover:bg-card-hover">
+                      <td class="px-2.5 py-2 border-b border-line font-500">{{ d.date }}</td>
+                      <td class="px-2.5 py-2 border-b border-line text-right">{{ d.count }}</td>
+                      <td class="px-2.5 py-2 border-b border-line text-right text-success font-600">{{ d.correct }}</td>
+                      <td class="px-2.5 py-2 border-b border-line text-right text-muted">{{ fmtSec(d.avg_ms) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="flex justify-end gap-2.5 mt-4">
+              <button type="button" class="btn btn-primary" @click="showOverview = false">关闭</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { stats as fetchStats } from '@/api/practice.js'
+import { stats as fetchStats, recordsOverview } from '@/api/practice.js'
 import { toast } from '@/stores/ui.js'
 
 const router = useRouter()
@@ -122,6 +190,36 @@ const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: 
 
 const stats = ref(null)
 const error = ref('')
+const showOverview = ref(false)
+const ovLoading = ref(false)
+const ovError = ref('')
+const ovDays = ref([])
+const ovTypes = ref([])
+
+function typeLabel(t) {
+  return TYPE_LABELS[t] || t || '-'
+}
+function fmtSec(ms) {
+  const s = Number(ms) / 1000
+  if (!Number.isFinite(s) || s <= 0) return '—'
+  return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's'
+}
+async function openOverview() {
+  showOverview.value = true
+  if (ovDays.value.length || ovTypes.value.length || ovLoading.value) return
+  ovLoading.value = true
+  ovError.value = ''
+  try {
+    const data = await recordsOverview()
+    ovDays.value = Array.isArray(data?.days) ? data.days : []
+    ovTypes.value = Array.isArray(data?.by_type) ? data.by_type : []
+  } catch (e) {
+    console.error(e)
+    ovError.value = '加载失败：' + (e?.message || e)
+  } finally {
+    ovLoading.value = false
+  }
+}
 
 const rateText = computed(() => {
   const r = stats.value?.correct_rate

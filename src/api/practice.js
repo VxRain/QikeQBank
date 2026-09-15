@@ -44,6 +44,11 @@ export async function stats(bankId) {
   return res?.data
 }
 
+export async function recordsOverview() {
+  const res = await cmd('records_overview', {})
+  return res?.data
+}
+
 export async function exportData() {
   const res = await cmd('export_dbjson')
   return res?.data

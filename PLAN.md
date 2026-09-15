@@ -153,6 +153,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤 |
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局 |
 | `record_answer` | 不变 | 不变 |
+| `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 
 **导入导出（v3）**
 
