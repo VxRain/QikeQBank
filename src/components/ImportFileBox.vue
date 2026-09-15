@@ -23,7 +23,7 @@
             <label class="flex flex-col items-center justify-center gap-2 border border-dashed border-line-strong rounded-[10px] bg-bg-accent px-4 py-8 cursor-pointer transition-[border-color,background-color] duration-150 hover:border-primary hover:bg-primary-bg">
               <i class="i-lucide-upload text-[28px] text-muted" />
               <span class="text-[14px] font-600 text-text">点击选择 .txt / .md 文件</span>
-              <span class="text-[12px] text-muted">须按模板编写：每题以【单选/多选/判断/填空/问答/材料】开头</span>
+              <span class="text-[12px] text-muted">须按模板编写：每题以【单选/多选/判断/填空/问答/材料】开头；选项 A. / A、/ (A) 等均可（大小写、全半角兼容）</span>
               <input ref="fileEl" type="file" accept=".txt,.md,.markdown,.text" class="hidden" @change="onFile" />
             </label>
             <div v-if="fileError" class="error-box mt-3">{{ fileError }}</div>

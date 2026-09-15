@@ -27,7 +27,13 @@ export const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断',
 
 const RE_TYPE_HEAD = /^\s*【\s*(单选|多选|判断|填空|问答|材料)[题型]?\s*】\s*(.*)$/
 const RE_SEP_LINE = /^\s*(-{3,}|\*{3,})\s*$/
-const RE_OPTION = /^\s*([A-Z])[.、)]\s*(\S.*)$/
+const RE_OPTION = /^\s*(?:[(（]\s*([A-Za-z])\s*[)）]|([A-Za-z])\s*[.、)）．:：])\s*(\S.*)$/
+// RE_OPTION 捕获组：m[1] = 括号式字母，m[2] = 分隔符式字母，m[3] = 选项正文
+function optionMatch(ln) {
+  const m = RE_OPTION.exec(ln)
+  if (!m) return null
+  return { letter: (m[1] || m[2]).toUpperCase(), text: m[3].trim() }
+}
 const RE_ANSWER = /^\s*答案\s*[:：]\s*(.*)$/
 const RE_REF = /^\s*参考答案\s*[:：]\s*(.*)$/
 const RE_ANALYSIS = /^\s*(解析|详解)\s*[:：]\s*(.*)$/
@@ -69,7 +75,7 @@ function stemToFillDoc(stemText) {
 function splitList(s) {
   return String(s || '')
     .split(/[,，、;\s]+/)
-    .map((x) => x.trim().toUpperCase())
+    .map((x) => x.trim().replace(/^[（(\s]+|[.、)）．:：\s]+$/g, '').toUpperCase())
     .filter(Boolean)
 }
 
@@ -106,9 +112,10 @@ function buildSingle(type, typeLabel, bodyLines, ctx) {
     const t = ln.trim()
     if (!t) continue
     let m
-    if ((m = RE_OPTION.exec(ln))) {
+    const om = optionMatch(ln)
+    if (om) {
       cur = 'options'
-      options.push({ letter: m[1].toUpperCase(), text: m[2].trim() })
+      options.push({ letter: om.letter, text: om.text })
       continue
     }
     if ((m = RE_ANSWER.exec(ln))) {
