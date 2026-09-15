@@ -42,8 +42,8 @@ const RE_BLANK = /(___+|__\s*__|\(\s*\)|\[\[\s*\]\]|\[\s*\]|【\s*】)/
 const RE_JUDGE_OK = /^(正确|对|是|√|T|TRUE)$/i
 const RE_JUDGE_NO = /^(错误|错|否|×|F|FALSE)$/i
 
-/* ---------- Doc 构造 ---------- */
-function textToDoc(text) {
+/* ---------- Doc 构造（parseSheet  XLSX/DOCX 解析共用，也从这里导出） ---------- */
+export function textToDoc(text) {
   const paras = String(text || '')
     .split('\n')
     .map((s) => s.trim())
@@ -56,7 +56,7 @@ function textToDoc(text) {
 }
 
 /** 题干纯文本 → 填空 doc（___ 等占位符按序生成 b1..bn） */
-function stemToFillDoc(stemText) {
+export function stemToFillDoc(stemText) {
   const parts = String(stemText).split(RE_BLANK)
   const content = []
   let n = 0
@@ -72,11 +72,42 @@ function stemToFillDoc(stemText) {
   return { doc: { type: 'doc', content: [{ type: 'paragraph', content }] }, count: n }
 }
 
+/** 填空答案组装（label 如【填空】，调用方加 ctx 前缀）；返回 {blanks} 或 {error} */
+export function parseFillBlanks(answerRaw, count, label) {
+  if (answerRaw == null || !String(answerRaw).trim()) return { error: `${label}缺少答案` }
+  const groups = String(answerRaw).split(/[;；]/).map((s) => s.trim())
+  if (groups.length !== count) return { error: `${label}占位 ${count} 处，答案给了 ${groups.length} 组（组间用 ；分隔）` }
+  const blanks = groups.map((g, i) => ({
+    id: `b${i + 1}`,
+    answers: g.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+  }))
+  if (blanks.some((b) => !b.answers.length)) return { error: `${label}存在空答案组` }
+  return { blanks }
+}
+
 function splitList(s) {
   return String(s || '')
     .split(/[,，、;\s]+/)
     .map((x) => x.trim().replace(/^[（(\s]+|[.、)）．:：\s]+$/g, '').toUpperCase())
     .filter(Boolean)
+}
+
+/** 答案归一：分隔符拆分；无分隔多字母（AB/ABC，DOCX/Excel 风格）且每位都是合法选项时拆字 */
+export function parseAnswerIds(raw, letters) {
+  const toks = splitList(raw)
+  if (toks.length === 1 && toks[0].length > 1) {
+    const chars = [...toks[0]]
+    if (chars.every((c) => letters.includes(c))) return chars
+  }
+  return toks
+}
+
+/** 判断答案归一：true=正确 / false=错误 / undefined=无法识别 */
+export function judgeValue(raw) {
+  const a = String(raw ?? '').trim()
+  if (RE_JUDGE_OK.test(a)) return true
+  if (RE_JUDGE_NO.test(a)) return false
+  return undefined
 }
 
 /* ---------- 块切分：按题型标记行 ---------- */
@@ -154,10 +185,10 @@ function buildSingle(type, typeLabel, bodyLines, ctx) {
       if (options[i].letter !== want) return { error: err(`【${typeLabel}】选项须从 A 开始连续，${options[i].letter} 应为 ${want}`) }
     }
     if (answerRaw == null || !answerRaw) return { error: err(`【${typeLabel}】缺少 答案：行`) }
-    const ids = splitList(answerRaw)
+    const letters = options.map((o) => o.letter)
+    const ids = parseAnswerIds(answerRaw, letters)
     if (type === 'single' && ids.length !== 1) return { error: err(`【单选】答案须恰为 1 个，实得 ${ids.length} 个`) }
     if (!ids.length) return { error: err(`【${typeLabel}】答案为空`) }
-    const letters = options.map((o) => o.letter)
     for (const id of ids) {
       if (!letters.includes(id)) return { error: err(`【${typeLabel}】答案 ${id} 不在选项内`) }
     }
@@ -198,21 +229,9 @@ function buildSingle(type, typeLabel, bodyLines, ctx) {
   if (type === 'fill') {
     const { doc, count } = stemToFillDoc(stemText)
     if (!count) return { error: err('【填空】题干中未找到 ___ / ( ) 占位符') }
-    if (answerRaw == null || !answerRaw) return { error: err('【填空】缺少 答案：行') }
-    const groups = String(answerRaw)
-      .split(/[;；]/)
-      .map((s) => s.trim())
-    if (groups.length !== count) {
-      return { error: err(`【填空】占位 ${count} 处，答案给了 ${groups.length} 组（组间用 ；分隔）`) }
-    }
-    const blanks = groups.map((g, i) => {
-      const answers = g
-        .split(/[,，]/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-      return { id: `b${i + 1}`, answers }
-    })
-    if (blanks.some((b) => !b.answers.length)) return { error: err('【填空】存在空答案组') }
+    const fr = parseFillBlanks(answerRaw, count, '【填空】')
+    if (fr.error) return { error: err(fr.error) }
+    const blanks = fr.blanks
     return {
       question: {
         type,

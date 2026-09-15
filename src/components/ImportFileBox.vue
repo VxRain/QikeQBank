@@ -12,7 +12,7 @@
             <i class="i-lucide-file-up text-primary" />导入试题文件
           </h3>
           <p class="m-0 mb-4 text-[12px] text-muted">
-            目标题库：<b class="text-text">{{ bankName }}</b> · 仅支持按模板编写的 .txt / .md
+            目标题库：<b class="text-text">{{ bankName }}</b> · 支持 .txt / .md（模板）与 .xlsx 表格
             <button type="button" class="ml-2 text-primary hover:underline bg-transparent border-none cursor-pointer text-[12px] p-0" @click="downloadSample">
               下载模板示例
             </button>
@@ -22,9 +22,9 @@
           <div v-if="phase === 'pick'">
             <label class="flex flex-col items-center justify-center gap-2 border border-dashed border-line-strong rounded-[10px] bg-bg-accent px-4 py-8 cursor-pointer transition-[border-color,background-color] duration-150 hover:border-primary hover:bg-primary-bg">
               <i class="i-lucide-upload text-[28px] text-muted" />
-              <span class="text-[14px] font-600 text-text">点击选择 .txt / .md 文件</span>
-              <span class="text-[12px] text-muted">须按模板编写：每题以【单选/多选/判断/填空/问答/材料】开头；选项 A. / A、/ (A) 等均可（大小写、全半角兼容）</span>
-              <input ref="fileEl" type="file" accept=".txt,.md,.markdown,.text" class="hidden" @change="onFile" />
+              <span class="text-[14px] font-600 text-text">点击选择 .txt / .md / .xlsx 文件</span>
+              <span class="text-[12px] text-muted">文本须按模板编写：每题以【单选/多选/判断/填空/问答/材料】开头；表格须含 ID/题目/题型/答案列</span>
+              <input ref="fileEl" type="file" accept=".txt,.md,.markdown,.text,.xlsx,.xls,.csv" class="hidden" @change="onFile" />
             </label>
             <div v-if="fileError" class="error-box mt-3">{{ fileError }}</div>
             <div class="flex justify-end gap-2.5 mt-4">
@@ -116,6 +116,8 @@
 <script setup>
 import { ref } from 'vue'
 import { parseTemplateFile } from '@/utils/parseTemplate.js'
+import { parseSheetRows } from '@/utils/parseSheet.js'
+import * as XLSX from 'xlsx'
 import { TEMPLATE_SAMPLE } from '@/utils/parseTemplate.js'
 import { stripMarkdown } from '@/utils/stripMarkdown.js'
 import { saveTextFile, importQuestions } from '@/api/practice.js'
@@ -221,25 +223,40 @@ async function onFile(e) {
   fileError.value = ''
   fileName.value = f.name
   try {
-    const buf = await f.arrayBuffer()
-    let text = ''
-    try {
-      text = new TextDecoder('utf-8', { fatal: true }).decode(buf)
-    } catch {
-      text = new TextDecoder('gbk').decode(buf)
-    }
-    if (!text.trim()) {
-      fileError.value = '文件为空'
-      return
-    }
     const isMd = /\.(md|markdown)$/i.test(f.name)
-    const { blocks: parsed } = parseTemplateFile(isMd ? stripMarkdown(text) : text)
-    if (!parsed.length) {
-      fileError.value = '未识别到任何题块：每题须以【单选/多选/判断/填空/问答/材料】开头'
+    const isSheet = /\.(xlsx|xls|csv)$/i.test(f.name)
+    let parsed
+    if (isSheet) {
+      // Excel：首个 sheet → 二维数组 → 表格解析（表头定位，ID 分组）
+      const buf = await f.arrayBuffer()
+      const wb = XLSX.read(buf, { type: 'array' })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      if (!ws) {
+        fileError.value = '工作簿中没有工作表'
+        return
+      }
+      parsed = parseSheetRows(XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }))
+    } else {
+      const buf = await f.arrayBuffer()
+      let text = ''
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(buf)
+      } catch {
+        text = new TextDecoder('gbk').decode(buf)
+      }
+      if (!text.trim()) {
+        fileError.value = '文件为空'
+        return
+      }
+      parsed = parseTemplateFile(isMd ? stripMarkdown(text) : text)
+    }
+    if (!parsed.blocks.length) {
+      fileError.value = isSheet ? '表中没有任何数据行' : '未识别到任何题块：每题须以【单选/多选/判断/填空/问答/材料】开头'
       return
     }
+    const list = parsed.blocks
     // 补默认分值/难度（与 PasteBox 一致），validate 需临时 id
-    for (const b of parsed) {
+    for (const b of list) {
       const q = b.question
       if (!q) continue
       if (q.type === 'material') {
@@ -257,9 +274,9 @@ async function onFile(e) {
         b.question = null
       }
     }
-    blocks.value = parsed
-    okCount.value = parsed.filter((b) => !b.error).length
-    failCount.value = parsed.filter((b) => b.error).length
+    blocks.value = list
+    okCount.value = list.filter((b) => !b.error).length
+    failCount.value = list.filter((b) => b.error).length
     phase.value = 'preview'
   } catch (err) {
     console.error(err)
