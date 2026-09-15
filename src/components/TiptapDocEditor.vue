@@ -8,13 +8,13 @@
       <button class="btn btn-tiny" @click="insertMathBlock" title="插入块公式"><i class="i-lucide-square-function" />块公式</button>
     </div>
     <BubbleMenu v-if="editor" :editor="editor" class="bubble-menu flex gap-[3px] p-1 bg-card border border-line rounded-[8px] shadow-lg items-center" :shouldShow="shouldShowBubble">
-      <button class="btn btn-tiny" @click="editor.chain().focus().toggleBold().run()" :class="{ 'btn-primary': editor.isActive('bold') }" title="加粗"><b>B</b></button>
-      <button class="btn btn-tiny" @click="editor.chain().focus().toggleItalic().run()" :class="{ 'btn-primary': editor.isActive('italic') }" title="斜体"><i>I</i></button>
-      <label class="btn btn-tiny swatch relative inline-flex items-center gap-1 cursor-pointer" title="文字颜色">
+      <button class="btn bubble-btn" @click="editor.chain().focus().toggleBold().run()" :class="{ 'btn-primary': editor.isActive('bold') }" title="加粗"><b>B</b></button>
+      <button class="btn bubble-btn" @click="editor.chain().focus().toggleItalic().run()" :class="{ 'btn-primary': editor.isActive('italic') }" title="斜体"><i>I</i></button>
+      <label class="btn bubble-btn swatch relative cursor-pointer" title="文字颜色">
         <span class="dot w-3 h-3 rounded-full inline-block border border-line-strong" :style="{background: editor.getAttributes('textStyle').color || '#1b1a17'}"></span>
         <input type="color" class="w-0 h-0 opacity-0 absolute" :value="editor.getAttributes('textStyle').color || '#1b1a17'" @input="editor.chain().focus().setColor($event.target.value).run()" />
       </label>
-      <button class="btn btn-tiny" @click="editor.chain().focus().unsetColor().run()" title="清除颜色"><i class="i-lucide-rotate-ccw" /></button>
+      <button class="btn bubble-btn" @click="editor.chain().focus().unsetColor().run()" title="清除颜色"><i class="i-lucide-rotate-ccw" /></button>
     </BubbleMenu>
     <editor-content :editor="editor" class="content" />
 
@@ -418,6 +418,13 @@ function uploadImage(ev, kind){
 </script>
 
 <style scoped>
+/* 悬浮窗按钮统一样式：固定 28px 正方形，内容居中，不受文字/图标/色点高度差影响 */
+.bubble-btn{
+  width:28px; height:28px; padding:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:13px; flex-shrink:0;
+}
+.bubble-btn .dot{ margin:0; }
 .content{ padding:8px 10px; min-height:72px; background:var(--card) }
 .content :deep(.tiptap){ outline:none; min-height:100px; color:var(--text-secondary) }
 .content :deep(p){ margin:8px 0 }
