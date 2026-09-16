@@ -4,9 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>奇客题库</title>
+    <style>
+      /* 启动屏：盖住 WebView 冷启动 + 首绘之间的空白期，Vue 挂载后自动替换 */
+      html, body { background: #f4f1ea; margin: 0; }
+      .boot {
+        min-height: 100vh; display: flex;
+        align-items: center; justify-content: center;
+        user-select: none; -webkit-user-select: none;
+        animation: boot-in 0.5s ease-out;
+      }
+      @keyframes boot-in { from { opacity: 0; } to { opacity: 1; } }
+      .boot-spinner { animation: boot-rot 1.4s linear infinite; }
+      @keyframes boot-rot { to { transform: rotate(360deg); } }
+      .boot-arc {
+        stroke-dasharray: 88 200;
+        stroke-dashoffset: 0;
+        animation: boot-dash 1.4s ease-in-out infinite;
+      }
+      @keyframes boot-dash {
+        0% { stroke-dasharray: 8 200; stroke-dashoffset: 0; }
+        50% { stroke-dasharray: 88 200; stroke-dashoffset: -30; }
+        100% { stroke-dasharray: 8 200; stroke-dashoffset: -120; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><div class="boot"><svg class="boot-spinner" width="44" height="44" viewBox="0 0 100 100" fill="none"><circle cx="50" cy="50" r="42" stroke="#e3ddcd" stroke-width="6" /><circle class="boot-arc" cx="50" cy="50" r="42" stroke="#1f4d3a" stroke-width="6" stroke-linecap="round" /></svg></div></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

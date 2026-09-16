@@ -43,6 +43,9 @@ pub fn run() {
             .title("奇客题库")
             .inner_size(1280.0, 860.0)
             .min_inner_size(1024.0, 700.0)
+            // 原生底色 = 纸面底（--bg）：WebView 首绘前的白闪变成纸色，
+            // 再叠 index.html 内联 splash，慢机器上也是“纸面 → 加载环 → 应用”
+            .background_color(tauri::window::Color(244, 241, 234, 255))
             .additional_browser_args(&bypass)
             .build()?;
             Ok(())
