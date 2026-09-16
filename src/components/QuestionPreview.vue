@@ -5,6 +5,7 @@
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { renderDoc, renderMaterial, renderOptions } from '@/utils/render.js'
+import { expandQuestions } from '@/api/assets.js'
 
 const props = defineProps({
   question: { type: Object, default: null },
@@ -23,6 +24,28 @@ function compute(q){
 }
 
 const html = ref(compute(props.question))
+// asset: 引用是异步解析的：先同步出一版文字（图片位空着），解析完再补全
+let refreshSeq = 0
+refresh()
+
+async function refresh() {
+  const my = ++refreshSeq
+  const q = props.question
+  if (q && q.type) {
+    try {
+      // 深拷贝后展开：不碰父组件对象，避免 watch 比对抖动
+      const clone = JSON.parse(JSON.stringify(q))
+      await expandQuestions([clone])
+      if (my !== refreshSeq) return // 后来的刷新已接管，丢弃过期结果
+      html.value = compute(clone)
+      return
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  if (my !== refreshSeq) return
+  html.value = compute(q)
+}
 let timer = null
 let lastType = props.question?.type
 let lastChildrenLen = props.question?.children?.length ?? -1
@@ -36,12 +59,12 @@ watch(()=>props.question, (val)=>{
   const structural = curType !== lastType || curChildrenLen !== lastChildrenLen || curOptionsLen !== lastOptionsLen
   if(structural){
     lastType = curType; lastChildrenLen = curChildrenLen; lastOptionsLen = curOptionsLen
-    html.value = compute(val)
+    refresh()
     return
   }
   timer = setTimeout(()=>{
     lastType = curType; lastChildrenLen = curChildrenLen; lastOptionsLen = curOptionsLen
-    html.value = compute(val)
+    refresh()
   }, props.debounceMs)
 }, { deep: true })
 

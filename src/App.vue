@@ -187,6 +187,9 @@
                   <button type="button" class="btn btn-small" @click="openDataDir">
                     <i class="i-lucide-folder-open" />打开数据目录
                   </button>
+                  <button type="button" class="btn btn-small" :disabled="gc.running" @click="runGc">
+                    <i class="i-lucide-trash-2" />{{ gc.running ? '清理中…' : '清理无用图片' }}
+                  </button>
                   <button type="button" class="btn btn-small" :disabled="about.update === 'checking'" @click="checkUpdate">
                     <i class="i-lucide-refresh-cw" />{{ about.update === 'checking' ? '检查中…' : '检查更新' }}
                   </button>
@@ -194,6 +197,7 @@
                     <i class="i-lucide-download" />下载 {{ about.latest }}
                   </button>
                 </div>
+                <div v-if="gc.result" class="text-[12px] text-success">{{ gc.result }}</div>
                 <div v-if="about.update === 'latest'" class="text-[12px] text-success">已是最新版本</div>
                 <div v-if="about.update === 'failed'" class="text-[12px] text-danger">检查失败（离线或网络受限），可直接前往下载页查看</div>
                 <button type="button" class="self-start text-[12px] text-muted-light hover:text-primary underline underline-offset-2" @click="openReleases">前往下载页查看所有版本</button>
@@ -220,6 +224,7 @@ import { toast } from '@/stores/ui.js'
 import { cmd } from '@/api/bridge.js'
 import { list as listQuestions } from '@/api/questions.js'
 import { openDataDir as openDataDirApi } from '@/api/practice.js'
+import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
@@ -307,6 +312,7 @@ watch(() => route.fullPath, closeSearch)
 
 // ── 关于 / 更新 ──
 const about = reactive({ version: '', portable: null, update: 'idle', latest: '' })
+const gc = reactive({ running: false, result: '' })
 async function ensureAbout() {
   if (about.version) return
   try {
@@ -356,6 +362,34 @@ async function openReleases() {
   } catch (e) {
     console.error(e)
     toast('打开失败：' + (e?.message || e), 'error')
+  }
+}
+async function runGc() {
+  if (gc.running) return
+  gc.running = true
+  gc.result = ''
+  try {
+    const d = await gcAssets()
+    // 响应缺键说明前后端版本不一致（dev 热更只更了前端时会出现）：宁可报错，不编数字
+    if (!d || !('scanned' in d) || !('dangling' in d)) {
+      toast('后端版本过旧：Rust 未重编，请重启开发版后再试', 'error')
+      return
+    }
+    const removed = Number(d?.removed) || 0
+    const dangling = Array.isArray(d?.dangling) ? d.dangling.length : 0
+    const scanned = Number(d?.scanned) || 0
+    const parts = []
+    parts.push(removed > 0
+      ? `清理 ${removed} 张无用图片，释放 ${fmtBytes(d?.freed_bytes)}`
+      : `扫描 ${scanned} 道题：没有可清理的图片`)
+    if (dangling > 0) parts.push(`另有 ${dangling} 处图片引用缺失（题还在，文件/登记没了），请找到对应试题重新上传`)
+    gc.result = parts.join('；')
+    clearAssetCache()
+  } catch (e) {
+    console.error(e)
+    toast('清理失败：' + (e?.message || e), 'error')
+  } finally {
+    gc.running = false
   }
 }
 async function openDataDir() {

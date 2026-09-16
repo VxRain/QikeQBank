@@ -231,6 +231,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
+import { expandQuestions } from '@/api/assets.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
@@ -533,7 +534,7 @@ async function start() {
       }
       questions = dedupeShuffle(merged)
     }
-    pool.value = buildItems(questions)
+    pool.value = buildItems(await expandQuestions(questions))
     if (!pool.value.length) {
       fetching.value = false
       error.value = '题库中没有符合条件的试题，请先到“新增试题”添加题目。'
@@ -683,7 +684,7 @@ async function startFromIds(ids) {
   fetching.value = true
   try {
     const questions = await practicePool({ ids })
-    pool.value = buildItems(questions)
+    pool.value = buildItems(await expandQuestions(questions))
     if (!pool.value.length) {
       error.value = '重练题目已不存在（可能被删除），请从错题本重新发起。'
       return

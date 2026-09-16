@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS review_state (
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
   dismissed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assets (
+  sha TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  created_at TEXT NOT NULL
 );`;
 
 /** PLAN.md §3.2 MIGRATE —— M1/M2/M3，与 PLAN 逐字符一致（<now> 一律用 strftime 表达式） */

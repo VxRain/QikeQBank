@@ -49,6 +49,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { get, create, update } from '@/api/questions.js'
+import { expandQuestions, normalizeDocAssets } from '@/api/assets.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { toast } from '@/stores/ui.js'
@@ -134,7 +135,9 @@ onMounted(async ()=>{
     loading.value=true
     try{
       const res = await get(route.params.id)
-      form.value = res.data
+      // asset: 引用展开成可显示 URL（保存时再归一回去）
+      const list = await expandQuestions([res.data])
+      form.value = list[0] || res.data
     } catch(e){ error.value = e.response?.data?.error || e.message }
     finally{ loading.value=false }
   }
@@ -146,7 +149,9 @@ async function onSave(){
   if(!v.valid){ error.value = '校验失败：' + v.errors.join('; '); return }
   saving.value=true
   try{
-    const payload = isEdit.value ? form.value : { ...form.value }
+    const raw = isEdit.value ? form.value : { ...form.value }
+    // 深拷贝后归一：显示期 asset URL → asset: 引用；不碰编辑器内状态
+    const payload = normalizeDocAssets(JSON.parse(JSON.stringify(raw)))
     if(!isEdit.value){
       delete payload.id   // id 留空由后端生成
       if (!newBankId.value) {
@@ -171,7 +176,9 @@ async function onSave(){
       window.scrollTo(0, 0)
     }
   } catch(e){
-    error.value = e.response?.data?.error || e.message
+    console.error(e)
+    // invoke 拒因即后端 Err 字符串（无 .message），axios 式取法会吞错显空
+    error.value = typeof e === 'string' ? e : (e?.response?.data?.error || e?.message || '保存失败')
   } finally{ saving.value=false }
 }
 </script>

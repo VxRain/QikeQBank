@@ -72,6 +72,9 @@ import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
 import { Node, mergeAttributes } from '@tiptap/core'
 import katex from 'katex'
+import { toast } from '@/stores/ui.js'
+import { compressImageFile } from '@/utils/image.js'
+import { putAsset, assetFileUrl } from '@/api/assets.js'
 
 const props = defineProps({ modelValue: { type: Object, required: true }, showBlank: { type: Boolean, default: true }, compact: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue','blankInserted'])
@@ -400,20 +403,25 @@ function shouldShowBubble({ state }){
 
 // ============ 图片上传 → data URI ============
 const FALLBACK_SVG='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MDAiIGhlaWdodD0iMjAwIj48cmVjdCB3aWR0aD0iNjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2YxZjVmOSIvPjx0ZXh0IHg9IjMwMCIgeT0iMTAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjOTRhM2I4Ij7pooTop4jlrZDpgJrov4c8L3RleHQ+PC9zdmc+'
-function uploadImage(ev, kind){
+// 图片上传 → 压缩 → assets 入库 → 插入显示 URL（保存时还原成 asset: 引用，见 Form）
+async function uploadImage(ev, kind){
   const file = ev.target.files?.[0]
   ev.target.value='' // 允许重复选择同一文件
   if(!file) return
-  const reader=new FileReader()
-  reader.onload=()=>{
-    const src=String(reader.result||'')
+  try{
+    const { b64, mime, w, h } = await compressImageFile(file)
+    const { path } = await putAsset({ b64, mime, w, h })
+    const url = (path && assetFileUrl(path)) || ''
+    if(!url) throw new Error('图片地址解析失败')
     if(kind==='inlineImage'){
-      editor.chain().focus().insertContent({type:'inlineImage', attrs:{src, alt:file.name}}).run()
+      editor.chain().focus().insertContent({type:'inlineImage', attrs:{src:url, alt:file.name}}).run()
     } else {
-      editor.chain().focus().insertContent({type:'imageBlock', attrs:{src, caption:file.name.replace(/\.[^.]+$/,''), width:600}}).run()
+      editor.chain().focus().insertContent({type:'imageBlock', attrs:{src:url, caption:file.name.replace(/\.[^.]+$/,''), width:600}}).run()
     }
+  }catch(e){
+    console.error(e)
+    toast('图片插入失败：' + (e?.message || e), 'error')
   }
-  reader.readAsDataURL(file)
 }
 </script>
 

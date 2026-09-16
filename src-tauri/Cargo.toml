@@ -8,11 +8,13 @@ name = "qbank_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = "1.0.229"
 serde_json = "1.0.151"
-tauri = { version = "2", features = [] }
+sha2 = "0.10"
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-prevent-default = "3"
 tauri-plugin-opener = "2"
 uuid = { version = "1", features = ["v7"] }

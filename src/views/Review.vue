@@ -199,6 +199,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
+import { expandQuestions } from '@/api/assets.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { ui } from '@/stores/ui.js'
@@ -440,7 +441,7 @@ async function start() {
   phase.value = 'loading'
   try {
     const questions = await reviewDue({ limit: 20, bankId: bankId.value })
-    pool.value = buildItems(questions)
+    pool.value = buildItems(await expandQuestions(questions))
     if (!pool.value.length) {
       phase.value = 'due'
       dueTotal.value = 0

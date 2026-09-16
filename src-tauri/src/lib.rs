@@ -1,5 +1,7 @@
 mod db;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 便携模式：WebView2 缓存也拐到 exe 同目录（WebView2 认这个环境变量，需在 builder 启动前设置）
@@ -27,6 +29,11 @@ pub fn run() {
         .setup(|app| {
             // ensure DB schema exists before any command can be invoked
             db::ensure_schema(app.handle())?;
+            // assets 目录建好并放行 asset 协议 scope（运行时路径，静态 capability 写不出）
+            let assets = db::ensure_assets_dir(app.handle())?;
+            app.asset_protocol_scope()
+                .allow_directory(&assets, true)
+                .map_err(|e| format!("allow assets dir failed: {e}"))?;
             // 补发缺失的导入模板示例（不覆盖用户已改文件）
             db::ensure_template_files(app.handle())?;
             // WebView2 参数必须在 builder 层传（环境变量方式无效，wry 会整体替换）：
@@ -69,6 +76,9 @@ pub fn run() {
             db::records_overview,
             db::export_dbjson,
             db::is_portable_mode,
+            db::assets_put,
+            db::assets_resolve,
+            db::assets_gc,
             db::save_text_file,
             db::open_templates_dir,
             db::open_data_dir,

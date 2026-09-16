@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS wrong_dismiss (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
   dismissed_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS assets (
+  sha TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  created_at TEXT NOT NULL
+);
 ```
 
 ### 3.2 MIGRATE 步骤（先 DDL 后按序执行；`<now>` 一律用 SQL `strftime('%Y-%m-%dT%H:%M:%fZ','now')`）
@@ -157,6 +166,9 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 | `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
 | `open_data_dir` | — | 打开数据根目录（app_data_dir 或便携 data/，后端直调 opener），返回 `{"path"}`；手动备份入口 |
+| `assets_put` | `data_b64: String, mime: String, width?: i64, height?: i64` | 图片入库：base64 解码（≤20MB）→ sha256 → `data/assets/<2hex>/<rest>.<ext>`（内容寻址，同名跳写）→ 登记表 UPSERT；mime 仅 webp/png/jpeg/gif（拒 svg）；返回 `{"sha","path"}` |
+| `assets_resolve` | `shas: string[]`（≤200） | 批量查登记表 → `{"items":[{"sha","path"\|null}]}`（文件缺失也给 null，前端缓存） |
+| `assets_gc` | — | 全库题面 JSON 扫 `asset:<sha>` 引用，清无引用文件+登记行（顺手收空分片目录）；返回 `{"removed","freed_bytes","total","scanned","dangling":[{"question_id","sha"}]}`（悬空=题在但文件/登记缺失，只上报不删） |
 | `is_portable_mode` | — | 返回 `{"portable":bool}`（data/ 或 portable.ini 存在即 true）；前端徽章/更新门控用，不经 DB 锁 |
 
 **导入导出（v3）**
@@ -222,7 +234,12 @@ export function persistBankFilter(page, id)
 `practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
 ### App.vue（W2 改）
-`onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏新增**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）；设置弹窗底部**关于**区（版本号 getVersion、便携/安装模式、打开数据目录、检查更新→GitHub Releases，opener allow-open-url 仅放行本仓库）。
+`onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏新增**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）；设置弹窗底部**关于**区（版本号 getVersion、便携/安装模式、打开数据目录、清理无用图片（`assets_gc` + 显示释放字节）、检查更新→GitHub Releases，opener allow-open-url 仅放行本仓库）。
+
+### 配图文件化（前后端约定）
+- 题面 JSON 只存 `asset:<64hex>` 引用；`src/utils/image.js` 负责上传压缩（GIF 直存/小 PNG 直存/其余 WebP q85 长边 1920，拒 svg/超 20MB/超 12000px，EXIF 方向修正）；`src/api/assets.js` 负责 put/resolve/expand/normalize（resolve 结果 session 缓存，GC 后清）。
+- 显示：QuestionPreview 异步展开后渲染（深拷贝，不碰父对象）；Practice/Review 组卷后整批展开；Form 加载时展开。保存：Form 对深拷贝 payload 归一（显示 URL→引用）再提交；Rust 入库 choke 点（create/update/import）二次校验，未登记图直接 Err。data: URI 存量原样显示。
+- lib.rs setup 建 `data/assets` 并运行时放行 asset 协议 scope（静态 capability 写不出 portable 路径）。
 
 ### List.vue（W3a，单库视图）
 - 无题库下拉：上下文只认 `?bank=`（从题库页进入，须仍存在）；直访无 bank 显示空态引导去题库页挑库。

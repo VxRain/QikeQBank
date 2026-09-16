@@ -22,7 +22,7 @@ export function renderInlineNodes(nodes){
     }
     if(n.type==='inlineMath') return renderInlineMath(n.attrs.latex)
     if(n.type==='blank') return `<span class="blank" data-id="${n.attrs.id}">&nbsp;&nbsp;&nbsp;&nbsp;</span>`
-    if(n.type==='inlineImage') return `<img src="${n.attrs.src}" alt="${escapeHtml(n.attrs.alt||'')}" style="vertical-align:middle;height:1.4em;max-width:4em;border-radius:4px;border:1px solid #e3ddcd" />`
+    if(n.type==='inlineImage'){ if(String(n.attrs.src||'').startsWith('asset:')) return `<span style="display:inline-block;vertical-align:middle;color:#a89f8e;border:1px dashed #c9c1ad;border-radius:4px;padding:0 6px;font-size:12px">[图片缺失]</span>`; return `<img src="${n.attrs.src}" alt="${escapeHtml(n.attrs.alt||'')}" style="vertical-align:middle;height:1.4em;max-width:4em;border-radius:4px;border:1px solid #e3ddcd" />` }
     return ''
   }).join('')
 }
@@ -34,6 +34,7 @@ export function renderDoc(doc){
       const src=node.attrs.src||''
       const cap=escapeHtml(node.attrs.caption||'')
       const w=node.attrs.width||600
+      if(String(src).startsWith('asset:')) return `<figure style="text-align:center;margin:14px 0"><div style="display:inline-block;color:#a89f8e;border:1px dashed #c9c1ad;border-radius:8px;padding:22px 40px;font-size:13px;background:#faf7ee">[图片缺失，请重新上传]</div>${cap?`<figcaption style="color:#7d7568;font-size:12px;margin-top:6px">${cap}</figcaption>`:''}</figure>`
       return `<figure style="text-align:center;margin:14px 0"><img src="${src}" alt="${escapeHtml(node.attrs.alt||cap)}" style="max-width:${w}px;max-width:100%;border-radius:8px;border:1px solid #e3ddcd;background:#fffdf7;box-shadow:0 1px 3px rgba(0,0,0,.06)" /><figcaption style="color:#7d7568;font-size:12px;margin-top:6px">${cap}</figcaption></figure>`
     }
     if(node.type==='mathBlock') return renderBlockMath(node.attrs.latex)
