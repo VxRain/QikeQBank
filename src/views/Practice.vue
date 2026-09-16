@@ -5,8 +5,26 @@
     <!-- 设置面板 -->
     <section v-if="phase === 'setup'" class="card max-w-[640px]">
       <div class="card-head">
-        <h2 class="section-title flex items-center gap-2"><i class="i-lucide-zap text-primary" />开始刷题</h2>
-        <span class="badge badge-type">练习模式 · 判分后计入复习</span>
+        <h2 class="section-title flex items-center gap-2"><i class="i-lucide-zap text-primary" />{{ mode === 'recite' ? '开始背题' : '开始刷题' }}</h2>
+        <span class="badge badge-type">{{ mode === 'recite' ? '背题模式 · 直接看答案与解析' : '练习模式 · 判分后计入复习' }}</span>
+      </div>
+
+      <div class="mb-5">
+        <div class="field-label">模式</div>
+        <div class="flex gap-2 flex-wrap">
+          <button
+            type="button"
+            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
+            :class="mode === 'practice' && 'bg-text text-white border-text'"
+            @click="setMode('practice')"
+          ><i class="i-lucide-zap mr-1.5" />练习 · 作答判分</button>
+          <button
+            type="button"
+            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
+            :class="mode === 'recite' && 'bg-text text-white border-text'"
+            @click="setMode('recite')"
+          ><i class="i-lucide-book-open mr-1.5" />背题 · 看答案过一遍</button>
+        </div>
       </div>
 
       <div class="mb-5">
@@ -55,10 +73,10 @@
           :disabled="!selectedTypes.length || fetching"
           @click="start"
         >
-          <i class="i-lucide-play" />{{ fetching ? '正在抽题…' : '开始刷题' }}
+          <i class="i-lucide-play" />{{ fetching ? '正在抽题…' : (mode === 'recite' ? '开始背题' : '开始刷题') }}
         </button>
         <div class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
-          <i class="i-lucide-keyboard" />键盘：A–F 选题，Enter 提交，M 切换材料
+          <i class="i-lucide-keyboard" />键盘：A–F 选题，Enter 提交，M 切换材料；背题模式 ←/→ 翻题
         </div>
       </div>
     </section>
@@ -66,8 +84,11 @@
     <!-- 作答卡片 -->
     <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card flex flex-col gap-3.5" @keydown="onCardKeydown">
       <div class="flex items-center justify-between gap-3">
-        <span class="badge badge-type">{{ curBadge }}</span>
-        <span class="text-[13px] text-muted font-500">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="badge badge-type">{{ curBadge }}</span>
+          <span v-if="recite" class="badge shrink-0"><i class="i-lucide-book-open" />背题模式</span>
+        </div>
+        <span class="text-[13px] text-muted font-500 shrink-0">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
@@ -83,10 +104,10 @@
         <div v-if="materialOpen" class="text-[13px] text-text-secondary pt-2" v-html="materialStemHtml"></div>
       </div>
 
-      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput" @keydown="onStemKeydown"></div>
+      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="recite ? reciteStemHtml : stemHtml" @input="onStemInput" @keydown="onStemKeydown"></div>
 
-      <!-- 选择类 -->
-      <div v-if="isChoice" class="flex flex-col gap-2">
+      <!-- 选择类（作答，仅练习模式） -->
+      <div v-if="!recite && isChoice" class="flex flex-col gap-2">
         <button
           v-for="(o, i) in cur.q.options || []"
           :key="o.id"
@@ -100,7 +121,7 @@
           <span class="opt-body" v-html="optHtml(o)"></span>
         </button>
       </div>
-      <div v-else-if="cur.q.type === 'multi'" class="flex flex-col gap-2">
+      <div v-else-if="!recite && cur.q.type === 'multi'" class="flex flex-col gap-2">
         <button
           v-for="(o, i) in cur.q.options || []"
           :key="o.id"
@@ -115,8 +136,8 @@
         </button>
       </div>
 
-      <!-- 简答 -->
-      <div v-else-if="cur.q.type === 'short'" class="flex flex-col gap-2.5">
+      <!-- 简答（作答，仅练习模式） -->
+      <div v-else-if="!recite && cur.q.type === 'short'" class="flex flex-col gap-2.5">
         <textarea v-model="shortText" rows="5" class="w-full p-3 border border-line rounded-[8px] text-[14px] text-text bg-card outline-none resize-y shadow-sm transition-[border-color,box-shadow] duration-150 focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.15)]" placeholder="请输入你的答案…"></textarea>
         <div class="flex gap-2">
           <button type="button" class="btn" @click="showRef = !showRef">
@@ -134,11 +155,34 @@
         </div>
       </div>
 
-      <!-- 提交 -->
-      <div v-if="!graded && !isShort">
+      <!-- 提交（仅练习模式） -->
+      <div v-if="!recite && !graded && !isShort">
         <button type="button" class="btn btn-primary btn-big" :disabled="!canSubmit" @click="submit">
           <i class="i-lucide-check-circle" />提交判分
         </button>
+      </div>
+
+      <!-- 背题模式：直接展示答案 + 解析，只留上下题 -->
+      <div v-if="recite" class="border-t border-line pt-4 flex flex-col gap-3">
+        <div v-if="isChoiceLike" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
+        <div v-else-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
+          <div v-for="b in cur.q.answer?.blanks || []" :key="b.id" class="flex items-baseline gap-2 px-3 py-2 rounded-[8px] text-[13px] border border-[#bcd9c4] bg-success-bg text-text-secondary">
+            <span class="font-700 text-text">{{ b.id }}</span>
+            <span>正确答案：{{ (b.answers || []).join(' / ') || '—' }}</span>
+          </div>
+        </div>
+        <div v-else-if="cur.q.type === 'short' && refHtml" class="p-3.5 bg-success-bg border border-[#bcd9c4] rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+          <b class="text-success flex items-center gap-1"><i class="i-lucide-book-open text-[14px]" />参考答案：</b>
+          <div v-html="refHtml"></div>
+        </div>
+        <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+          <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
+          <div v-html="analysisHtml"></div>
+        </div>
+        <div class="flex justify-between gap-2">
+          <button type="button" class="btn btn-big" :disabled="curIdx === 0" title="← 上一题" @click="prev"><i class="i-lucide-arrow-left" />上一题</button>
+          <button ref="nextBtnRef" type="button" class="btn btn-primary btn-big" title="→ 下一题" @click="next"><i class="i-lucide-arrow-right" />{{ isLast ? '完成' : '下一题' }}</button>
+        </div>
       </div>
 
       <!-- 判分结果（判分前绝不展示答案/解析） -->
@@ -186,9 +230,14 @@
     <!-- 结束页 -->
     <section v-else-if="phase === 'done'" class="card flex flex-col gap-5 items-center text-center">
       <div class="text-[22px] font-800 tracking-[-0.01em] font-[var(--serif)] flex items-center gap-2">
-        <i class="i-lucide-trophy text-primary text-[26px]" />本轮练习结束
+        <i :class="recite ? 'i-lucide-book-open' : 'i-lucide-trophy'" class="text-primary text-[26px]" />{{ recite ? '本轮背题结束' : '本轮练习结束' }}
       </div>
       <div class="flex gap-3.5 flex-wrap justify-center">
+        <div v-if="recite" class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[24px] font-800 text-text">{{ lastRound.total }}</div>
+          <div class="text-[12px] text-muted mt-1">已过题数</div>
+        </div>
+        <template v-else>
         <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
           <div class="text-[24px] font-800 text-text">{{ lastRound.correct }} / {{ lastRound.total }}</div>
           <div class="text-[12px] text-muted mt-1">答对题数</div>
@@ -197,17 +246,18 @@
           <div class="text-[24px] font-800 text-text">{{ lastRound.rate }}%</div>
           <div class="text-[12px] text-muted mt-1">正确率</div>
         </div>
+        </template>
         <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
           <div class="text-[24px] font-800 text-text">{{ fmtMs(lastRound.ms) }}</div>
           <div class="text-[12px] text-muted mt-1">本轮用时</div>
         </div>
-        <div v-if="lastRound.wrong.length" class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
+        <div v-if="!recite && lastRound.wrong.length" class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
           <div class="text-[24px] font-800 text-danger">{{ lastRound.wrong.length }}</div>
           <div class="text-[12px] text-muted mt-1">错题数</div>
         </div>
       </div>
 
-      <div v-if="rounds.length > 1" class="text-[13px] text-muted">
+      <div v-if="!recite && rounds.length > 1" class="text-[13px] text-muted">
         累计：{{ sessionStats.total }} 题 · 答对 {{ sessionStats.correct }} ·
         共 {{ fmtMs(sessionStats.ms) }}
       </div>
@@ -260,6 +310,15 @@ const selectedTypes = ref([...ALL_TYPES])
 const count = ref(5)
 const bankId = ref('')
 
+// 模式：practice 作答判分（计入复习）；recite 背题（直接看答案/解析，不判分不记录）
+const MODE_KEY = 'qbank.practiceMode'
+const mode = ref(localStorage.getItem(MODE_KEY) === 'recite' ? 'recite' : 'practice')
+function setMode(m) {
+  mode.value = m
+  try { localStorage.setItem(MODE_KEY, m) } catch { /* 忽略持久化失败 */ }
+}
+const recite = computed(() => mode.value === 'recite')
+
 const pool = ref([]) // 子题队列：普通题=1 项，material=每子题 1 项
 const curIdx = ref(0)
 const cur = computed(() => pool.value[curIdx.value])
@@ -307,7 +366,9 @@ const rounds = ref([])
 const round = ref({ total: 0, correct: 0, wrong: [], ms: 0 })
 
 const isChoice = computed(() => cur.value && ['single', 'judge'].includes(cur.value.q.type))
+const isChoiceLike = computed(() => cur.value && ['single', 'multi', 'judge'].includes(cur.value.q.type))
 const isShort = computed(() => cur.value && cur.value.q.type === 'short')
+const isLast = computed(() => curIdx.value === pool.value.length - 1)
 
 const curBadge = computed(() => {
   const it = cur.value
@@ -318,7 +379,7 @@ const curBadge = computed(() => {
 
 const progressPct = computed(() => {
   const total = pool.value.length || 1
-  const done = curIdx.value + (graded.value ? 1 : 0)
+  const done = curIdx.value + (recite.value || graded.value ? 1 : 0)
   return Math.min(100, Math.round((done / total) * 100))
 })
 
@@ -332,6 +393,21 @@ const canSubmit = computed(() => {
 })
 
 const stemHtml = computed(() => renderStemHtml(cur.value))
+// 背题模式题干：填空不渲染输入框，直接嵌答案章
+const reciteStemHtml = computed(() => {
+  const it = cur.value
+  if (!it) return ''
+  const q = it.q
+  if (q.type === 'fill') {
+    const map = {}
+    for (const b of q.answer?.blanks || []) map[b.id] = (b.answers || []).join(' / ')
+    return renderDoc(q.stem).replace(
+      /<span class="blank"[^>]*data-id="([^"]+)"[^>]*>[\s\S]*?<\/span>/g,
+      (m, id) => `<span class="blank-recite">${map[id] || '—'}</span>`
+    )
+  }
+  return renderDoc(q.stem)
+})
 const materialStemHtml = computed(() => (cur.value?.parent ? renderDoc(cur.value.parent.stem) : ''))
 const refHtml = computed(() => {
   const q = cur.value?.q
@@ -345,7 +421,7 @@ const analysisHtml = computed(() => {
 })
 const answerHtml = computed(() => {
   const q = cur.value?.q
-  if (!q || !isChoice.value) return ''
+  if (!q || !isChoiceLike.value) return ''
   return renderOptions(q.options, q.answer?.ids)
 })
 
@@ -394,6 +470,17 @@ function onCardKeydown(e) {
     if (autoNextPending) {
       e.preventDefault()
       cancelAutoNext()
+    }
+    return
+  }
+  // 背题模式：←/→ 或 Enter 翻题，其余键不劫持
+  if (recite.value) {
+    if (e.key === 'Enter' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      next()
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      prev()
     }
     return
   }
@@ -665,9 +752,19 @@ function next() {
   }
 }
 
+function prev() {
+  if (curIdx.value > 0) {
+    curIdx.value--
+    resetAnswer()
+    startedAt.value = Date.now()
+    focusCard()
+  }
+}
+
 function startRedo() {
   const last = rounds.value[rounds.value.length - 1]
   if (!last || !last.wrong.length) return
+  mode.value = 'practice' // 错题重做是作答判分，强制回练习模式
   pool.value = last.wrong
   curIdx.value = 0
   round.value = { total: pool.value.length, correct: 0, wrong: [], ms: 0 }
@@ -680,6 +777,7 @@ function startRedo() {
 // 错题本重练：按指定 id 组卷，跳过 setup 直达作答
 async function startFromIds(ids) {
   if (fetching.value) return
+  mode.value = 'practice' // 错题重练是作答判分，强制回练习模式
   error.value = ''
   fetching.value = true
   try {
@@ -754,6 +852,12 @@ function fmtMs(ms) {
   outline: none; transition: border-color .15s ease, box-shadow .15s ease; box-shadow: var(--shadow-sm);
 }
 .stem :deep(.qb-fill-input:focus) { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(31,77,58,.15); }
+/* 背题模式：填空答案章（嵌在题干空位处） */
+.stem :deep(.blank-recite) {
+  display: inline-block; padding: 0 8px; margin: 0 2px;
+  border-bottom: 2px solid var(--success); border-radius: 4px;
+  background: var(--success-bg); color: var(--text); font-weight: 500; line-height: 1.5;
+}
 .opt-body :deep(p) { margin: 0; }
 .answer-view :deep(.option) { padding: 6px 8px; border-radius: 8px; }
 .answer-view :deep(.option.correct) { color: var(--success); font-weight: 600; }
