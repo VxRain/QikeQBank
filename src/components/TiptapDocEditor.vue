@@ -51,9 +51,12 @@
           <button class="btn tiny close" @click="closeImg">×</button>
         </div>
         <img v-if="imgEdit.value" :src="imgEdit.value" class="img-preview" />
+        <div v-if="imgEdit.missing" class="muted" style="font-size:12px">原图已缺失，请重新上传或填写新地址</div>
         <input v-model="imgEdit.value" class="latex-input" placeholder="图片 URL 或 data URI" @keydown.enter.exact.prevent="confirmImg" @keydown.esc="closeImg" />
+        <input v-model="imgEdit.caption" class="latex-input" placeholder="图片标题" @keydown.enter.exact.prevent="confirmImg" @keydown.esc="closeImg" />
         <div class="latex-actions">
           <button class="btn tiny primary" @click="confirmImg">确定</button>
+          <label class="btn tiny" style="cursor:pointer">重新上传<input type="file" accept="image/*" hidden @change="replaceImgFile" /></label>
           <button class="btn tiny" @click="closeImg">取消</button>
         </div>
       </div>
@@ -164,6 +167,42 @@ const InlineImage = Node.create({
   addAttributes(){ return { src:{default:''}, alt:{default:''} } },
   parseHTML(){ return [{tag:'img[data-inline]'}] },
   renderHTML({HTMLAttributes}){ return ['img', mergeAttributes({'data-inline':'true', style:'vertical-align:middle;height:1.4em;border-radius:4px;border:1px solid var(--line-strong)'}, HTMLAttributes)] },
+  // 行内图也要可更换：无 node view 时缺失图点都没法点
+  addNodeView(){
+    return ({node, getPos, editor})=>{
+      let cur = node
+      const img=document.createElement('img')
+      img.setAttribute('data-inline','true')
+      img.style.cssText='vertical-align:middle;height:1.4em;max-width:4em;border-radius:4px;border:1px solid var(--line-strong);cursor:pointer'
+      const sync=()=>{
+        const src=cur.attrs.src||''
+        if(img.getAttribute('src')!==src) img.src=src
+        const failed=!!src && img.complete && img.naturalWidth===0
+        img.style.border=(!src||failed)?'1px dashed #b4453a':'1px solid var(--line-strong)'
+        img.title=!src?'图片缺失，点击重新上传':(failed?'图片加载失败，点击重新上传':'点击更换图片')
+        img.alt=cur.attrs.alt||''
+      }
+      img.addEventListener('click',()=>{
+        try{ getPos() }catch{ return }
+        openImg({
+          value: cur.attrs.src||'',
+          caption: cur.attrs.alt||'',
+          missing: !cur.attrs.src,
+          anchorEl: img,
+          onConfirm({src, caption}){
+            let p; try{ p=getPos() }catch{ return }
+            editor.commands.command(({tr,dispatch})=>{
+              if(dispatch){ tr.setNodeMarkup(p, undefined, {...cur.attrs, src, alt:caption}); dispatch(tr) }
+              return true
+            })
+          }
+        })
+      })
+      img.addEventListener('error', ()=> sync())
+      sync()
+      return { dom:img, update(newNode){ cur=newNode; sync(); return true } }
+    }
+  },
 })
 
 // —— ImageBlock ——
@@ -180,36 +219,85 @@ const ImageBlock = Node.create({
   },
   addNodeView(){
     return ({node, getPos, editor})=>{
+      // cur 必须可变：无 update() 时任何 attrs 变更都会销毁重建整个视图，
+      // 标题框每敲一字就丢焦点——之前标题改不了就是这个原因
+      let cur = node
       const wrap=document.createElement('div')
-      wrap.style.cssText='border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg-accent);margin:8px 0'
+      wrap.style.cssText='border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg-accent);margin:8px 0;position:relative'
+      // 隔离岛：不声明 contenteditable=false 的话，标题输入框的鼠标键盘事件
+      // 会被 ProseMirror 劫持（根本聚焦不了）——标题不能输入的真正原因
       const img=document.createElement('img')
-      img.src=node.attrs.src||''
       img.style.cssText='max-width:100%;border-radius:8px;border:1px solid var(--line);background:#fffdf7;display:block;margin:0 auto;max-height:140px;cursor:pointer'
-      img.title='点击更换图片'
-      img.addEventListener('click',()=>{
+      const cap=document.createElement('input')
+      cap.placeholder='图片标题（可直接修改）'
+      cap.style.cssText='width:100%;margin-top:6px;background:#fffdf7;border:1px solid var(--line);border-radius:6px;color:#1b1a17;padding:5px 8px;font-size:12px'
+      const sync=()=>{
+        const src=cur.attrs.src||''
+        if(img.getAttribute('src')!==src) img.src=src
+        // 缺失分两种：空 src（从未有图）与加载失败（404/文件被删），后者靠 complete 判定
+        const failed=!!src && img.complete && img.naturalWidth===0
+        img.style.border=(!src||failed)?'1px dashed #b4453a':'1px solid var(--line)'
+        img.title=!src?'图片缺失，点击重新上传':(failed?'图片加载失败，点击重新上传':'点击更换图片')
+        // 聚焦输入中不回写，避免光标跳动
+        if(document.activeElement!==cap && cap.value!==(cur.attrs.caption||'')) cap.value=cur.attrs.caption||''
+      }
+      const open=()=>{
+        try{ getPos() }catch{ return } // 节点已删则不弹层
+        const src=cur.attrs.src||''
         openImg({
-          value: node.attrs.src||'',
+          value: src,
+          caption: cur.attrs.caption||'',
+          missing: !src || (img.complete && img.naturalWidth===0),
           anchorEl: img,
-          onConfirm(v){
+          onConfirm({src, caption}){
+            let p; try{ p=getPos() }catch{ return }
             editor.commands.command(({tr,dispatch})=>{
-              if(dispatch){ tr.setNodeMarkup(getPos(), undefined, {...node.attrs, src:v}) ; dispatch(tr) }
+              if(dispatch){ tr.setNodeMarkup(p, undefined, {...cur.attrs, src, caption}); dispatch(tr) }
               return true
             })
-            img.src=v
           }
         })
-      })
-      const cap=document.createElement('input')
-      cap.value=node.attrs.caption||''
-      cap.placeholder='图片标题'
-      cap.style.cssText='width:100%;margin-top:6px;background:#fffdf7;border:1px solid var(--line);border-radius:6px;color:#1b1a17;padding:5px 8px;font-size:12px'
-      cap.addEventListener('input',()=>{
-        const pos=getPos()
+      }
+      img.addEventListener('click', open)
+      img.addEventListener('error', ()=> sync())
+      // change（失焦/回车）再提交：逐字 input 会刷屏式写事务
+      cap.addEventListener('change',()=>{
+        let pos; try{ pos=getPos() }catch{ return }
         editor.chain().setNodeSelection(pos).updateAttributes('imageBlock',{caption:cap.value}).run()
       })
+      cap.addEventListener('keydown',(ev)=>{ if(ev.key==='Enter'){ ev.preventDefault(); cap.blur() } })
       wrap.appendChild(img)
       wrap.appendChild(cap)
-      return { dom:wrap }
+      // 悬停换图徽标：hover 才出现，点开直接选文件（不经过浮层）
+      const badge=document.createElement('button')
+      badge.textContent='换图'
+      badge.title='重新上传图片'
+      badge.style.cssText='position:absolute;top:12px;right:12px;display:none;background:#fffdf7;border:1px solid var(--line);border-radius:6px;color:#1f4d3a;font-size:12px;padding:2px 8px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.12)'
+      const fileInput=document.createElement('input')
+      fileInput.type='file'
+      fileInput.accept='image/*'
+      fileInput.style.display='none'
+      wrap.addEventListener('mouseenter',()=>{ badge.style.display='' })
+      wrap.addEventListener('mouseleave',()=>{ badge.style.display='none' })
+      badge.addEventListener('click',(ev)=>{ ev.stopPropagation(); fileInput.click() })
+      fileInput.addEventListener('change', async ()=>{
+        const f=fileInput.files?.[0]; fileInput.value=''
+        if(!f) return
+        try{
+          const { url } = await uploadFileToAsset(f)
+          let p; try{ p=getPos() }catch{ return }
+          editor.commands.command(({tr,dispatch})=>{
+            if(dispatch){ tr.setNodeMarkup(p, undefined, {...cur.attrs, src:url}); dispatch(tr) }
+            return true
+          })
+        }catch(e){ console.error(e); toast('图片替换失败：'+(e?.message||e),'error') }
+      })
+      wrap.appendChild(badge)
+      wrap.appendChild(fileInput)
+      sync()
+      return { dom:wrap, update(newNode){ cur=newNode; sync(); return true },
+        // 输入框/徽标的事件还给浏览器：否则回车退格会被编辑器接管
+        stopEvent(event){ const t=event.target; return !!(t && t instanceof HTMLElement && (t===cap || t===badge || t===fileInput || cap.contains(t))) } }
     }
   }
 })
@@ -276,7 +364,7 @@ onBeforeUnmount(()=> editor.destroy())
 
 // ============ 浮层（LaTeX/图片）：定位 + 拖动 ============
 const latexEdit = reactive({ visible:false, value:'', x:0, y:0, displayMode:false, confirm:null })
-const imgEdit = reactive({ visible:false, value:'', x:0, y:0, confirm:null })
+const imgEdit = reactive({ visible:false, value:'', caption:'', missing:false, x:0, y:0, confirm:null })
 const latexInput = ref(null)
 const latexPop = ref(null)
 const imgPop = ref(null)
@@ -334,8 +422,10 @@ function confirmLatex(){
 }
 function closeLatex(){ latexEdit.visible=false }
 
-function openImg({value, anchorEl, onConfirm}){
+function openImg({value, caption, missing, anchorEl, onConfirm}){
   imgEdit.value=value
+  imgEdit.caption=caption||''
+  imgEdit.missing=!!missing
   imgEdit.confirm=onConfirm
   imgEdit.visible=true
   positionPop(imgEdit, anchorEl, 360)
@@ -343,10 +433,25 @@ function openImg({value, anchorEl, onConfirm}){
 function confirmImg(){
   const v=imgEdit.value.trim()
   if(!v){ closeImg(); return }
-  imgEdit.confirm?.(v)
+  imgEdit.confirm?.({ src:v, caption:imgEdit.caption.trim() })
   closeImg()
 }
 function closeImg(){ imgEdit.visible=false }
+// 浮层内重新上传：压缩入库后回填地址栏（确定后才写入节点）
+async function replaceImgFile(ev){
+  const file = ev.target.files?.[0]
+  ev.target.value=''
+  if(!file) return
+  try{
+    const { url, name } = await uploadFileToAsset(file)
+    imgEdit.value=url
+    imgEdit.missing=false
+    if(!imgEdit.caption) imgEdit.caption=name.replace(/\.[^.]+$/,'')
+  }catch(e){
+    console.error(e)
+    toast('图片替换失败：' + (e?.message || e), 'error')
+  }
+}
 
 // ============ 插入动作 ============
 function insertInlineMath(){
@@ -404,19 +509,24 @@ function shouldShowBubble({ state }){
 // ============ 图片上传 → data URI ============
 const FALLBACK_SVG='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MDAiIGhlaWdodD0iMjAwIj48cmVjdCB3aWR0aD0iNjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2YxZjVmOSIvPjx0ZXh0IHg9IjMwMCIgeT0iMTAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjOTRhM2I4Ij7pooTop4jlrZDpgJrov4c8L3RleHQ+PC9zdmc+'
 // 图片上传 → 压缩 → assets 入库 → 插入显示 URL（保存时还原成 asset: 引用，见 Form）
+// 文件 → 压缩 → 入库 → 显示 URL（三处共用：新建插入/浮层替换/悬停换图）
+async function uploadFileToAsset(file){
+  const { b64, mime, w, h } = await compressImageFile(file)
+  const { path } = await putAsset({ b64, mime, w, h })
+  const url = (path && assetFileUrl(path)) || ''
+  if(!url) throw new Error('图片地址解析失败')
+  return { url, name: file.name }
+}
 async function uploadImage(ev, kind){
   const file = ev.target.files?.[0]
   ev.target.value='' // 允许重复选择同一文件
   if(!file) return
   try{
-    const { b64, mime, w, h } = await compressImageFile(file)
-    const { path } = await putAsset({ b64, mime, w, h })
-    const url = (path && assetFileUrl(path)) || ''
-    if(!url) throw new Error('图片地址解析失败')
+    const { url, name } = await uploadFileToAsset(file)
     if(kind==='inlineImage'){
-      editor.chain().focus().insertContent({type:'inlineImage', attrs:{src:url, alt:file.name}}).run()
+      editor.chain().focus().insertContent({type:'inlineImage', attrs:{src:url, alt:name}}).run()
     } else {
-      editor.chain().focus().insertContent({type:'imageBlock', attrs:{src:url, caption:file.name.replace(/\.[^.]+$/,''), width:600}}).run()
+      editor.chain().focus().insertContent({type:'imageBlock', attrs:{src:url, caption:name.replace(/\.[^.]+$/,''), width:600}}).run()
     }
   }catch(e){
     console.error(e)
