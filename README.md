@@ -46,6 +46,7 @@ pnpm dev
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust：SM-2 演化、plain_text 提取、Schema 往返/级联
+pnpm test:unit                              # 前端解析器回归（node:test，零依赖）
 node tools/smoke-test.mjs                          # SQLite DDL/CRUD/级联冒烟
 node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁移
 ```

@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test:unit": "node --test \"tests/unit/*.test.js\"",
     "portable": "node tools/make-portable.mjs",
     "build:all": "pnpm tauri build && node tools/make-portable.mjs --skip-build"
   },

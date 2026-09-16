@@ -202,14 +202,16 @@ export function parseDocxHtml(html) {
       chunk.rawLines.push(line)
       continue
     }
-    // 转义行：去一根反斜杠，强制按字面走
+    // 转义行：去一根反斜杠，强制按字面走；若正处在答案/解析续行中，留在续行里（不是新题干）
     if (RE_ESCAPE.test(line)) {
       const lit = line.replace(/^\\/, '')
       if (matBody && matChildren === 0) { matBody.lines.push(lit); matBody.rawLines.push(line) }
       else {
         if (!chunk) { chunk = newChunk(); chunk.section = section }
-        chunk.stemLines.push(lit)
-        chunk.rawLines.push(line)
+        if (chunk.analysisLines) { chunk.analysisLines.push(lit); chunk.rawLines.push(line) }
+        else if (chunk.refLines) { chunk.refLines.push(lit); chunk.rawLines.push(line) }
+        else if (chunk.answerRaw != null) { chunk.answerRaw += '\n' + lit; chunk.rawLines.push(line) }
+        else { chunk.stemLines.push(lit); chunk.rawLines.push(line) }
       }
       continue
     }
