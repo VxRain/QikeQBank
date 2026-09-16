@@ -17,7 +17,46 @@
             class="nav-link relative inline-flex items-center gap-1.5 px-3.5 h-full text-[14px] font-500 no-underline text-text-secondary transition-[color] duration-150 hover:text-text"
           ><i :class="item.icon" aria-hidden="true" />{{ item.label }}</router-link>
         </nav>
-        <div class="ml-auto flex items-center">
+        <div class="ml-auto flex items-center gap-2">
+          <div class="relative hidden sm:block">
+            <i class="i-lucide-search absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-light text-[14px] pointer-events-none" />
+            <input
+              v-model="searchText"
+              class="input pl-8 pr-7 py-1.5 text-[13px] w-[210px]"
+              type="text"
+              placeholder="全局搜索试题…"
+              autocomplete="off"
+              @input="onSearchInput"
+              @focus="onSearchFocus"
+              @keyup.esc="closeSearch"
+            />
+            <button
+              v-if="searchText"
+              type="button"
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-light hover:text-text"
+              title="清空"
+              @click="clearSearch"
+            ><i class="i-lucide-x text-[14px]" /></button>
+            <div v-if="searchOpen" class="absolute right-0 top-full mt-2 w-[min(400px,calc(100vw-48px))] max-h-[60vh] overflow-auto card !p-2 z-[1001] shadow-lg text-left">
+              <div v-if="searching" class="px-3 py-2.5 text-muted text-[13px]">搜索中…</div>
+              <div v-else-if="searchText.trim() && !searchResults.length" class="px-3 py-2.5 text-muted text-[13px]">没有匹配的试题</div>
+              <div v-for="q in searchResults" :key="q.id">
+                <button type="button" class="w-full text-left px-2.5 py-2 rounded-[8px] hover:bg-bg-accent flex flex-col gap-0.5" @click="toggleSearchPreview(q.id)">
+                  <span class="flex items-center gap-1.5 min-w-0">
+                    <span class="badge badge-type shrink-0">{{ typeLabel(q.type) }}</span>
+                    <span class="text-[13px] text-text truncate">{{ stemText(q) }}</span>
+                  </span>
+                  <span class="text-[12px] text-muted-light pl-1">{{ bankName(q.bank_id) }}</span>
+                </button>
+                <div v-if="expandedId === q.id" class="mx-1 mb-2 p-3 border border-line rounded-[8px] bg-bg">
+                  <QuestionPreview :question="q" />
+                  <div class="flex justify-end mt-2">
+                    <button type="button" class="btn btn-small" @click="goEdit(q.id)">去编辑</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           <button type="button" class="i-btn px-2.5 py-1.5 text-[13px]" title="设置" @click="showSettings = true">
             <i class="i-lucide-settings-2 text-[15px]" />设置
           </button>
@@ -138,6 +177,28 @@
               </span>
             </div>
             </div>
+            <div class="border-t border-line mt-1 pt-3.5">
+              <div class="flex items-center gap-1.5 text-[14px] font-600 text-text mb-2">
+                <i class="i-lucide-info text-primary" />关于
+              </div>
+              <div class="text-[13px] text-muted flex flex-col gap-1.5">
+                <div>奇客题库 <b class="text-text">{{ about.version || '—' }}</b><span v-if="about.portable !== null"> · {{ about.portable ? '便携版' : '安装版' }}</span></div>
+                <div class="flex flex-wrap gap-2 pt-0.5">
+                  <button type="button" class="btn btn-small" @click="openDataDir">
+                    <i class="i-lucide-folder-open" />打开数据目录
+                  </button>
+                  <button type="button" class="btn btn-small" :disabled="about.update === 'checking'" @click="checkUpdate">
+                    <i class="i-lucide-refresh-cw" />{{ about.update === 'checking' ? '检查中…' : '检查更新' }}
+                  </button>
+                  <button v-if="about.update === 'new'" type="button" class="btn btn-small btn-primary" @click="openReleases">
+                    <i class="i-lucide-download" />下载 {{ about.latest }}
+                  </button>
+                </div>
+                <div v-if="about.update === 'latest'" class="text-[12px] text-success">已是最新版本</div>
+                <div v-if="about.update === 'failed'" class="text-[12px] text-danger">检查失败（离线或网络受限），可直接前往下载页查看</div>
+                <button type="button" class="self-start text-[12px] text-muted-light hover:text-primary underline underline-offset-2" @click="openReleases">前往下载页查看所有版本</button>
+              </div>
+            </div>
             <div class="flex justify-end gap-2.5 mt-4">
               <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
             </div>
@@ -149,15 +210,170 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
-import { loadBanks, clearBankFilters } from '@/stores/bank.js'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { getVersion } from '@tauri-apps/api/app'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { loadBanks, bankStore, clearBankFilters } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 import { toast } from '@/stores/ui.js'
+import { cmd } from '@/api/bridge.js'
+import { list as listQuestions } from '@/api/questions.js'
+import { openDataDir as openDataDirApi } from '@/api/practice.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
+import QuestionPreview from '@/components/QuestionPreview.vue'
+
+const route = useRoute()
+const router = useRouter()
+
+const REPO = 'VxRain/QikeQBank'
+const RELEASES_URL = `https://github.com/${REPO}/releases`
+
+// ── 全局搜索：跨库搜题干，展开行内预览 + 去编辑 ──
+const SEARCH_TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '简答', material: '材料' }
+const searchText = ref('')
+const searchResults = ref([])
+const searching = ref(false)
+const searchOpen = ref(false)
+const expandedId = ref(null)
+let searchTimer = null
+
+function typeLabel(t) {
+  return SEARCH_TYPE_LABELS[t] || t || '-'
+}
+function stemText(q) {
+  const s = String(q?.plain_text || '').replace(/\s+/g, ' ').trim()
+  return s ? (s.length > 60 ? s.slice(0, 60) + '…' : s) : '(空题干)'
+}
+function bankName(bid) {
+  return bankStore.banks.find((b) => b.id === bid)?.name || '未知题库'
+}
+async function runSearch() {
+  const kw = searchText.value.trim()
+  if (!kw) {
+    searchResults.value = []
+    searching.value = false
+    return
+  }
+  searching.value = true
+  try {
+    const res = await listQuestions({ query: kw, limit: 8 })
+    searchResults.value = res?.data?.items || []
+  } catch (e) {
+    console.error(e)
+    searchResults.value = []
+  } finally {
+    searching.value = false
+  }
+}
+function onSearchInput() {
+  if (!searchText.value.trim()) {
+    clearSearch()
+    return
+  }
+  searchOpen.value = true
+  expandedId.value = null
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(runSearch, 250)
+}
+function onSearchFocus() {
+  if (searchText.value.trim()) {
+    searchOpen.value = true
+    runSearch()
+  }
+}
+function toggleSearchPreview(id) {
+  expandedId.value = expandedId.value === id ? null : id
+}
+function closeSearch() {
+  searchOpen.value = false
+  expandedId.value = null
+}
+function clearSearch() {
+  clearTimeout(searchTimer)
+  searchText.value = ''
+  searchResults.value = []
+  searching.value = false
+  expandedId.value = null
+  searchOpen.value = false
+}
+function goEdit(id) {
+  closeSearch()
+  router.push(`/edit/${id}`)
+}
+watch(() => route.fullPath, closeSearch)
+
+// ── 关于 / 更新 ──
+const about = reactive({ version: '', portable: null, update: 'idle', latest: '' })
+async function ensureAbout() {
+  if (about.version) return
+  try {
+    about.version = await getVersion()
+  } catch {
+    about.version = ''
+  }
+  try {
+    const r = await cmd('is_portable_mode')
+    about.portable = !!r?.data?.portable
+  } catch {
+    about.portable = null
+  }
+}
+function cmpVer(a, b) {
+  const pa = String(a).split('.').map((x) => Number(x) || 0)
+  const pb = String(b).split('.').map((x) => Number(x) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0)
+    if (d !== 0) return d > 0 ? 1 : -1
+  }
+  return 0
+}
+async function checkUpdate() {
+  about.update = 'checking'
+  try {
+    if (!about.version) {
+      try {
+        about.version = await getVersion()
+      } catch { /* ignore */ }
+    }
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+    if (!res.ok) throw new Error('http ' + res.status)
+    const j = await res.json()
+    const latest = String(j?.tag_name || '').replace(/^v/, '')
+    if (!latest) throw new Error('empty tag')
+    about.latest = latest
+    about.update = !about.version || cmpVer(latest, about.version) > 0 ? 'new' : 'latest'
+  } catch (e) {
+    console.error(e)
+    about.update = 'failed'
+  }
+}
+async function openReleases() {
+  try {
+    await openUrl(RELEASES_URL)
+  } catch (e) {
+    console.error(e)
+    toast('打开失败：' + (e?.message || e), 'error')
+  }
+}
+async function openDataDir() {
+  try {
+    const d = await openDataDirApi()
+    toast('已打开数据目录' + (d?.path ? `：${d.path}` : ''), 'success')
+  } catch (e) {
+    console.error(e)
+    toast('打开失败：' + (e?.message || e), 'error')
+  }
+}
 
 const showSettings = ref(false)
+
+// 设置首次打开时懒加载版本/模式（纯前端 dev 下 invoke 失败就显示占位）
+watch(showSettings, (v) => {
+  if (v) ensureAbout()
+})
 
 // 关闭“记住题库选择”时顺手清掉各页记忆，下次全回默认全部题库
 function toggleRememberBankFilter() {

@@ -155,7 +155,9 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `record_answer` | 不变 | 不变 |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
-| `open_templates_dir` | — | 返回 export/ path（缺失模板自动从内嵌恢复），前端 openPath 打开文件夹看示例 |
+| `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
+| `open_data_dir` | — | 打开数据根目录（app_data_dir 或便携 data/，后端直调 opener），返回 `{"path"}`；手动备份入口 |
+| `is_portable_mode` | — | 返回 `{"portable":bool}`（data/ 或 portable.ini 存在即 true）；前端徽章/更新门控用，不经 DB 锁 |
 
 **导入导出（v3）**
 
@@ -217,10 +219,10 @@ export function persistBankFilter(page, id)
 `list({query, type, bankId, limit, offset})` → args 带 `bank_id`（bankId falsy 时不传=全部）；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
 
 ### api/practice.js（W2 改）
-`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`。其余不变。
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
 ### App.vue（W2 改）
-`onMounted` 调 `loadBanks()`（唯一全局装载入口）；导航不变。
+`onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏新增**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）；设置弹窗底部**关于**区（版本号 getVersion、便携/安装模式、打开数据目录、检查更新→GitHub Releases，opener allow-open-url 仅放行本仓库）。
 
 ### List.vue（W3a，单库视图）
 - 无题库下拉：上下文只认 `?bank=`（从题库页进入，须仍存在）；直访无 bank 显示空态引导去题库页挑库。
@@ -264,6 +266,7 @@ export function persistBankFilter(page, id)
   - 新增：输入框 + 按钮（name trim 非空）。
   - 操作后 `loadBanks()` 刷新（保持当前选择）。
 - 其余卡片不动；导出数据继续调 `exportData()`。
+- streak 徽章：`recordsOverview` 的 days 算连续学习天数（今天未学从昨天起算，≥2 天显示火焰徽章；后端 UTC 日期口径，零点附近可差 1 天）。
 
 ## 8. 验证标准
 

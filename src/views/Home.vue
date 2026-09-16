@@ -9,6 +9,9 @@
       <h1 class="page-title flex items-center gap-2">
         <i class="i-lucide-layout-dashboard text-primary text-[24px]" />仪表盘
         <span v-if="isPortable" class="badge" title="数据存放在程序目录 data/ 下，随身携带">便携版</span>
+        <span v-if="streak >= 2" class="badge" :title="`最近 ${streak} 天每天都有刷题`">
+          <i class="i-lucide-flame text-[14px] text-danger" />连续学习 {{ streak }} 天
+        </span>
       </h1>
       <button type="button" class="btn btn-small" @click="load">
         <i class="i-lucide-refresh-cw text-[14px]" />刷新
@@ -180,7 +183,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { stats as fetchStats, recordsOverview } from '@/api/practice.js'
 import { cmd } from '@/api/bridge.js'
-import { toast } from '@/stores/ui.js'
 
 const router = useRouter()
 function go(path) {
@@ -193,6 +195,7 @@ const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: 
 const stats = ref(null)
 const error = ref('')
 const isPortable = ref(false)
+const streak = ref(0)
 const showOverview = ref(false)
 const ovLoading = ref(false)
 const ovError = ref('')
@@ -209,6 +212,11 @@ function fmtSec(ms) {
 }
 async function openOverview() {
   showOverview.value = true
+  await ensureOverview()
+}
+
+// 概览只拉一次：详情按钮与 streak 共用
+async function ensureOverview() {
   if (ovDays.value.length || ovTypes.value.length || ovLoading.value) return
   ovLoading.value = true
   ovError.value = ''
@@ -216,12 +224,30 @@ async function openOverview() {
     const data = await recordsOverview()
     ovDays.value = Array.isArray(data?.days) ? data.days : []
     ovTypes.value = Array.isArray(data?.by_type) ? data.by_type : []
+    streak.value = calcStreak(ovDays.value)
   } catch (e) {
     console.error(e)
     ovError.value = '加载失败：' + (e?.message || e)
   } finally {
     ovLoading.value = false
   }
+}
+
+// 连续学习天数：有刷题记录的连续本地日期串；今天还没学则从昨天起算
+// （后端按 UTC 日期聚合，跨零点附近可能差 1 天，v1 接受该误差）
+function calcStreak(days) {
+  const active = new Set((days || []).filter((d) => Number(d.count) > 0).map((d) => d.date))
+  if (!active.size) return 0
+  const fmt = (dt) =>
+    `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+  const cur = new Date()
+  if (!active.has(fmt(cur))) cur.setDate(cur.getDate() - 1)
+  let n = 0
+  while (active.has(fmt(cur))) {
+    n++
+    cur.setDate(cur.getDate() - 1)
+  }
+  return n
 }
 
 const rateText = computed(() => {
@@ -261,6 +287,10 @@ async function load() {
     stats.value = null
     error.value = '加载统计失败：' + (e?.message || e)
   }
+  // streak 静默计算：失败就当 0 天，不污染错误区
+  try {
+    await ensureOverview()
+  } catch { /* ignore */ }
 }
 
 onMounted(() => {

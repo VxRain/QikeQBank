@@ -1663,6 +1663,18 @@ pub fn open_templates_dir(app: AppHandle) -> Result<Value, String> {
     ok(json!({ "path": dir.to_string_lossy().to_string() }))
 }
 
+/// 打开数据根目录（app_data_dir 或便携 data/）：给用户一条手动备份的活路
+/// （导出格式未定，备份只能靠拷目录）。同样后端直调 opener，理由同上。
+#[tauri::command]
+pub fn open_data_dir(app: AppHandle) -> Result<Value, String> {
+    let dir = data_root(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("create data dir failed: {e}"))?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<String>)
+        .map_err(|e| format!("open data dir failed: {e}"))?;
+    ok(json!({ "path": dir.to_string_lossy().to_string() }))
+}
+
 #[tauri::command]
 pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Result<Value, String> {
     // 通用文本落盘（导入模板下载等）：只允许纯文件名，防路径穿越；落到 export/ 目录

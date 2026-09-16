@@ -8,6 +8,10 @@
     {
       "identifier": "opener:allow-open-path",
       "allow": [{ "path": "$APPDATA/export" }, { "path": "$APPDATA/export/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/VxRain/QikeQBank/*" }]
     }
   ]
 }

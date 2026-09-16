@@ -61,6 +61,11 @@ export async function openTemplatesDir() {
   return res?.data
 }
 
+export async function openDataDir() {
+  const res = await cmd('open_data_dir', {})
+  return res?.data
+}
+
 export async function exportData() {
   const res = await cmd('export_dbjson')
   return res?.data

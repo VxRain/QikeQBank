@@ -71,6 +71,7 @@ pub fn run() {
             db::is_portable_mode,
             db::save_text_file,
             db::open_templates_dir,
+            db::open_data_dir,
             db::import_dbjson,
             db::import_questions
         ])
