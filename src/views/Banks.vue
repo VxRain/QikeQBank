@@ -1,7 +1,6 @@
 /**
  * 题库管理页（/banks）
- * 卡片网格：点击卡片进入题库；右键菜单承载进入/重命名/删除；
- * 每张卡片自带录题/导入按钮，归属零歧义。
+ * 卡片网格：点击卡片进入题库；每张卡片常驻操作按钮（录题/导入/重命名/删除）。
  * 新建/重命名共用应用内弹窗（名字 + 描述）。
  */
 <template>
@@ -27,63 +26,37 @@
         <i class="i-lucide-folder-open" />暂无题库，点击右上新建
       </div>
 
-      <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3.5">
+      <div v-else class="grid grid-cols-3 gap-3.5">
         <div
           v-for="b in bankStore.banks"
           :key="b.id"
           role="button"
           tabindex="0"
-          class="card card-interactive flex flex-col gap-2 cursor-pointer !p-4"
+          class="bank-card card card-interactive flex flex-col cursor-pointer !p-4 !pt-4.5"
           :title="`进入「${b.name}」`"
           @click="onEnter(b)"
           @keyup.enter="onEnter(b)"
-          @contextmenu.prevent="onCtxMenu($event, b)"
         >
           <div class="flex items-start justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
               <i class="i-lucide-folder text-[18px] shrink-0 text-muted-light" />
               <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
             </div>
+            <span class="text-[12px] text-muted-light shrink-0 pt-0.5">{{ b.question_count ?? 0 }} 题</span>
           </div>
-          <div v-if="b.description" class="text-[12px] text-muted leading-[1.6] line-clamp-2 min-h-[19px]">
+          <p class="m-0 text-[12px] text-muted leading-[1.7] line-clamp-2 min-h-[44px] py-1">
             {{ b.description }}
-          </div>
-          <div class="flex items-center justify-between gap-2 mt-auto pt-1">
-            <span class="text-[12px] text-muted-light">{{ b.question_count ?? 0 }} 题</span>
-            <span class="inline-flex items-center gap-1.5">
-              <button type="button" class="btn btn-tiny" title="录题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus" />录题</button>
-              <button type="button" class="btn btn-tiny" title="导入试题到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up" />导入</button>
-              <span class="inline-flex items-center gap-1 text-[12px] font-500 text-primary">
-                进入<i class="i-lucide-arrow-right text-[13px]" />
-              </span>
-            </span>
+          </p>
+          <!-- 操作行：与卡片主体用分隔线隔开；图标钮均分自适应，悬停卡片才浮现 -->
+          <div class="bank-actions grid grid-cols-4 gap-1.5 mt-auto pt-3 border-t border-line">
+            <button type="button" class="btn btn-tiny justify-center min-w-0" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus shrink-0" /><span class="truncate">录题</span></button>
+            <button type="button" class="btn btn-tiny justify-center min-w-0" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up shrink-0" /><span class="truncate">导入</span></button>
+            <button type="button" class="btn btn-tiny justify-center min-w-0" title="重命名 / 修改描述" @click.stop="openRename(b)"><i class="i-lucide-pen-line shrink-0" /><span class="truncate">编辑</span></button>
+            <button type="button" class="btn btn-tiny btn-danger justify-center min-w-0" title="删除题库" @click.stop="onRemoveBank(b)"><i class="i-lucide-trash-2 shrink-0" /><span class="truncate">删除</span></button>
           </div>
         </div>
       </div>
     </div>
-
-    <!-- 右键菜单：应用内悬浮，非原生 -->
-    <Teleport to="body">
-      <Transition name="ctx">
-        <div
-          v-if="ctx"
-          class="fixed z-[900] w-[180px] bg-card border border-line rounded-[8px] shadow-lg p-1.5 flex flex-col gap-0.5"
-          :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
-          role="menu"
-        >
-          <button type="button" class="ctx-item" @click="onCtxEnter">
-            <i class="i-lucide-arrow-right" />进入题库
-          </button>
-          <button type="button" class="ctx-item" @click="onCtxRename">
-            <i class="i-lucide-pen-line" />重命名
-          </button>
-          <div class="h-px bg-[var(--line)] my-1" />
-          <button type="button" class="ctx-item ctx-danger" @click="onCtxRemove">
-            <i class="i-lucide-trash-2" />删除
-          </button>
-        </div>
-      </Transition>
-    </Teleport>
 
     <!-- 导入试题：直接在此页弹窗，目标即所选库 -->
     <ImportFileBox
@@ -140,7 +113,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { bankStore, loadBanks } from '@/stores/bank.js'
 import { createBank, updateBank, removeBank } from '@/api/banks.js'
@@ -175,54 +148,6 @@ async function onImportDone() {
   showImport.value = false
   await loadBanks()
 }
-
-// ── 右键菜单 ──
-const ctx = ref(null) // { x, y, bank }
-
-function onCtxMenu(e, b) {
-  ctx.value = {
-    x: Math.min(e.clientX, window.innerWidth - 196),
-    y: Math.min(e.clientY, window.innerHeight - 190),
-    bank: b
-  }
-  // 注意：关闭监听用冒泡（不能 capture），否则 window 先于菜单项按钮收到 click，
-  // closeCtx 会抢先清空 ctx，导致菜单动作读不到 bank。scroll 不冒泡，保留 capture。
-  window.addEventListener('click', closeCtx)
-  window.addEventListener('keydown', onCtxKey)
-  window.addEventListener('scroll', closeCtx, { capture: true })
-}
-
-function closeCtx() {
-  if (!ctx.value) return
-  ctx.value = null
-  window.removeEventListener('click', closeCtx)
-  window.removeEventListener('keydown', onCtxKey)
-  window.removeEventListener('scroll', closeCtx, { capture: true })
-}
-
-function onCtxKey(e) {
-  if (e.key === 'Escape') closeCtx()
-}
-
-function onCtxEnter() {
-  const b = ctx.value?.bank
-  closeCtx()
-  if (b) onEnter(b)
-}
-
-function onCtxRename() {
-  const b = ctx.value?.bank
-  closeCtx()
-  if (b) openRename(b)
-}
-
-function onCtxRemove() {
-  const b = ctx.value?.bank
-  closeCtx()
-  if (b) onRemoveBank(b)
-}
-
-onUnmounted(closeCtx)
 
 // ── 新建 / 重命名弹窗 ──
 const dlg = ref(null) // { mode: 'create'|'rename', id, name, description, saving }
@@ -298,28 +223,9 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 右键菜单项 */
-.ctx-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  text-align: left;
-  transition: background-color .12s ease, color .12s ease;
-}
-.ctx-item:hover { background: var(--bg-accent); color: var(--text); }
-.ctx-item.ctx-danger { color: var(--danger); }
-.ctx-item.ctx-danger:hover { background: var(--danger-bg); color: var(--danger); }
-/* 右键菜单入场 */
-.ctx-enter-active, .ctx-leave-active { transition: opacity .12s ease, transform .12s ease; }
-.ctx-enter-from, .ctx-leave-to { opacity: 0; transform: scale(.96) translateY(-2px); }
+/* 卡片操作行：默认淡出，悬停卡片时浮现（键盘 tab 聚焦也亮，可访问性） */
+.bank-actions { opacity: .35; transition: opacity .15s ease; }
+.bank-card:hover .bank-actions, .bank-card:focus-visible .bank-actions { opacity: 1; }
 /* 弹窗入场（与 DialogHost 同语言） */
 .dg-enter-active, .dg-leave-active { transition: opacity .18s ease; }
 .dg-enter-active .dg-card, .dg-leave-active .dg-card { transition: transform .18s ease; }

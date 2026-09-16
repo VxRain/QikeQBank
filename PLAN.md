@@ -252,8 +252,7 @@ export function persistBankFilter(page, id)
 - `selectDialog({title,message,options:[{value,label}],okText})` → resolve 选中 value，取消为 null；DialogHost 新增 select 类型（下拉 + 确定）。与 confirm/prompt 同视觉语言。
 
 ### Banks.vue（题库管理）
-- 卡片点击进入单库试题页；右键菜单：进入/重命名/删除。
-- 卡片自带「录题」（`/create?bank=<id>`）与「导入」（本页直接弹 ImportFileBox，目标即该库，完成后刷新计数）。
+- 卡片点击进入单库试题页；操作全左键：卡片常驻「录题/导入/重命名/删除」图标钮（无右键菜单）。「录题」（`/create?bank=<id>`）、「导入」本页直接弹 ImportFileBox（目标即该库，完成后刷新计数），「重命名」复用弹窗，「删除」走 confirm。
 
 ### Form.vue（W3a）
 - 新建：顶部只读徽章显示目标库（?bank= 预选或按设置记忆）；无归属（直访无参数且无记忆）则保存时报错，不再回退首库；编辑时不覆盖（保留 DB 行的 bank_id）。
