@@ -3,18 +3,17 @@
     <header
       class="sticky top-0 z-20 border-b border-line bg-[rgba(244,241,234,0.88)] backdrop-blur-[12px] backdrop-saturate-[160%]"
     >
-      <div class="max-w-[1140px] mx-auto px-7 flex items-center gap-6 h-[60px]">
+      <div class="max-w-[1140px] mx-auto px-7 flex items-center gap-10 h-[60px]">
         <div class="flex items-center gap-2.5 shrink-0" style="font-family:var(--serif)">
           <span class="text-[20px] font-700 tracking-[-0.01em] text-text">奇客题库</span>
-          <span class="text-[12px] text-muted ml-1 tracking-normal font-400 hidden sm:inline">本地版</span>
         </div>
-        <nav class="flex items-center gap-1 h-full ml-2">
+        <nav class="flex items-center gap-1 h-full ml-1">
           <router-link
             v-for="item in navItems"
             :key="item.to"
             :to="item.to"
             active-class="active"
-            class="nav-link relative inline-flex items-center gap-1.5 px-3.5 h-full text-[14px] font-500 no-underline text-text-secondary transition-[color] duration-150 hover:text-text"
+            class="nav-link relative inline-flex items-center gap-1 px-3.5 h-full text-[14px] font-500 no-underline text-text-secondary transition-[color] duration-150 hover:text-text"
           ><i :class="item.icon" aria-hidden="true" />{{ item.label }}</router-link>
         </nav>
         <div class="ml-auto flex items-center gap-2">
