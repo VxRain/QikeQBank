@@ -4,6 +4,8 @@ mod db;
 pub fn run() {
     // 便携模式：WebView2 缓存也拐到 exe 同目录（WebView2 认这个环境变量，需在 builder 启动前设置）
     if let Some(data) = db::portable_data_dir() {
+        // portable.ini 单标记时 data/ 可能尚不存在，wry 要求目录先建好，否则白屏
+        let _ = std::fs::create_dir_all(data.join("webview"));
         // Rust 2024 起 set_var 为 unsafe：单线程启动阶段调用，无其他线程读写环境
         unsafe {
             std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", data.join("webview"));
@@ -63,6 +65,7 @@ pub fn run() {
             db::review_stats,
             db::records_overview,
             db::export_dbjson,
+            db::is_portable_mode,
             db::save_text_file,
             db::open_templates_dir,
             db::import_dbjson,

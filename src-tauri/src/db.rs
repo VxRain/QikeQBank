@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 // ---------------------------------------------------------------------------
 // SQLite DDL — must match PLAN §3 character-for-character
@@ -83,12 +84,13 @@ const BACKFILL_BANK_ID: &str = "UPDATE questions SET bank_id='bank_default' WHER
 /// a short lock per call.
 pub struct AppState(pub Mutex<Connection>);
 
-/// 便携模式（同 VSCode）：exe 同目录存在 data/ 目录时，所有数据落在该目录下，
-/// U 盘拷贝即走。无 data/ 时走系统 app_data_dir。QKEBANK_DB 环境变量优先级最高（不变）。
+/// 便携模式（VSCode 约定 + cc-switch 同款标记二选一）：exe 同目录存在 data/ 目录
+/// 或 portable.ini 空文件时，所有数据落在同目录 data/ 下，U 盘拷贝即走。
+/// 无标记时走系统 app_data_dir。QKEBANK_DB 环境变量优先级最高（不变）。
 pub fn portable_data_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    if dir.join("data").is_dir() {
+    if dir.join("data").is_dir() || dir.join("portable.ini").is_file() {
         Some(dir.join("data"))
     } else {
         None
@@ -112,6 +114,13 @@ pub fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     }
     let dir = data_root(app)?;
     Ok(dir.join("qbank.db"))
+}
+
+/// 是否便携模式（cc-switch 同款命令）：供前端展示“便携版”徽章、将来更新器门控用。
+/// 不经过 AppState 锁，纯路径判定。
+#[tauri::command]
+pub fn is_portable_mode() -> Result<Value, String> {
+    ok(json!({ "portable": portable_data_dir().is_some() }))
 }
 
 fn open_connection(path: &PathBuf) -> Result<Connection, String> {
@@ -1645,6 +1654,12 @@ pub fn open_templates_dir(app: AppHandle) -> Result<Value, String> {
     let dir = export_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
     ensure_template_files(&app)?;
+    // 后端直调 opener 打开（不再经前端 openPath）：静态 capability 写不出
+    // “exe 旁边任意目录”（$EXE 在 Windows 解析为 None，便携目录位置打包时未知），
+    // 而 scope 校验只在 IPC 命令层，后端调自派生路径无外部输入、无穿越风险。
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<String>)
+        .map_err(|e| format!("open export dir failed: {e}"))?;
     ok(json!({ "path": dir.to_string_lossy().to_string() }))
 }
 

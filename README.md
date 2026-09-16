@@ -29,11 +29,14 @@ pnpm tauri dev
 # 产物（MSI / NSIS 安装包在 src-tauri/target/release/bundle/）
 pnpm tauri build
 
-# 便携版 zip（单 exe + data/ 目录即便携模式，数据落包内，U 盘即拷即走）
+# 便携版 zip（data/ 目录或 portable.ini 存在即便携模式，数据落包内，U 盘即拷即走；仪表盘有“便携版”徽章）
 pnpm portable
 
 # 一次全出：安装包 + 便携版 zip
 pnpm build:all
+
+# 打 tag 即自动发版（安装包 + 便携 zip 进同一 GitHub Release，见 .github/workflows/release.yml）
+git tag v0.1.0 && git push origin v0.1.0
 
 # 纯前端预览（不启动 Rust 后端，页面会因无 invoke 报错——仅用于样式调试）
 pnpm dev

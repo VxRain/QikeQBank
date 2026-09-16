@@ -1,0 +1,50 @@
+# 发版流水线（cc-switch 同款思路）：tag 推送 v* → Windows 构建安装包 + 便携 zip → 同一 Release。
+#
+# 本地复刻：pnpm build:all（= pnpm tauri build + make-portable.mjs --skip-build）
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: pnpm install --frozen-lockfile
+
+      # 官方入口：同时产出 NSIS/MSI 安装包 + release 单 exe
+      # （NSIS 依赖由 tauri-action 自动装；updater 未接，故不传 updater 相关参数）
+      - uses: tauri-apps/tauri-action@v2
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: '奇客题库 ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+
+      # 复用本地脚本组装便携包（跳过重复构建，直接用上一步的 release exe）
+      - run: node tools/make-portable.mjs --skip-build
+
+      # 把便携 zip 追加到同一 Release（安装包已由 tauri-action 上传）
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: dist-portable/*-win64.zip

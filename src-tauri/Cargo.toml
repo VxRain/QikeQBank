@@ -19,3 +19,9 @@ uuid = { version = "1", features = ["v7"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# 便携单 exe 体积优化：s 优化体积 + thin LTO + 去符号
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = "symbols"

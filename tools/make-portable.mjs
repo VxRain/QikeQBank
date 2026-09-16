@@ -2,7 +2,8 @@
 /**
  * 便携版打包（Windows）：release 单 exe + 预建 data/ 目录 + 说明，打成 zip。
  * 便携语义见 src-tauri/src/db.rs portable_data_dir：exe 同目录存在 data/ 目录
- * 即全部数据（qbank.db、export/、WebView2 缓存）落在同目录 data/ 下，U 盘拷贝即走。
+ * 或 portable.ini 空文件（cc-switch 同款标记，二选一）即全部数据（qbank.db、
+ * export/、WebView2 缓存）落在同目录 data/ 下，U 盘拷贝即走。
  * 要求：已安装 Rust 工具链 + Tauri CLI 依赖；目标机须自带 WebView2（Win10 1803+/Win11 预装）。
  * 用法：pnpm portable（全量：前端+release+组装+zip）
  *       node tools/make-portable.mjs --skip-build（复用已有构建，只组装+zip）

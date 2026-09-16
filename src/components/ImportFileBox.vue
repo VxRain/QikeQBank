@@ -147,7 +147,6 @@ import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { remove } from '@/api/questions.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { toast, confirmDialog } from '@/stores/ui.js'
-import { openPath } from '@tauri-apps/plugin-opener'
 
 const templates = [
   { file: 'MD模板.md', title: 'MD模板.md', desc: '记事本手写：每题以【单选/多选/判断/填空/问答/材料】开头，适合少量精编' },
@@ -156,14 +155,9 @@ const templates = [
 ]
 
 async function openDir() {
+  // 文件夹由后端 open_templates_dir 直接打开（便携目录走前端 openPath 会被 scope 拦）
   try {
-    const res = await openTemplatesDirApi()
-    const path = res?.path || ''
-    if (!path) {
-      toast('打开失败：未返回路径', 'error')
-      return
-    }
-    await openPath(path)
+    await openTemplatesDirApi()
   } catch (err) {
     console.error(err)
     toast('打开文件夹失败：' + (err?.message || err), 'error')

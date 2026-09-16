@@ -8,6 +8,7 @@
     <div class="flex items-center justify-between gap-3">
       <h1 class="page-title flex items-center gap-2">
         <i class="i-lucide-layout-dashboard text-primary text-[24px]" />仪表盘
+        <span v-if="isPortable" class="badge" title="数据存放在程序目录 data/ 下，随身携带">便携版</span>
       </h1>
       <button type="button" class="btn btn-small" @click="load">
         <i class="i-lucide-refresh-cw text-[14px]" />刷新
@@ -178,6 +179,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { stats as fetchStats, recordsOverview } from '@/api/practice.js'
+import { cmd } from '@/api/bridge.js'
 import { toast } from '@/stores/ui.js'
 
 const router = useRouter()
@@ -190,6 +192,7 @@ const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: 
 
 const stats = ref(null)
 const error = ref('')
+const isPortable = ref(false)
 const showOverview = ref(false)
 const ovLoading = ref(false)
 const ovError = ref('')
@@ -246,6 +249,11 @@ const bars = computed(() => {
 
 async function load() {
   error.value = ''
+  // 便携标记静默探测：失败就当非便携，不污染错误区
+  try {
+    const r = await cmd('is_portable_mode')
+    isPortable.value = !!r?.data?.portable
+  } catch { /* ignore */ }
   try {
     stats.value = await fetchStats()
   } catch (e) {
