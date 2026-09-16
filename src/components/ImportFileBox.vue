@@ -44,8 +44,11 @@
               <input ref="fileEl" type="file" accept=".txt,.md,.markdown,.text,.xlsx,.xls,.csv,.docx" class="hidden" @change="onFile" />
             </label>
             <div v-if="fileError" class="error-box mt-3">{{ fileError }}</div>
+            <div v-if="parsing" class="text-[14px] text-text-secondary flex items-center gap-2 mt-3">
+              <i class="i-lucide-loader-circle animate-spin text-primary" />正在解析 {{ fileName }}…
+            </div>
             <div class="flex justify-end gap-2.5 mt-4">
-              <button type="button" class="btn" @click="onClose">取消</button>
+              <button type="button" class="btn" :disabled="parsing" @click="onClose">取消</button>
             </div>
           </div>
 
@@ -134,7 +137,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import { parseTemplateFile } from '@/utils/parseTemplate.js'
 import { parseSheetRows } from '@/utils/parseSheet.js'
 import { parseDocxFile } from '@/utils/parseDocxTemplate.js'
@@ -188,6 +191,8 @@ const failed = ref([])
 const insertedIds = ref([])
 const batchId = ref('')
 const undoing = ref(false)
+// 解析中（mammoth 转大文档约 2s，主线程）：先亮 loading 再让出绘制
+const parsing = ref(false)
 
 function reset() {
   phase.value = 'pick'
@@ -210,7 +215,7 @@ function reset() {
 }
 
 function onClose() {
-  if (phase.value === 'importing') return
+  if (phase.value === 'importing' || parsing.value) return
   reset()
   emit('close')
 }
@@ -220,6 +225,10 @@ async function onFile(e) {
   if (!f) return
   fileError.value = ''
   fileName.value = f.name
+  parsing.value = true
+  // 让 loading 先画出来，再进 mammoth/XLSX 重活（否则白冻几秒）
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 30))
   try {
     const isMd = /\.(md|markdown)$/i.test(f.name)
     const isSheet = /\.(xlsx|xls|csv)$/i.test(f.name)
@@ -289,6 +298,8 @@ async function onFile(e) {
   } catch (err) {
     console.error(err)
     fileError.value = '读取失败：' + (err?.message || err)
+  } finally {
+    parsing.value = false
   }
 }
 
