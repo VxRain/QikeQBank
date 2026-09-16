@@ -1,6 +1,7 @@
 /**
  * 题库管理页（/banks）
- * 卡片网格：点击卡片进入题库；每张卡片常驻操作按钮（录题/导入/重命名/删除）。
+ * 双视图：卡片网格 / 紧凑列表（右上切换，localStorage 记忆）；
+ * 点击进入题库；操作全左键（录题/导入/编辑/删除，统一纯图标钮）。
  * 新建/重命名共用应用内弹窗（名字 + 描述）。
  */
 <template>
@@ -12,6 +13,11 @@
         </h2>
         <div class="flex items-center gap-2.5">
           <span class="badge">{{ bankStore.banks.length }} 个题库 · 共 {{ totalCount }} 题</span>
+          <!-- 视图切换：图标钮组，与操作钮同语言 -->
+          <span class="inline-flex items-center border border-line rounded-[8px] overflow-hidden">
+            <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="view === 'grid' ? '!bg-primary-bg !text-primary' : ''" title="卡片视图" @click="setView('grid')"><i class="i-lucide-layout-grid text-[15px]" /></button>
+            <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="view === 'list' ? '!bg-primary-bg !text-primary' : ''" title="列表视图" @click="setView('list')"><i class="i-lucide-list text-[15px]" /></button>
+          </span>
           <button type="button" class="btn btn-primary btn-small" @click="openCreate">
             <i class="i-lucide-plus" />新建题库
           </button>
@@ -26,6 +32,36 @@
         <i class="i-lucide-folder-open" />暂无题库，点击右上新建
       </div>
 
+      <!-- 列表视图：每行一库，信息与操作横向铺开，密度高于卡片 -->
+      <div v-else-if="view === 'list'" class="flex flex-col gap-2">
+        <div
+          v-for="b in bankStore.banks"
+          :key="b.id"
+          role="button"
+          tabindex="0"
+          class="bank-row card card-interactive flex items-center gap-4 cursor-pointer !px-4 !py-3"
+          :title="`进入「${b.name}」`"
+          @click="onEnter(b)"
+          @keyup.enter="onEnter(b)"
+        >
+          <i class="i-lucide-folder text-[19px] shrink-0 text-muted-light" />
+          <div class="flex items-center gap-2.5 min-w-0 w-[240px] shrink-0">
+            <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
+          </div>
+          <p class="m-0 flex-1 min-w-0 text-[12px] text-muted leading-[1.6] truncate">
+            {{ b.description || ' ' }}
+          </p>
+          <span class="text-[12px] text-muted-light shrink-0 tabular-nums">{{ b.question_count ?? 0 }} 题</span>
+          <span class="bank-actions flex items-center gap-1 shrink-0">
+            <button type="button" class="btn btn-tiny !px-2" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus" /></button>
+            <button type="button" class="btn btn-tiny !px-2" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up" /></button>
+            <button type="button" class="btn btn-tiny !px-2" title="重命名 / 修改描述" @click.stop="openRename(b)"><i class="i-lucide-pen-line" /></button>
+            <button type="button" class="btn btn-tiny btn-danger !px-2" title="删除题库" @click.stop="onRemoveBank(b)"><i class="i-lucide-trash-2" /></button>
+          </span>
+        </div>
+      </div>
+
+      <!-- 卡片视图：固定三列，描述两行固定高保持等高 -->
       <div v-else class="grid grid-cols-3 gap-3.5">
         <div
           v-for="b in bankStore.banks"
@@ -47,7 +83,7 @@
           <p class="m-0 text-[12px] text-muted leading-[1.7] line-clamp-2 min-h-[44px] py-1">
             {{ b.description }}
           </p>
-          <!-- 操作行：与卡片主体用分隔线隔开；图标钮均分自适应，悬停卡片才浮现 -->
+          <!-- 操作行：与卡片主体用分隔线隔开；四钮带文字均分，悬停卡片浮现 -->
           <div class="bank-actions grid grid-cols-4 gap-1.5 mt-auto pt-3 border-t border-line">
             <button type="button" class="btn btn-tiny justify-center min-w-0" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus shrink-0" /><span class="truncate">录题</span></button>
             <button type="button" class="btn btn-tiny justify-center min-w-0" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up shrink-0" /><span class="truncate">导入</span></button>
@@ -125,6 +161,17 @@ const router = useRouter()
 // 导入弹窗：直接在此页打开，目标即所选库
 const showImport = ref(false)
 const importBank = ref({ id: '', name: '' })
+
+// ── 视图切换（卡片/列表），localStorage 记忆 ──
+const VIEW_KEY = 'qbank.banksView'
+const view = ref(localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid')
+function setView(v) {
+  view.value = v
+  try {
+    if (v === 'grid') localStorage.removeItem(VIEW_KEY)
+    else localStorage.setItem(VIEW_KEY, 'list')
+  } catch { /* 忽略持久化失败 */ }
+}
 
 const totalCount = computed(() =>
   bankStore.banks.reduce((s, b) => s + (b.question_count ?? 0), 0)
@@ -223,9 +270,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 卡片操作行：默认淡出，悬停卡片时浮现（键盘 tab 聚焦也亮，可访问性） */
+/* 操作钮：悬停所在卡片/行时从淡到亮（触屏 35% 也够点） */
 .bank-actions { opacity: .35; transition: opacity .15s ease; }
-.bank-card:hover .bank-actions, .bank-card:focus-visible .bank-actions { opacity: 1; }
+.bank-card:hover .bank-actions, .bank-card:focus-visible .bank-actions,
+.bank-row:hover .bank-actions, .bank-row:focus-visible .bank-actions { opacity: 1; }
 /* 弹窗入场（与 DialogHost 同语言） */
 .dg-enter-active, .dg-leave-active { transition: opacity .18s ease; }
 .dg-enter-active .dg-card, .dg-leave-active .dg-card { transition: transform .18s ease; }
