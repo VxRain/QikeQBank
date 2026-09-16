@@ -83,16 +83,34 @@ const BACKFILL_BANK_ID: &str = "UPDATE questions SET bank_id='bank_default' WHER
 /// a short lock per call.
 pub struct AppState(pub Mutex<Connection>);
 
+/// 便携模式（同 VSCode）：exe 同目录存在 data/ 目录时，所有数据落在该目录下，
+/// U 盘拷贝即走。无 data/ 时走系统 app_data_dir。QKEBANK_DB 环境变量优先级最高（不变）。
+pub fn portable_data_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    if dir.join("data").is_dir() {
+        Some(dir.join("data"))
+    } else {
+        None
+    }
+}
+
+fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = portable_data_dir() {
+        return Ok(dir);
+    }
+    app.path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app_data_dir failed: {e}"))
+}
+
 pub fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("QKEBANK_DB") {
         if !p.trim().is_empty() {
             return Ok(PathBuf::from(p));
         }
     }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("resolve app_data_dir failed: {e}"))?;
+    let dir = data_root(app)?;
     Ok(dir.join("qbank.db"))
 }
 
@@ -1589,11 +1607,7 @@ pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value
     let conn = state.0.lock().map_err(to_str)?;
     let doc = build_export_doc(&conn)?;
 
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(to_str)?
-        .join("export");
+    let dir = export_dir(&app)?;
     fs::create_dir_all(&dir).map_err(to_str)?;
     let ts = Utc::now().format("%Y%m%d-%H%M%S").to_string();
     let path = dir.join(format!("DB-{ts}.json"));
@@ -1610,15 +1624,11 @@ const TEMPLATE_FILES: &[(&str, &[u8])] = &[
 ];
 
 fn export_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(to_str)?
-        .join("export"))
+    Ok(data_root(app)?.join("export"))
 }
 
 pub fn ensure_template_files(app: &AppHandle) -> Result<(), String> {
-    let dir = export_dir(app)?;
+    let dir = export_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
     for (name, bytes) in TEMPLATE_FILES {
         let p = dir.join(name);
@@ -1646,11 +1656,7 @@ pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Resu
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "invalid filename".to_string())?;
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(to_str)?
-        .join("export");
+    let dir = export_dir(&app)?;
     fs::create_dir_all(&dir).map_err(to_str)?;
     let path = dir.join(name);
     fs::write(&path, content).map_err(to_str)?;
@@ -2005,6 +2011,20 @@ mod tests {
         // 空 bank → 默认库
         let r3 = import_questions_impl(&conn, vec![q()], None).unwrap();
         assert_eq!(r3["items"][0]["status"], "inserted");
+    }
+
+    #[test]
+    fn portable_data_dir_marker_switch() {
+        // 唯一使用 data/ 目录的测试，无并行互踩：先幂等清理保证起点干净
+        let dir = std::env::current_exe().unwrap();
+        let dir = dir.parent().unwrap();
+        let marker = dir.join("data");
+        let _ = std::fs::remove_dir_all(&marker);
+        assert!(portable_data_dir().is_none());
+        std::fs::create_dir_all(&marker).unwrap();
+        let got = portable_data_dir();
+        let _ = std::fs::remove_dir_all(&marker);
+        assert_eq!(got, Some(dir.join("data")));
     }
 
     #[test]

@@ -10,15 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "奇客题库",
-        "width": 1280,
-        "height": 860,
-        "minWidth": 1024,
-        "minHeight": 700
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

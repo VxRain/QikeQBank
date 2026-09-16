@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "portable": "node tools/make-portable.mjs",
+    "build:all": "pnpm tauri build && node tools/make-portable.mjs --skip-build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

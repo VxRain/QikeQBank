@@ -2,6 +2,13 @@ mod db;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 便携模式：WebView2 缓存也拐到 exe 同目录（WebView2 认这个环境变量，需在 builder 启动前设置）
+    if let Some(data) = db::portable_data_dir() {
+        // Rust 2024 起 set_var 为 unsafe：单线程启动阶段调用，无其他线程读写环境
+        unsafe {
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", data.join("webview"));
+        }
+    }
     // release 才禁 devtools 快捷键（F12 / Ctrl+Shift+I），debug 保留方便调试。
     // 注意不禁 CONTEXT_MENU：右键由前端按元素白名单细粒度控制（main.js），
     // Rust 层一刀切会连编辑区的复制粘贴菜单一起杀掉。
@@ -20,6 +27,22 @@ pub fn run() {
             db::ensure_schema(app.handle())?;
             // 补发缺失的导入模板示例（不覆盖用户已改文件）
             db::ensure_template_files(app.handle())?;
+            // WebView2 参数必须在 builder 层传（环境变量方式无效，wry 会整体替换）：
+            // 1) 保留 wry 默认的 --disable-features 三件套；
+            // 2) 系统代理用户的例外表 <local> 不匹配带点号的 tauri.localhost，
+            //    代理接管会拒掉应用页（实测 502），故追加直连规则。
+            let bypass = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection ".to_string()
+                + "--proxy-bypass-list=<local>;localhost;127.*;tauri.localhost";
+            let _window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::default(),
+            )
+            .title("奇客题库")
+            .inner_size(1280.0, 860.0)
+            .min_inner_size(1024.0, 700.0)
+            .additional_browser_args(&bypass)
+            .build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

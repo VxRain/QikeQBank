@@ -29,6 +29,12 @@ pnpm tauri dev
 # 产物（MSI / NSIS 安装包在 src-tauri/target/release/bundle/）
 pnpm tauri build
 
+# 便携版 zip（单 exe + data/ 目录即便携模式，数据落包内，U 盘即拷即走）
+pnpm portable
+
+# 一次全出：安装包 + 便携版 zip
+pnpm build:all
+
 # 纯前端预览（不启动 Rust 后端，页面会因无 invoke 报错——仅用于样式调试）
 pnpm dev
 ```
