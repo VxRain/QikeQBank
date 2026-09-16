@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT PRIMARY KEY,
   question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
   grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),
@@ -1188,9 +1188,10 @@ pub fn record_answer(
         };
 
         tx.execute(
-            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
+                generate_id(),
                 item.question_id,
                 item.mode,
                 grade,
@@ -1997,8 +1998,8 @@ mod tests {
         insert_question(&conn, &q).unwrap();
         for (correct, at, ms) in [(1, "2026-09-10T10:00:00.000Z", 5000), (0, "2026-09-10T11:00:00.000Z", 8000), (1, "2026-09-12T10:00:00.000Z", 4000)] {
             conn.execute(
-                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, elapsed_ms) VALUES ('q_test_1', 'practice', 'good', ?1, ?2, ?3)",
-                params![correct, at, ms],
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, elapsed_ms) VALUES (?1, 'q_test_1', 'practice', 'good', ?2, ?3, ?4)",
+                params![generate_id(), correct, at, ms],
             )
             .unwrap();
         }
@@ -2183,7 +2184,7 @@ mod tests {
 
         // records_7d group SQL
         conn.execute(
-            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES ('q_test_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at) VALUES ('rec_rs_1', 'q_test_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
             [],
         )
         .unwrap();
@@ -2315,7 +2316,7 @@ mod tests {
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE practice_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT PRIMARY KEY,
                 question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
                 mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
                 grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),
@@ -2462,8 +2463,8 @@ mod tests {
 
         // practice records count only for the owning bank
         conn.execute(
-            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at)
-             VALUES ('q_b_1', 'practice', 'good', 1, '2026-09-10T12:00:00.000Z')",
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at)
+             VALUES ('rec_b_1', 'q_b_1', 'practice', 'good', 1, '2026-09-10T12:00:00.000Z')",
             [],
         )
         .unwrap();
@@ -2514,8 +2515,8 @@ mod tests {
         }
         let rec = |qid: &str, correct: i64, at: &str| {
             conn.execute(
-                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES (?1, 'practice', 'good', ?2, ?3)",
-                params![qid, correct, at],
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at) VALUES (?1, ?2, 'practice', 'good', ?3, ?4)",
+                params![generate_id(), qid, correct, at],
             )
             .unwrap();
         };
@@ -2554,8 +2555,8 @@ mod tests {
         q["bank_id"] = json!("bank_default");
         insert_question(&conn, &q).unwrap();
         conn.execute(
-            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at)
-             VALUES ('q_w_d', 'practice', 'again', 0, '2026-09-10T10:00:00.000Z')",
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at)
+             VALUES ('rec_wd_1', 'q_w_d', 'practice', 'again', 0, '2026-09-10T10:00:00.000Z')",
             [],
         )
         .unwrap();
@@ -2591,8 +2592,8 @@ mod tests {
         insert_question(&conn, &q).unwrap();
         let rec = |correct: i64, at: &str| {
             conn.execute(
-                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES ('q_w_n', 'practice', 'good', ?1, ?2)",
-                params![correct, at],
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at) VALUES (?1, 'q_w_n', 'practice', 'good', ?2, ?3)",
+                params![generate_id(), correct, at],
             )
             .unwrap();
         };
@@ -2622,8 +2623,8 @@ mod tests {
         insert_question(&conn, &q).unwrap();
         let rec = |correct: i64, at: &str, detail: &str| {
             conn.execute(
-                "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, detail_json) VALUES ('q_w_v', 'practice', 'good', ?1, ?2, ?3)",
-                params![correct, at, detail],
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json) VALUES (?1, 'q_w_v', 'practice', 'good', ?2, ?3, ?4)",
+                params![generate_id(), correct, at, detail],
             )
             .unwrap();
         };
@@ -2646,8 +2647,8 @@ mod tests {
         qb["bank_id"] = json!(bid);
         insert_question(&conn, &qb).unwrap();
         conn.execute(
-            "INSERT INTO practice_records (question_id, mode, grade, correct, answered_at)
-             VALUES ('q_c_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at)
+             VALUES ('rec_wc_1', 'q_c_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
             [],
         )
         .unwrap();

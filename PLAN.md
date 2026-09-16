@@ -71,7 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT PRIMARY KEY,
   question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
   grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),
@@ -130,7 +130,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | command | 参数 | 返回 |
 |---|---|---|
 | `banks_list` | — | `{"success":true,"data":[{id,name,description,question_count,created_at,updated_at}]}`（question_count 用 LEFT JOIN COUNT） |
-| `banks_create` | `name: String, description?: Option<String>` | name trim 后非空，否则 Err("题库名称不能为空")；id=`bank_<unixms>_<4hex>`；补时间戳 |
+| `banks_create` | `name: String, description?: Option<String>` | name trim 后非空，否则 Err("题库名称不能为空")；id=UUIDv7（与试题同算法；种子库固定为 `bank_default`）；补时间戳 |
 | `banks_update` | `id: String, name?: Option<String>, description?: Option<String>` | 改名/改说明；name 给出时须非空；不存在 Err("Not Found") |
 | `banks_remove` | `id: String` | 级联删该库全部题（→ 流水/复习态）。**若为最后一个题库 → Err("至少保留一个题库")**。返回 `{"success":true,"data":{"id":...}}` |
 

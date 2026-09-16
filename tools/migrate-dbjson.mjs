@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT PRIMARY KEY,
   question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
   grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),

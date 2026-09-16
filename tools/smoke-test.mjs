@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT PRIMARY KEY,
   question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('practice','review','exam')),
   grade TEXT NOT NULL CHECK (grade IN ('again','hard','good','easy')),
@@ -263,7 +263,7 @@ function main() {
     check('UPDATE 往返（score=9.5, difficulty=3）', upd.score === 9.5 && upd.difficulty === 3, JSON.stringify(upd));
 
     // ⑤ 级联删除（删题 → 流水/复习态级联）：先插流水 + 复习态，再删题
-    db.prepare("INSERT INTO practice_records (question_id, mode, grade, correct, answered_at, detail_json) VALUES ('smoke_judge_1', 'practice', 'good', 1, :at, '{}')").run({ at: now });
+    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json) VALUES ('smoke_rec_1', 'smoke_judge_1', 'practice', 'good', 1, :at, '{}')").run({ at: now });
     db.prepare("INSERT INTO review_state (question_id, due_at, last_result) VALUES ('smoke_judge_1', :at, 'good')").run({ at: now });
     const preP = db.prepare("SELECT COUNT(*) c FROM practice_records WHERE question_id = 'smoke_judge_1'").get().c;
     const preR = db.prepare("SELECT COUNT(*) c FROM review_state WHERE question_id = 'smoke_judge_1'").get().c;
@@ -282,7 +282,7 @@ function main() {
       VALUES (:id, 'smoke_bank_cascade', :type, 2, :stem, :text, :at, :at)`);
     insCas.run({ id: 'smoke_cas_q1', type: 'single', stem: JSON.stringify(doc('级联测试1')), text: '级联测试1', at: now });
     insCas.run({ id: 'smoke_cas_q2', type: 'judge', stem: JSON.stringify(doc('级联测试2')), text: '级联测试2', at: now });
-    db.prepare("INSERT INTO practice_records (question_id, mode, grade, correct, answered_at) VALUES ('smoke_cas_q1', 'practice', 'good', 1, :at)").run({ at: now });
+    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at) VALUES ('smoke_rec_2', 'smoke_cas_q1', 'practice', 'good', 1, :at)").run({ at: now });
     db.prepare("INSERT INTO review_state (question_id, due_at, last_result) VALUES ('smoke_cas_q2', :at, 'good')").run({ at: now });
     db.prepare("DELETE FROM banks WHERE id = 'smoke_bank_cascade'").run();
     const bankGone = db.prepare("SELECT COUNT(*) c FROM banks WHERE id = 'smoke_bank_cascade'").get().c;
