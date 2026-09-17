@@ -49,7 +49,7 @@ export function renderOptions(options, answerIds){
     const inner = renderDoc(o.content).replace(/^<p>/,'').replace(/<\/p>$/,'')
     const displayKey = String.fromCharCode(65+i)
     const isAns = ids.includes(o.id)
-    return `<div class="option${isAns?' correct':''}"><span class="key">${displayKey}.</span> ${inner} ${isAns?' <span style="color:#10b981"> ✓</span>':''}</div>`
+    return `<div class="option${isAns?' correct':''}"><span class="key">${displayKey}.</span>${isAns?'<span style="color:#10b981"> ✓</span>':''} ${inner}</div>`
   }).join('')
 }
 export function renderMaterial(material){

@@ -25,7 +25,7 @@
         </div>
         <div class="min-w-0 sticky top-[88px] self-start">
           <h3 class="m-0 mb-2 text-text font-700 text-[15px] flex items-center gap-1.5">
-            <i class="i-lucide-eye text-primary text-[16px]" />实时预览（Web真渲染）
+            <i class="i-lucide-eye text-primary text-[16px]" />实时预览
           </h3>
           <QuestionPreview :question="form" />
           <div class="mt-3.5 p-3 bg-bg-accent border border-line rounded-[12px]">
