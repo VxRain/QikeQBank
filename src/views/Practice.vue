@@ -758,6 +758,8 @@ function shortSubmit(grade) {
 
 function next() {
   cancelAutoNext()
+  // 背题模式无 commit 计时：切题时把本页停留累进 round.ms（练习模式已在 commit 里记，此处不加防 double count）
+  if (recite.value) round.value.ms += Date.now() - startedAt.value
   if (curIdx.value < pool.value.length - 1) {
     curIdx.value++
     resetAnswer()
@@ -771,6 +773,7 @@ function next() {
 
 function prev() {
   if (curIdx.value > 0) {
+    if (recite.value) round.value.ms += Date.now() - startedAt.value
     curIdx.value--
     resetAnswer()
     startedAt.value = Date.now()
