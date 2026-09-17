@@ -24,5 +24,5 @@
 - **schema/DDL 唯一权威 = PLAN.md §3**；`src-tauri/src/db.rs` 的 MIGRATIONS 与 `tools/` 两脚本必须与其逐字符一致；改表结构必须同步三处。
 - 契约变更（命令签名/数据结构）必须同步：PLAN.md §4/§7 ↔ Rust command ↔ 前端 `src/api/*.js`。
 - 路由：hash 模式（桌面端）；题库归属走 `stores/bank.js` 的 `bankStore.currentBankId`（localStorage 记忆），新增题必须显式归属（优先 `?bank=` 路由参数）。
-- 验证门禁：`pnpm build`、`cargo test`（30 用例：FSRS/banks CRUD/迁移/级联/按库过滤/export 形状）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
+- 验证门禁：`pnpm build`、`cargo test`（31 用例：30 单元 + export_bindings 集成；后者每次运行会重写 `src/bindings.ts`）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
 - 改动画风/功能前先读 PLAN.md 与 README.md，保持与既有结构一致。

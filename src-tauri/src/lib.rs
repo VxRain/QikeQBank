@@ -1,4 +1,6 @@
 mod db;
+// 仅把 specta 导出函数公开给集成测试 tests/export_bindings.rs；模块其余部分保持私有。
+pub use db::specta_builder;
 
 use tauri::Manager;
 

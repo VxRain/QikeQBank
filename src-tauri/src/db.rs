@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+// specta TS 导出用：命令签名里的 JSON 通吃位统一用本文件定义的 Json 包一层，
+// TS 侧如实渲染成 unknown，避免 specta 把 serde_json::Value 内联展开成
+// 无限递归枚举导致导出时栈溢出（serde 透传，线上行为与 Value 完全一致）。
 
 // ---------------------------------------------------------------------------
 // SQLite DDL — must match PLAN §3 character-for-character
@@ -148,7 +151,8 @@ pub fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
 /// 是否便携模式（cc-switch 同款命令）：供前端展示“便携版”徽章、将来更新器门控用。
 /// 不经过 AppState 锁，纯路径判定。
 #[tauri::command]
-pub fn is_portable_mode() -> Result<Value, String> {
+#[specta::specta]
+pub fn is_portable_mode() -> Result<Json, String> {
     ok(json!({ "portable": portable_data_dir().is_some() }))
 }
 
@@ -268,8 +272,33 @@ fn today_bounds() -> (DateTime<Utc>, DateTime<Utc>) {
     (start, start + Duration::days(1))
 }
 
-fn ok(data: Value) -> Result<Value, String> {
-    Ok(json!({ "success": true, "data": data }))
+/// JSON 通吃位：命令签名里所有原来裸 `Value` 的位置统一用它。
+/// serde 与 Value 完全一致（透传），specta 导出为 TS `unknown`。
+/// 背景：specta 把 serde_json::Value 内联展开成递归枚举，导出时无限递归栈溢出，
+/// 而 specta_typescript::define 可渲染一个原样输出的 opaque 类型，正好解套。
+#[derive(Debug, Clone, Default)]
+pub struct Json(pub Value);
+
+impl serde::Serialize for Json {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Json {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Value::deserialize(deserializer).map(Json)
+    }
+}
+
+impl specta::Type for Json {
+    fn definition(_: &mut specta::Types) -> specta::datatype::DataType {
+        specta::datatype::DataType::Reference(specta_typescript::define("unknown"))
+    }
+}
+
+fn ok(data: Value) -> Result<Json, String> {
+    Ok(Json(json!({ "success": true, "data": data })))
 }
 
 /// 试题 id：UUIDv7（前 48 位即毫秒时间戳，有序且可读）
@@ -417,7 +446,7 @@ fn aggregated_plain_text(q: &Value) -> String {
 // FSRS-6 调度状态（PLAN §5）：调度计算在前端（ts-fsrs），后端只做可信写入 + 范围校验。
 // state 口径与 ts-fsrs State 枚举一致：0=New 1=Learning 2=Review 3=Relearning。
 // ---------------------------------------------------------------------------
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
 pub struct FsrsCard {
     pub stability: f64,
     pub difficulty: f64,
@@ -814,7 +843,8 @@ fn resolve_default_bank(conn: &Connection) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn banks_list(state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn banks_list(state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     ok(json!(banks_list_impl(&conn)?))
 }
@@ -831,11 +861,12 @@ fn banks_list_impl(conn: &Connection) -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn banks_create(
     name: String,
     description: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let bank = banks_create_impl(&conn, &name, description.as_deref())?;
     ok(bank)
@@ -857,12 +888,13 @@ fn banks_create_impl(conn: &Connection, name: &str, description: Option<&str>) -
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn banks_update(
     id: String,
     name: Option<String>,
     description: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let bank = banks_update_impl(&conn, &id, name.as_deref(), description.as_deref())?;
     ok(bank)
@@ -917,7 +949,8 @@ fn banks_update_impl(
 }
 
 #[tauri::command]
-pub fn banks_remove(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn banks_remove(id: String, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let data = banks_remove_impl(&conn, &id)?;
     ok(data)
@@ -950,6 +983,7 @@ fn banks_remove_impl(conn: &Connection, id: &str) -> Result<Value, String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn questions_list(
     query: Option<String>,
     type_filter: Option<String>,
@@ -957,7 +991,7 @@ pub fn questions_list(
     limit: Option<u64>,
     offset: Option<u64>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     ok(questions_list_impl(&conn, query, type_filter, bank_id, limit, offset)?)
 }
@@ -996,7 +1030,8 @@ fn questions_list_impl(
 }
 
 #[tauri::command]
-pub fn questions_get(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn questions_get(id: String, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     match fetch_question(&conn, &id)? {
         Some(q) => ok(q),
@@ -1005,9 +1040,10 @@ pub fn questions_get(id: String, state: State<'_, AppState>) -> Result<Value, St
 }
 
 #[tauri::command]
-pub fn questions_create(data: Value, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn questions_create(data: Json, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(questions_create_impl(&conn, data)?)
+    ok(questions_create_impl(&conn, data.0)?)
 }
 
 fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<Value, String> {
@@ -1066,13 +1102,14 @@ fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn questions_update(
     id: String,
-    data: Value,
+    data: Json,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(questions_update_impl(&conn, &id, data)?)
+    ok(questions_update_impl(&conn, &id, data.0)?)
 }
 
 fn questions_update_impl(conn: &Connection, id: &str, data: Value) -> Result<Value, String> {
@@ -1126,7 +1163,8 @@ fn questions_update_impl(conn: &Connection, id: &str, data: Value) -> Result<Val
 }
 
 #[tauri::command]
-pub fn questions_remove(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn questions_remove(id: String, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let n = conn
         .execute("DELETE FROM questions WHERE id = ?1", params![id])
@@ -1138,13 +1176,14 @@ pub fn questions_remove(id: String, state: State<'_, AppState>) -> Result<Value,
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn practice_pool(
     limit: Option<u64>,
     type_filter: Option<String>,
     bank_id: Option<String>,
     ids: Option<Vec<String>>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let rows = practice_pool_impl(&conn, limit, type_filter, bank_id, ids)?;
     ok(json!(rows))
@@ -1209,24 +1248,25 @@ fn ensure_child_ids(q: &mut Value, parent_id: &str) {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, specta::Type)]
 pub struct RecordItem {
     pub question_id: String,
     pub mode: String,
     pub grade: Option<String>,
     pub elapsed_ms: Option<i64>,
-    pub detail: Option<Value>,
+    pub detail: Option<Json>,
     /// 前端算好的 FSRS 卡片状态（FSRS-6）；有则 UPSERT review_state，无则只写流水
     pub card: Option<FsrsCard>,
     /// 本次作答的 ReviewLog 快照（未来跑 FSRS 优化器的数据源，现在只写不读）
-    pub fsrs_log: Option<Value>,
+    pub fsrs_log: Option<Json>,
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn record_answer(
     items: Vec<RecordItem>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let mut conn = state.0.lock().map_err(to_str)?;
     let tx = conn.transaction().map_err(to_str)?;
     let now = Utc::now();
@@ -1285,7 +1325,8 @@ pub fn record_answer(
 }
 
 #[tauri::command]
-pub fn review_due(limit: Option<u64>, bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn review_due(limit: Option<u64>, bank_id: Option<String>, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let rows = review_due_impl(&conn, limit, bank_id)?;
     ok(json!(rows))
@@ -1333,6 +1374,7 @@ const WRONG_WHERE: &str = "streak.consec_correct < ?3
   AND (?1 IS NULL OR q.bank_id = ?1) AND (?2 IS NULL OR q.type = ?2)";
 
 #[tauri::command]
+#[specta::specta]
 pub fn wrong_list(
     bank_id: Option<String>,
     type_filter: Option<String>,
@@ -1340,7 +1382,7 @@ pub fn wrong_list(
     offset: Option<u64>,
     leave_after_correct: Option<u64>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     ok(wrong_list_impl(&conn, bank_id, type_filter, limit, offset, leave_after_correct)?)
 }
@@ -1391,7 +1433,8 @@ fn wrong_list_impl(
 
 /// 错题本手动移出（幂等；不删练习记录故不影响统计；之后再答错会自动重回）
 #[tauri::command]
-pub fn wrong_dismiss(question_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn wrong_dismiss(question_id: String, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     dismiss_wrong(&conn, &question_id)?;
     ok(json!({ "id": question_id }))
@@ -1427,7 +1470,8 @@ fn undismiss_wrong(conn: &Connection, question_id: &str) -> Result<(), String> {
 
 /// 全部练习统计：全量按天明细（倒序，上限）+ 按题型汇总（含平均用时）
 #[tauri::command]
-pub fn records_overview(limit_days: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn records_overview(limit_days: Option<u64>, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     ok(records_overview_impl(&conn, limit_days)?)
 }
@@ -1478,12 +1522,14 @@ fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) -> Result<V
 /// 批量导入：一次调用入库多题（文件导入用）。逐条独立成功/跳过/失败，可重入（库内 plain_text 完全一致视为重复跳过）。
 /// 返回 {batch_id, items:[{index,status:'inserted'|'duplicate'|'error',id?,message?}]}
 #[tauri::command]
+#[specta::specta]
 pub fn import_questions(
-    items: Vec<Value>,
+    items: Vec<Json>,
     bank_id: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
+    let items: Vec<Value> = items.into_iter().map(|x| x.0).collect();
     ok(import_questions_impl(&conn, items, bank_id)?)
 }
 
@@ -1555,7 +1601,8 @@ fn import_questions_impl(
 }
 
 #[tauri::command]
-pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     ok(review_stats_impl(&conn, bank_id)?)
 }
@@ -1699,7 +1746,8 @@ fn build_export_doc(conn: &Connection) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn export_dbjson(app: AppHandle, state: State<'_, AppState>) -> Result<Json, String> {
     let conn = state.0.lock().map_err(to_str)?;
     let doc = build_export_doc(&conn)?;
 
@@ -1737,7 +1785,8 @@ pub fn ensure_template_files(app: &AppHandle) -> Result<(), String> {
 
 /// 打开模板文件夹：返回 export/ path，前端 openPath 打开（模板只供查看示例）
 #[tauri::command]
-pub fn open_templates_dir(app: AppHandle) -> Result<Value, String> {
+#[specta::specta]
+pub fn open_templates_dir(app: AppHandle) -> Result<Json, String> {
     let dir = export_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
     ensure_template_files(&app)?;
@@ -1753,7 +1802,8 @@ pub fn open_templates_dir(app: AppHandle) -> Result<Value, String> {
 /// 打开数据根目录（app_data_dir 或便携 data/）：给用户一条手动备份的活路
 /// （导出格式未定，备份只能靠拷目录）。同样后端直调 opener，理由同上。
 #[tauri::command]
-pub fn open_data_dir(app: AppHandle) -> Result<Value, String> {
+#[specta::specta]
+pub fn open_data_dir(app: AppHandle) -> Result<Json, String> {
     let dir = data_root(&app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("create data dir failed: {e}"))?;
     app.opener()
@@ -1817,6 +1867,7 @@ fn asset_registry_get(conn: &Connection, sha: &str) -> Result<Option<(String, i6
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn assets_put(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1824,7 +1875,7 @@ pub fn assets_put(
     mime: String,
     width: Option<i64>,
     height: Option<i64>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let root = ensure_assets_dir(&app)?;
     let conn = state.0.lock().map_err(to_str)?;
     let (sha, path) = assets_put_impl(&conn, &root, &data_b64, &mime, width, height)?;
@@ -1866,11 +1917,12 @@ fn assets_put_impl(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn assets_resolve(
     app: AppHandle,
     state: State<'_, AppState>,
     shas: Vec<String>,
-) -> Result<Value, String> {
+) -> Result<Json, String> {
     let root = ensure_assets_dir(&app)?;
     let conn = state.0.lock().map_err(to_str)?;
     ok(assets_resolve_impl(&conn, &root, shas)?)
@@ -1916,7 +1968,8 @@ fn collect_asset_refs(v: &Value, out: &mut HashSet<String>) {
 }
 
 #[tauri::command]
-pub fn assets_gc(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn assets_gc(app: AppHandle, state: State<'_, AppState>) -> Result<Json, String> {
     let root = ensure_assets_dir(&app)?;
     let conn = state.0.lock().map_err(to_str)?;
     ok(assets_gc_impl(&conn, &root)?)
@@ -2112,7 +2165,8 @@ fn normalize_asset_srcs(conn: &Connection, v: &mut Value) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Result<Value, String> {
+#[specta::specta]
+pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Result<Json, String> {
     // 通用文本落盘（导入模板下载等）：只允许纯文件名，防路径穿越；落到 export/ 目录
     let name = std::path::Path::new(&filename)
         .file_name()
@@ -2127,7 +2181,8 @@ pub fn save_text_file(app: AppHandle, filename: String, content: String) -> Resu
 }
 
 #[tauri::command]
-pub fn import_dbjson(path: String, state: State<'_, AppState>) -> Result<Value, String> {
+#[specta::specta]
+pub fn import_dbjson(path: String, state: State<'_, AppState>) -> Result<Json, String> {
     let text = fs::read_to_string(&path).map_err(|e| format!("read {} failed: {e}", path))?;
     let mut conn = state.0.lock().map_err(to_str)?;
     ok(import_dbjson_impl(&mut conn, &text)?)
@@ -2228,6 +2283,30 @@ fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Value, String
     }
     tx.commit().map_err(to_str)?;
     Ok(json!({ "imported": imported, "banks_imported": banks_imported }))
+}
+
+// ---------------------------------------------------------------------------
+// tauri-specta 基建（Phase 0）：只加注解 + 导出 TS 类型，不改任何命令签名/行为。
+// 与 invoke_handler 的命令一一对应；集成测试 tests/export_bindings.rs 用它生成 src/bindings.ts。
+// 说明：命令参数含 u64/i64（limit/elapsed_ms/width 等），specta 默认拒绝导出大整数，
+// 但本项目数值远小于 2^53，故加 dangerously_cast_bigints_to_number 按 number 导出。
+// 注意：该函数实例化 Builder<Wry>，会把 muda 的 TaskDialogIndirect（comctl32 v6）
+// 链接进测试二进制；测试目标靠 build.rs 的 rustc-link-arg-tests 补 v6 manifest，
+// 否则启动即 0xC0000139。详见 build.rs 注释。
+// ---------------------------------------------------------------------------
+pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    use tauri_specta::collect_commands;
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .dangerously_cast_bigints_to_number()
+        .commands(collect_commands![
+            banks_list, banks_create, banks_update, banks_remove,
+            questions_list, questions_get, questions_create, questions_update, questions_remove,
+            practice_pool, record_answer, review_due, wrong_list, wrong_dismiss,
+            records_overview, import_questions, review_stats,
+            export_dbjson, open_templates_dir, open_data_dir,
+            assets_put, assets_resolve, assets_gc,
+            save_text_file, import_dbjson, is_portable_mode,
+        ])
 }
 
 // ---------------------------------------------------------------------------
@@ -3406,12 +3485,12 @@ mod tests {
         let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
         assert_eq!(days[6]["date"], json!(today));
         assert_eq!(days[0]["date"], json!((Utc::now().date_naive() - Duration::days(6)).format("%Y-%m-%d").to_string()));
-        let wrapped = ok(st).unwrap();
+        let wrapped = ok(st).unwrap().0;
         assert_eq!(wrapped["success"], json!(true));
         assert!(wrapped.get("data").is_some());
 
         let q = sample_question();
-        let created = ok(questions_create_impl(&conn, q).unwrap()).unwrap();
+        let created = ok(questions_create_impl(&conn, q).unwrap()).unwrap().0;
         assert_eq!(created["success"], json!(true));
         assert!(created["data"]["id"].is_string());
     }

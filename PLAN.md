@@ -142,9 +142,14 @@ ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;
 - 题目列 ↔ Question JSON：`stem_json←stem`、`options_json←options`、`answer_json←answer`、`analysis_json←analysis`、`children_json←children`；读取时组合回完整对象（缺键 null）。
 - 时间一律 ISO-8601 UTC。
 
-## 4. Rust Command 契约（tauri v2，全部 `-> Result<Value, String>`）
+## 4. Rust Command 契约（tauri v2，全部 `-> Result<Json, String>`；Json 即 Value 的透传新类型，线格式不变）
 
 JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映射）。
+
+> TS 绑定（Phase 0）：`src-tauri/tests/export_bindings.rs` 从本节 26 个命令生成
+> `src/bindings.ts`（命令名 snake_case、参数 camelCase，与本节约定一致）。
+> `cargo test` 每次运行都会重写它，有 diff 即表示契约变了。
+> 注意：生成器只认类型不校验行为；values 统一按 `unknown` 导出，结构化是 Phase 1 的事。
 
 **题库（新增 4 个）**
 
@@ -319,7 +324,7 @@ export function persistBankFilter(page, id)
 
 ## 8. 验证标准
 
-- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
+- **W1**：`cargo check` 0 警告；`cargo test` 全绿（30 单元 + export_bindings 集成），且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
 - **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；`tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults；`tests/unit/parseDocx.test.js`：docx 章节题号解析回归）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
