@@ -349,6 +349,19 @@ const editor = new Editor({
     InlineMath, Blank, InlineImage, ImageBlock, MathBlock
   ],
   content: sanitizeDoc(props.modelValue),
+  editorProps: {
+    handlePaste(view, event){
+      const dt = event.clipboardData
+      if(!dt) return false
+      // 含富文本的粘贴走默认行为，保住文字排版
+      if(Array.from(dt.types || []).includes('text/html')) return false
+      const files = collectClipboardImages(dt)
+      if(!files.length) return false
+      event.preventDefault()
+      pasteImageFiles(files)
+      return true
+    }
+  },
   onUpdate: ({editor})=>{
     emit('update:modelValue', editor.getJSON())
   }
@@ -517,6 +530,35 @@ async function uploadFileToAsset(file){
   const url = (path && assetFileUrl(path)) || ''
   if(!url) throw new Error('图片地址解析失败')
   return { url, name: file.name }
+}
+// 剪贴板图片粘贴：截图/QQ微信截图/资源管理器复制的图片直接入库插入为块级图
+// files 为空时（如某些截图工具只写 items）再从 items 取 getAsFile()
+function collectClipboardImages(dt){
+  const out = []
+  if(dt.files?.length){
+    for(const f of dt.files) if(f.type?.startsWith('image/')) out.push(f)
+  }
+  if(!out.length && dt.items?.length){
+    for(const it of dt.items){
+      if(it.type?.startsWith('image/')){
+        const f = it.getAsFile()
+        if(f) out.push(f)
+      }
+    }
+  }
+  return out
+}
+// 逐张串行上传插入，保证多图顺序与复制顺序一致
+async function pasteImageFiles(files){
+  for(const file of files){
+    try{
+      const { url, name } = await uploadFileToAsset(file)
+      editor.chain().focus().insertContent({type:'imageBlock', attrs:{src:url, caption:(name||'粘贴图片').replace(/\.[^.]+$/,''), width:600}}).run()
+    }catch(e){
+      console.error(e)
+      toast('图片粘贴失败：' + (e?.message || e), 'error')
+    }
+  }
 }
 async function uploadImage(ev, kind){
   const file = ev.target.files?.[0]
