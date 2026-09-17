@@ -20,12 +20,12 @@
 
     <!-- LaTeX 行内编辑浮层 -->
     <teleport to="body">
-      <div v-if="latexEdit.visible" ref="latexPop" class="latex-pop" :style="popStyle(latexEdit)" @mousedown.stop>
+      <div v-if="latexEdit.visible" ref="latexPop" class="latex-pop" :class="{ wide: latexEdit.displayMode }" :style="popStyle(latexEdit)" @mousedown.stop>
         <div class="pop-head" @mousedown="startDrag($event, latexEdit)">
           <span>{{ latexEdit.displayMode ? '块级公式' : '行内公式' }}</span>
           <button class="btn tiny close" @click="closeLatex">×</button>
         </div>
-        <div class="latex-preview" v-html="latexPreview"></div>
+        <div class="latex-preview" :class="{ 'is-empty': !latexEdit.value.trim() }" v-html="latexPreview"></div>
         <textarea
           ref="latexInput"
           v-model="latexEdit.value"
@@ -35,10 +35,10 @@
           @keydown.enter.exact.prevent="confirmLatex"
           @keydown.esc="closeLatex"
         ></textarea>
+        <div class="latex-hint">Enter 确认 · Esc 取消 · 可拖动标题栏移动</div>
         <div class="latex-actions">
-          <button class="btn tiny primary" @click="confirmLatex">确定</button>
           <button class="btn tiny" @click="closeLatex">取消</button>
-          <span class="muted">Enter 确认 · Esc 取消 · 拖动标题栏移动</span>
+          <button class="btn tiny primary" @click="confirmLatex">确定</button>
         </div>
       </div>
     </teleport>
@@ -55,9 +55,9 @@
         <input v-model="imgEdit.value" class="latex-input" placeholder="图片 URL 或 data URI" @keydown.enter.exact.prevent="confirmImg" @keydown.esc="closeImg" />
         <input v-model="imgEdit.caption" class="latex-input" placeholder="图片标题" @keydown.enter.exact.prevent="confirmImg" @keydown.esc="closeImg" />
         <div class="latex-actions">
-          <button class="btn tiny primary" @click="confirmImg">确定</button>
-          <label class="btn tiny" style="cursor:pointer">重新上传<input type="file" accept="image/*" hidden @change="replaceImgFile" /></label>
           <button class="btn tiny" @click="closeImg">取消</button>
+          <label class="btn tiny" style="cursor:pointer">重新上传<input type="file" accept="image/*" hidden @change="replaceImgFile" /></label>
+          <button class="btn tiny primary" @click="confirmImg">确定</button>
         </div>
       </div>
     </teleport>
@@ -369,7 +369,8 @@ const latexInput = ref(null)
 const latexPop = ref(null)
 const imgPop = ref(null)
 const latexPreview = computed(()=>{
-  try{ return katex.renderToString(latexEdit.value||' ', {throwOnError:false, displayMode:latexEdit.displayMode}) }
+  if(!latexEdit.value.trim()) return '<span class="preview-empty">在下方输入 LaTeX，公式将在此实时预览</span>'
+  try{ return katex.renderToString(latexEdit.value, {throwOnError:false, displayMode:latexEdit.displayMode}) }
   catch(e){ return '<span style="color:#ef4444">'+(e.message||'语法错误')+'</span>' }
 })
 // fixed 视口坐标，锚元素下方；右侧越界回缩，下方放不下弹到上方
@@ -411,7 +412,7 @@ function openLatex({value, anchorEl, displayMode=false, onConfirm}){
   latexEdit.displayMode=displayMode
   latexEdit.confirm=onConfirm
   latexEdit.visible=true
-  positionPop(latexEdit, anchorEl, 340)
+  positionPop(latexEdit, anchorEl, latexEdit.displayMode ? 420 : 360)
   nextTick(()=> latexInput.value?.focus())
 }
 function confirmLatex(){
@@ -558,11 +559,12 @@ async function uploadImage(ev, kind){
 <style>
 /* LaTeX / 图片浮层 — teleport 到 body，非 scoped；fixed 视口定位 */
 .latex-pop{
-  position:fixed; z-index:1000; width:340px;
+  position:fixed; z-index:1000; width:360px;
   background:#fffdf7; border:1px solid var(--line-strong); border-radius:12px;
   box-shadow:0 12px 24px rgba(0,0,0,.14), 0 4px 8px rgba(0,0,0,.08);
   padding:0 12px 12px;
 }
+.latex-pop.wide{ width:420px; }
 .latex-pop .pop-head{
   display:flex; align-items:center; justify-content:space-between;
   margin:0 -12px 8px; padding:7px 12px;
@@ -582,13 +584,20 @@ async function uploadImage(ev, kind){
 .latex-pop .latex-preview{
   background:#f4f1ea; border:1px solid var(--line); border-radius:8px;
   padding:10px; margin:10px 0 8px; min-height:36px; overflow:auto; text-align:center;
+  display:flex; align-items:center; justify-content:center;
+}
+.latex-pop .latex-preview.is-empty{ border-style:dashed; }
+.latex-pop .latex-preview .preview-empty{ font-size:12px; color:#a09a8e; pointer-events:none; }
+.latex-pop .latex-hint{
+  margin-top:8px; font-size:11px; line-height:1.5; color:#a09a8e;
 }
 .latex-pop .img-preview{
   max-width:100%; max-height:120px; display:block; margin:10px auto 8px;
   border-radius:8px; border:1px solid var(--line); background:#fffdf7;
 }
-.latex-pop .latex-actions{ display:flex; gap:8px; margin-top:8px; align-items:center }
-.latex-pop .latex-actions .muted{ margin-left:auto }
+.latex-pop .latex-actions{ display:flex; gap:8px; margin-top:8px; align-items:center; justify-content:flex-end }
+.latex-pop .latex-actions .btn{ flex-shrink:0; white-space:nowrap }
+.latex-pop .latex-actions .btn.primary{ min-width:64px }
 .latex-pop .btn.primary{ background:#1f4d3a; border-color:#1f4d3a; color:#fffdf7 }
 .latex-pop .btn{ background:#fffdf7; border:1px solid var(--line); color:#3d3a33; padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:500 }
 .latex-pop .btn:hover{ background:#ece7db }
