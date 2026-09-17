@@ -11,14 +11,17 @@ QikeQBank/
 ├── package.json / vite.config.js / index.html / tsconfig.json / pnpm-workspace.yaml   [根配置，主线程所有]
 ├── src/                           ← 前端
 │   ├── main.js  App.vue  router/index.js
-│   ├── api/    bridge.js  questions.js  practice.js  banks.js
-│   ├── stores/ bank.js            ← 题库列表 + 各页筛选记忆（无“当前库”概念）
-│   ├── utils/  render.js validate.js normalize.js parsePureText.js
-│   ├── components/*               ← 编辑器组件（不变）
+│   ├── api/    bridge.js  questions.js  practice.js  banks.js  assets.js
+│   ├── stores/ bank.js（题库筛选） settings.js（FSRS 参数/记忆开关等）
+│   ├── utils/  fsrs.js image.js  parseTemplate.js parseDocxTemplate.js parseSheet.js
+│   │           render.js validate.js normalize.js parsePureText.js stripMarkdown.js
+│   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
+│   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
 ├── src-tauri/                     ← Rust（db.rs 承载全部逻辑）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
-└── tools/  migrate-dbjson.mjs  smoke-test.mjs
+├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
+└── tests/unit/  fsrs.test.js  parseDocx.test.js（node:test，零依赖）
 ```
 
 **存储**：`banks` + `questions`（JSON 列）+ `practice_records` + `review_state`。DB 默认在 app_data_dir（`QKEBANK_DB` 环境变量可覆盖）。
@@ -29,11 +32,11 @@ QikeQBank/
 |---|---|
 | 主线程 | 根配置、PLAN.md、src-tauri/icons/、README、集成验证/提交 |
 | **W1 Rust** | `src-tauri/Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`、`src/db.rs` |
-| **W2 前端管道** | `src/api/bridge.js`、`src/api/questions.js`、`src/api/practice.js`、`src/api/banks.js`(新)、`src/stores/bank.js`(新)、`src/App.vue` |
-| **W3a 列表/编辑** | `src/views/List.vue`、`src/views/Form.vue` |
-| **W3b 刷题/复习** | `src/views/Practice.vue`、`src/views/Review.vue` |
+| **W2 前端管道** | `src/api/bridge.js`、`src/api/questions.js`、`src/api/practice.js`、`src/api/banks.js`(新)、`src/api/assets.js`、`src/stores/bank.js`(新)、`src/stores/settings.js`、`src/utils/*`、`src/App.vue` |
+| **W3a 列表/编辑/录题** | `src/views/List.vue`、`src/views/Form.vue`、`src/views/Banks.vue`、`src/components/*`（TiptapDocEditor/QuestionForm/QuestionEditor/QuestionPreview/ImportFileBox/PasteBox/ui） |
+| **W3b 刷题/复习/错题** | `src/views/Practice.vue`、`src/views/Review.vue`、`src/views/Wrong.vue` |
 | **W3c 首页** | `src/views/Home.vue` |
-| **W4 工具** | `tools/migrate-dbjson.mjs`、`tools/smoke-test.mjs` |
+| **W4 工具** | `tools/migrate-dbjson.mjs`、`tools/smoke-test.mjs`、`tools/make-portable.mjs`、`tests/unit/*` |
 
 ## 3. SQLite（v2 权威定义：DDL 幂等语句 + MIGRATE 级联步骤，Rust 与 W4 必须逐字符一致）
 
@@ -276,6 +279,20 @@ export function persistBankFilter(page, id)
 - 保存后：新建 toast 成功并留页连续录入（保留题型/难度/分值，清空题干作答，回顶部）；编辑 toast 成功后返回列表。
 - 顶部展示「所属题库」小徽章（编辑时显示当前 bank 名，只读）。
 
+### 导入链路（ImportFileBox + 解析器，W3a/W4）
+- 入口：Banks 卡片「导入」（目标即该库）与 List 工具栏「导入试题」；目标库确定后弹 ImportFileBox，完成后刷新计数。
+- 支持格式（前端解析 → `import_questions(items, bankId)` 入库）：
+  - txt/md：`stripMarkdown` 预处理（仅 md）→ `parseTemplate` 严格模板解析（题型标记开头）；UTF-8 优先、GBK 兜底解码。
+  - xlsx/xls/csv：`parseSheet` 按表头列（ID/题目/题型/分数/难度/选项A–E/答案/解析）解析；ID 只做分组键，不导入为题 id。
+  - docx：mammoth 转 HTML → 章节/题号状态机组装（`parseDocxTemplate`）；Word 内公式图片只计数跳过，需手动补。
+- 预览一票否决：有错块则不可导入；模板文件由后端 `ensure_template_files` 预置，`open_templates_dir` 打开文件夹。
+- 粘贴智能填入（PasteBox，Form 内）：纯文本通用模板（A. B. C. D. / 填空___/（）/ 判断 / 材料题）→ `parsePureText` 填入编辑器。
+
+### 富文本编辑器（TiptapDocEditor，W3a）
+- 自定义节点：行内公式/块级公式（KaTeX）、填空标记、行内图/块级图、材料子题；点击节点弹编辑浮层（fixed 视口定位 + 标题栏拖动 + 越界回缩）。
+- LaTeX 浮层：实时预览（空输入显示占位文案）、Enter 确认/Esc 取消、块级弹窗加宽（420px）；图片浮层：URL/标题/重新上传（走 assets 入库）。
+- 剪贴板图片 `Ctrl+V` 直接粘贴：`editorProps.handlePaste` 拦截 → `uploadFileToAsset`（压缩→assets 入库）后以块级图插入，多图串行保序；含 `text/html` 的图文混排走默认粘贴保排版。
+
 ### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）
 - 筛选条：题库下拉（默认全部，按上规则记忆）+ 题型下拉 + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页）。
 - 「重练全部」：按当前筛选取最多 500 个 id → sessionStorage['qbank.retryIds'] → `/practice?retry=1`；Practice 绕过 setup 直接组卷（`practicePool({ids})`），读完即清 storage；空结果回 setup 并提示。
@@ -296,17 +313,14 @@ export function persistBankFilter(page, id)
 
 ### Home.vue（W3c）
 - 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。
-- 新增「题库管理」卡：
-  - 列表：每行 = 名称 + 题数(question_count) + 当前徽章 + 设为当前(点行)/重命名(prompt 输入新名)/删除(confirm + 客户端也拦最后一个)。
-  - 新增：输入框 + 按钮（name trim 非空）。
-  - 操作后 `loadBanks()` 刷新（保持当前选择）。
+- 题库管理已独立为 `/banks` 路由（Banks.vue，导航「题库」），Home 不再内嵌管理卡，统计卡片只做跳转。
 - 其余卡片不动；导出数据继续调 `exportData()`。
 - streak 徽章：`recordsOverview` 的 days 算连续学习天数（今天未学从昨天起算，≥2 天显示火焰徽章；后端 UTC 日期口径，零点附近可差 1 天）。
 
 ## 8. 验证标准
 
 - **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
-- **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；新增 `tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults）；无 axios 残留。
+- **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；`tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults；`tests/unit/parseDocx.test.js`：docx 章节题号解析回归）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
 - **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、debug EXE 启动建库冒烟、git commit。
