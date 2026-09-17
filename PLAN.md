@@ -159,7 +159,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；返回 `{"total","items"}` |
+| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}` |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；其余不变 |
 | `questions_get` / `questions_remove` | 不变 | 不变 |
@@ -248,7 +248,7 @@ export function persistBankFilter(page, id)
 题库筛选规则（List/Practice/Review/Wrong/Form 新建共用）：默认全部；设置开启记忆时按页记住上次选择；关闭记忆时切换开关即清掉各页记忆。新建试题必须显式归属（?bank= 或顶部下拉二选一，不再静默回退首库）。
 
 ### api/questions.js（W2 改）
-`list({query, type, bankId, limit, offset})` → args 带 `bank_id`（bankId falsy 时不传=全部）；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
+`list({query, type, bankId, limit, offset, summary})` → args 带 `bank_id`（bankId falsy 时不传=全部）；`summary=true` 透传为摘要模式；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
 
 ### api/practice.js（W2 改）
 `practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
@@ -265,6 +265,7 @@ export function persistBankFilter(page, id)
 - 无题库下拉：上下文只认 `?bank=`（从题库页进入，须仍存在）；直访无 bank 显示空态引导去题库页挑库。
 - 工具栏：搜索 + 题型下拉 + 「导入试题」+ 「新增试题」，归属均为进入的库。
 - 分页：50/页，表格下方「上一页/下一页 + 第 X/Y 页 · 共 N 题」；筛选/搜索/重置时回第 1 页。
+- 惰性加载：列表用 `summary=true` 只取摘要（元数据 + plain_text + children_count/children_score）；行内预览展开时 `questions_get(id)` 按需拉全量并缓存，翻页/重查后清空缓存。
 - 多选：首列勾选（表头全选本页）+ 选中条（批量移动 / 批量删除 / 取消选择），表格常驻不隐藏；多选时行内编辑禁用，移动/删除可用；翻页/重查后清空。
 - 移动（单题/批量共用）：行内「移动」按钮或选中条「移动」→ `selectDialog` 弹窗选目标库 → 确定执行。
 

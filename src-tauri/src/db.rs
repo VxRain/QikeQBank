@@ -511,6 +511,9 @@ fn fsrs_upsert(conn: &Connection, question_id: &str, card: &FsrsCard) -> Result<
 // ---------------------------------------------------------------------------
 const SELECT_FIELDS: &str = "id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at";
 const SELECT_FIELDS_Q: &str = "q.id, q.bank_id, q.type, q.version, q.difficulty, q.score, q.status, q.stem_json, q.options_json, q.answer_json, q.analysis_json, q.children_json, q.plain_text, q.created_at, q.updated_at";
+// 列表摘要模式：不取 stem/options/answer/analysis 四个大 JSON；children_json 只读不传，
+// 仅在 Rust 侧派生 children_count/children_score 后丢弃（材料题分值合计显示用）。
+const SELECT_FIELDS_SUMMARY: &str = "id, bank_id, type, version, difficulty, score, status, children_json, plain_text, created_at, updated_at";
 
 fn parse_json_opt(s: Option<String>) -> Value {
     match s {
@@ -545,6 +548,48 @@ fn query_questions(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Re
     let mut out = Vec::new();
     while let Some(row) = rows.next().map_err(to_str)? {
         out.push(row_to_question(row).map_err(to_str)?);
+    }
+    Ok(out)
+}
+
+/// 摘要行：只含列表渲染所需的元数据 + plain_text，不含 stem/options/answer/analysis/children。
+/// children_count（无子题为 0）/ children_score（无子题为 null，材料题分值合计）由 children_json 派生。
+fn row_to_question_summary(row: &rusqlite::Row) -> rusqlite::Result<Value> {
+    let children_raw: Option<String> = row.get("children_json")?;
+    let mut children_count: i64 = 0;
+    let mut children_score: Value = Value::Null;
+    if let Some(s) = children_raw.as_deref() {
+        if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(s) {
+            children_count = arr.len() as i64;
+            let sum: f64 = arr
+                .iter()
+                .filter_map(|c| c.get("score").and_then(Value::as_f64))
+                .sum();
+            children_score = json!(sum);
+        }
+    }
+    Ok(json!({
+        "id": row.get::<_, String>("id")?,
+        "bank_id": row.get::<_, Option<String>>("bank_id")?,
+        "type": row.get::<_, String>("type")?,
+        "version": row.get::<_, i64>("version")?,
+        "difficulty": row.get::<_, i64>("difficulty")?,
+        "score": row.get::<_, Option<f64>>("score")?,
+        "children_count": children_count,
+        "children_score": children_score,
+        "status": row.get::<_, String>("status")?,
+        "plain_text": row.get::<_, String>("plain_text")?,
+        "created_at": row.get::<_, String>("created_at")?,
+        "updated_at": row.get::<_, String>("updated_at")?,
+    }))
+}
+
+fn query_question_summaries(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Value>, String> {
+    let mut stmt = conn.prepare(sql).map_err(to_str)?;
+    let mut rows = stmt.query(p).map_err(to_str)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        out.push(row_to_question_summary(row).map_err(to_str)?);
     }
     Ok(out)
 }
@@ -956,10 +1001,11 @@ pub fn questions_list(
     bank_id: Option<String>,
     limit: Option<u64>,
     offset: Option<u64>,
+    summary: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(questions_list_impl(&conn, query, type_filter, bank_id, limit, offset)?)
+    ok(questions_list_impl(&conn, query, type_filter, bank_id, limit, offset, summary.unwrap_or(false))?)
 }
 
 fn questions_list_impl(
@@ -969,6 +1015,7 @@ fn questions_list_impl(
     bank_id: Option<String>,
     limit: Option<u64>,
     offset: Option<u64>,
+    summary: bool,
 ) -> Result<Value, String> {
     let query = query.filter(|s| !s.trim().is_empty());
     let type_filter = type_filter.filter(|s| !s.is_empty());
@@ -985,13 +1032,26 @@ fn questions_list_impl(
             |r| r.get(0),
         )
         .map_err(to_str)?;
-    let sql = format!(
-        "SELECT {SELECT_FIELDS} FROM questions
-         WHERE {where_sql}
-         ORDER BY created_at DESC
-         LIMIT ?4 OFFSET ?5"
-    );
-    let items = query_questions(conn, &sql, params![query, type_filter, bank_id, limit, offset])?;
+    let sql = if summary {
+        format!(
+            "SELECT {SELECT_FIELDS_SUMMARY} FROM questions
+             WHERE {where_sql}
+             ORDER BY created_at DESC
+             LIMIT ?4 OFFSET ?5"
+        )
+    } else {
+        format!(
+            "SELECT {SELECT_FIELDS} FROM questions
+             WHERE {where_sql}
+             ORDER BY created_at DESC
+             LIMIT ?4 OFFSET ?5"
+        )
+    };
+    let items = if summary {
+        query_question_summaries(conn, &sql, params![query, type_filter, bank_id, limit, offset])?
+    } else {
+        query_questions(conn, &sql, params![query, type_filter, bank_id, limit, offset])?
+    };
     Ok(json!({ "total": total, "items": items }))
 }
 
@@ -3006,26 +3066,26 @@ mod tests {
         insert_question(&conn, &qb).unwrap();
 
         // questions_list（分页形状 {total, items}）
-        let all = questions_list_impl(&conn, None, None, None, None, None).unwrap();
+        let all = questions_list_impl(&conn, None, None, None, None, None, false).unwrap();
         assert_eq!(all["total"], 2);
         assert_eq!(all["items"].as_array().unwrap().len(), 2);
-        let in_b = questions_list_impl(&conn, None, None, Some(bid.clone()), None, None).unwrap();
+        let in_b = questions_list_impl(&conn, None, None, Some(bid.clone()), None, None, false).unwrap();
         assert_eq!(in_b["total"], 1);
         assert_eq!(in_b["items"][0]["id"], "q_b_1");
         assert_eq!(in_b["items"][0]["bank_id"], bid);
-        let in_default = questions_list_impl(&conn, None, None, Some("bank_default".to_string()), None, None).unwrap();
+        let in_default = questions_list_impl(&conn, None, None, Some("bank_default".to_string()), None, None, false).unwrap();
         assert_eq!(in_default["total"], 1);
         assert_eq!(in_default["items"][0]["id"], "q_test_1");
-        let as_all = questions_list_impl(&conn, None, None, Some(String::new()), None, None).unwrap();
+        let as_all = questions_list_impl(&conn, None, None, Some(String::new()), None, None, false).unwrap();
         assert_eq!(as_all["total"], 2);
         // 分页：limit 1 取两页，total 不变
-        let p1 = questions_list_impl(&conn, None, None, None, Some(1), Some(0)).unwrap();
-        let p2 = questions_list_impl(&conn, None, None, None, Some(1), Some(1)).unwrap();
+        let p1 = questions_list_impl(&conn, None, None, None, Some(1), Some(0), false).unwrap();
+        let p2 = questions_list_impl(&conn, None, None, None, Some(1), Some(1), false).unwrap();
         assert_eq!(p1["total"], 2);
         assert_eq!(p1["items"].as_array().unwrap().len(), 1);
         assert_eq!(p2["items"].as_array().unwrap().len(), 1);
         assert_ne!(p1["items"][0]["id"], p2["items"][0]["id"]);
-        let p3 = questions_list_impl(&conn, None, None, None, Some(1), Some(2)).unwrap();
+        let p3 = questions_list_impl(&conn, None, None, None, Some(1), Some(2), false).unwrap();
         assert_eq!(p3["total"], 2);
         assert_eq!(p3["items"].as_array().unwrap().len(), 0);
 
@@ -3084,6 +3144,51 @@ mod tests {
         let stats_def = review_stats_impl(&conn, Some("bank_default".to_string())).unwrap();
         assert_eq!(stats_def["practiced_total"], 0);
         assert_eq!(stats_def["correct_rate"], Value::Null);
+    }
+
+    #[test]
+    fn questions_list_summary_omits_heavy_fields() {
+        let conn = test_conn();
+        // 单选题：带 analysis 大文本；材料题：父分值空、子题各有分值
+        let mut single = sample_question();
+        single["analysis"] =
+            json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "长解析"}]}]});
+        insert_question(&conn, &single).unwrap();
+        let mut mat = sample_question();
+        mat["id"] = json!("q_mat_1");
+        mat["type"] = json!("material");
+        mat["score"] = Value::Null;
+        mat["children"] = json!([
+            {"id": "c1", "type": "single", "score": 2, "stem": {"type": "doc", "content": []}},
+            {"id": "c2", "type": "single", "score": 3, "stem": {"type": "doc", "content": []}}
+        ]);
+        insert_question(&conn, &mat).unwrap();
+
+        // 全量模式：重字段都在
+        let full = questions_list_impl(&conn, None, None, None, None, None, false).unwrap();
+        assert_eq!(full["total"], 2);
+        let full_single = full["items"].as_array().unwrap().iter().find(|x| x["id"] == "q_test_1").unwrap();
+        assert!(full_single.get("stem").is_some());
+        assert!(full_single.get("analysis").is_some());
+
+        // 摘要模式：total 一致，重字段省略，派生字段正确
+        let sum = questions_list_impl(&conn, None, None, None, None, None, true).unwrap();
+        assert_eq!(sum["total"], 2);
+        let items = sum["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        for it in items {
+            for k in ["stem", "options", "answer", "analysis", "children"] {
+                assert!(it.get(k).is_none(), "summary must omit {k}");
+            }
+            assert!(it.get("plain_text").is_some());
+        }
+        let s_single = items.iter().find(|x| x["id"] == "q_test_1").unwrap();
+        assert!((s_single["score"].as_f64().unwrap() - 5.0).abs() < 1e-9);
+        assert_eq!(s_single["children_count"], 0);
+        assert!(s_single["children_score"].is_null());
+        let s_mat = items.iter().find(|x| x["id"] == "q_mat_1").unwrap();
+        assert_eq!(s_mat["children_count"], 2);
+        assert!((s_mat["children_score"].as_f64().unwrap() - 5.0).abs() < 1e-9);
     }
 
     #[test]

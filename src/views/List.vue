@@ -101,7 +101,7 @@
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
               <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
-              <td class="px-3.5 py-3 border-b border-line">{{ q.score ?? (q.children ? q.children.reduce((s,c)=>s+(c.score||0),0) : '-') }}</td>
+              <td class="px-3.5 py-3 border-b border-line">{{ displayScore(q) }}</td>
               <td class="px-3.5 py-3 border-b border-line">
                 <div class="flex gap-1.5 flex-wrap">
                   <router-link :to="`/edit/${q.id}`" class="btn btn-small" title="编辑"><i class="i-lucide-pencil" />编辑</router-link>
@@ -113,7 +113,10 @@
             </tr>
             <tr v-if="previewId === q.id" :key="q.id + '_preview'">
               <td colspan="5" class="px-3.5 py-3 border-b border-line bg-bg-accent">
-                <QuestionPreview :question="q" />
+                <div v-if="previewLoading && !previewCache[q.id]" class="text-muted py-4 flex items-center gap-2">
+                  <i class="i-lucide-loader-circle animate-spin" />加载中...
+                </div>
+                <QuestionPreview v-else-if="previewCache[q.id]" :question="previewCache[q.id]" />
               </td>
             </tr>
             </template>
@@ -139,7 +142,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { list, remove, update } from '@/api/questions.js'
+import { list, get, remove, update } from '@/api/questions.js'
 import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
 import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
@@ -155,6 +158,9 @@ const PAGE_SIZE = 50
 const page = ref(1)
 const total = ref(0)
 const previewId = ref(null)
+// 摘要列表不含题面详情，预览时按需拉全量并缓存
+const previewCache = ref({})
+const previewLoading = ref(false)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 // 本页题库上下文：只从 ?bank= 来（从题库页进入），无选择器；直访无 bank 则提示去挑库
 const bankId = ref('')
@@ -194,7 +200,33 @@ function clearSelection() {
 }
 
 function togglePreview(id) {
-  previewId.value = previewId.value === id ? null : id
+  if (previewId.value === id) {
+    previewId.value = null
+    return
+  }
+  previewId.value = id
+  if (previewCache.value[id]) return
+  previewLoading.value = true
+  get(id).then((res) => {
+    const full = res?.data ?? res
+    if (full && full.id) previewCache.value = { ...previewCache.value, [id]: full }
+    else previewId.value = null
+  }).catch((e) => {
+    console.error(e)
+    toast(e?.message || '加载详情失败', 'error')
+    previewId.value = null
+  }).finally(() => {
+    previewLoading.value = false
+  })
+}
+
+// 摘要行优先用服务端派生的 children_score（材料题分值合计），兼容全量行的 children
+function displayScore(q) {
+  if (!q) return '-'
+  if (q.score !== null && q.score !== undefined) return q.score
+  if (typeof q.children_score === 'number') return q.children_score
+  if (Array.isArray(q.children)) return q.children.reduce((s, c) => s + (c.score || 0), 0)
+  return '-'
 }
 
 // 移动（单题/批量共用）：弹窗选目标库，确定后执行
@@ -349,6 +381,7 @@ async function fetchList() {
     params.bankId = bankId.value
     params.limit = PAGE_SIZE
     params.offset = (page.value - 1) * PAGE_SIZE
+    params.summary = true
     const res = await list(params)
     // 信封 {success, data:{total, items}}；兼容旧数组形状兜底
     const envelope = res?.data ?? res
@@ -376,6 +409,8 @@ async function fetchList() {
     loading.value = false
     clearSelection()
     previewId.value = null
+    previewCache.value = {}
+    previewLoading.value = false
   }
 }
 

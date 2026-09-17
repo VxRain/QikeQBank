@@ -9,6 +9,7 @@ export function list(params = {}) {
   if (params.bankId) args.bankId = params.bankId
   if (params.limit != null) args.limit = params.limit
   if (params.offset != null) args.offset = params.offset
+  if (params.summary != null) args.summary = params.summary
   return cmd('questions_list', args)
 }
 
