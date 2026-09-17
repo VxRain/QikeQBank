@@ -69,18 +69,22 @@ CREATE TABLE IF NOT EXISTS practice_records (
   correct INTEGER NOT NULL,
   answered_at TEXT NOT NULL,
   elapsed_ms INTEGER,
-  detail_json TEXT
+  detail_json TEXT,
+  fsrs_log TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
 CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
 
 CREATE TABLE IF NOT EXISTS review_state (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
-  ease REAL NOT NULL DEFAULT 2.5,
-  interval_days REAL NOT NULL DEFAULT 0,
+  due_at TEXT NOT NULL,
+  stability REAL NOT NULL DEFAULT 0,
+  difficulty REAL NOT NULL DEFAULT 0,
   reps INTEGER NOT NULL DEFAULT 0,
   lapses INTEGER NOT NULL DEFAULT 0,
-  due_at TEXT NOT NULL,
+  state INTEGER NOT NULL DEFAULT 0,
+  learning_steps INTEGER NOT NULL DEFAULT 0,
+  scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT
 );
@@ -111,8 +115,13 @@ ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CAS
 export const MIGRATE_M3 = `-- M3 存量行回填
 UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;`;
 
-/** §3.2 完整文本（M1 + M2 + M3 拼接，与 PLAN §3.2 代码块逐字符一致），供 SQL 逐字符比对 */
-export const MIGRATE = `${MIGRATE_M1}\n\n${MIGRATE_M2}\n\n${MIGRATE_M3}`;
+export const MIGRATE_M4 = `-- M4 FSRS：旧 review_state（含 ease/interval_days 列）直接重建（删库重来，不迁移进度）；
+-- practice_records 缺 fsrs_log 列则补列（条件均由执行侧 PRAGMA table_info 判断）：
+DROP TABLE review_state;
+ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;`;
+
+/** §3.2 完整文本（M1 + M2 + M3 + M4 拼接，与 PLAN §3.2 代码块逐字符一致），供 SQL 逐字符比对 */
+export const MIGRATE = `${MIGRATE_M1}\n\n${MIGRATE_M2}\n\n${MIGRATE_M3}\n\n${MIGRATE_M4}`;
 
 /**
  * 按 PLAN §3.2 顺序执行 MIGRATE 三步（先 DDL 后调用；与 tools/smoke-test.mjs 逻辑完全相同）：
@@ -125,6 +134,14 @@ export function migrateV2(db) {
   const cols = db.prepare("SELECT name FROM pragma_table_info('questions')").all().map((c) => c.name);
   if (!cols.includes('bank_id')) db.exec(MIGRATE_M2);
   db.exec(MIGRATE_M3);
+  // M4 FSRS：旧 review_state 直接重建 + practice_records 补 fsrs_log 列
+  const rsCols = db.prepare("SELECT name FROM pragma_table_info('review_state')").all().map((c) => c.name);
+  if (rsCols.includes('ease') || rsCols.includes('interval_days')) {
+    db.exec('DROP TABLE review_state');
+    db.exec(DDL); // 重建被 DROP 的表（其余 CREATE IF NOT EXISTS 为空操作）
+  }
+  const prCols = db.prepare("SELECT name FROM pragma_table_info('practice_records')").all().map((c) => c.name);
+  if (!prCols.includes('fsrs_log')) db.exec('ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT');
 }
 
 const QUESTION_TYPES = ['single', 'multi', 'judge', 'fill', 'short', 'material'];

@@ -285,6 +285,7 @@ import { expandQuestions } from '@/api/assets.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
+import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
 import { ui } from '@/stores/ui.js'
 
 const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
@@ -695,12 +696,28 @@ function commit(it, grade, elapsed, res) {
   round.value.correct += res.correct ? 1 : 0
   round.value.ms += elapsed
   if (!res.correct) round.value.wrong.push(it)
+  // FSRS：练习正确→Good / 错误→Again；“仅错题”入库时答对只写流水不建卡
+  let card = null
+  let fsrsLog = null
+  if (!(settings.fsrs.practiceScope === 'wrong-only' && grade === 'good')) {
+    try {
+      const fsrsRow = it.parent ? it.parent.fsrs : it.q.fsrs
+      const out = fsrsAnswer(cardFromRow(fsrsRow), grade, settings.fsrs)
+      card = toRow(out.card, grade)
+      fsrsLog = toLog(out.log)
+    } catch (e) {
+      console.error('fsrs answer failed', e)
+      recordError.value = '调度计算失败：' + (e?.message || e)
+    }
+  }
   recordAnswer([{
     question_id: it.isChild ? it.parent.id : it.q.id,
     mode: 'practice',
     grade,
     elapsed_ms: elapsed,
-    detail: buildDetail(it, res)
+    detail: buildDetail(it, res),
+    card,
+    fsrs_log: fsrsLog
   }]).catch((e) => {
     console.error('record_answer failed', e)
     recordError.value = (e?.message || e)

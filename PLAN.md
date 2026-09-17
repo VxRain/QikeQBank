@@ -1,6 +1,6 @@
 # QikeQBank — 本地题库管理/刷题/复习客户端（Tauri 2 + Vue3 + SQLite）
 
-> 将 `C:/Users/Administrator/Desktop/test/QBank` 的 Web 版（Vue3+Vite+Tiptap3+KaTeX，Block JSON 题目格式）迁移为 **Tauri 2 桌面客户端**，存储为 **SQLite3**，含 **刷题** 与 **间隔复习（SM-2）**。
+> 将 `C:/Users/Administrator/Desktop/test/QBank` 的 Web 版（Vue3+Vite+Tiptap3+KaTeX，Block JSON 题目格式）迁移为 **Tauri 2 桌面客户端**，存储为 **SQLite3**，含 **刷题** 与 **间隔复习（FSRS-6）**。
 > 工作目录：`D:/Workspaces/QikeQBank`（git 仓库）。
 > **迭代二（本计划主要变更）**：支持 **多题库** —— 新增 `banks` 表，`questions.bank_id` 外键；题库 CRUD + 全局 currentBank 状态；列表/刷题/复习按题库过滤；导出格式 v3。
 
@@ -78,18 +78,22 @@ CREATE TABLE IF NOT EXISTS practice_records (
   correct INTEGER NOT NULL,
   answered_at TEXT NOT NULL,
   elapsed_ms INTEGER,
-  detail_json TEXT
+  detail_json TEXT,
+  fsrs_log TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
 CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
 
 CREATE TABLE IF NOT EXISTS review_state (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
-  ease REAL NOT NULL DEFAULT 2.5,
-  interval_days REAL NOT NULL DEFAULT 0,
+  due_at TEXT NOT NULL,
+  stability REAL NOT NULL DEFAULT 0,
+  difficulty REAL NOT NULL DEFAULT 0,
   reps INTEGER NOT NULL DEFAULT 0,
   lapses INTEGER NOT NULL DEFAULT 0,
-  due_at TEXT NOT NULL,
+  state INTEGER NOT NULL DEFAULT 0,
+  learning_steps INTEGER NOT NULL DEFAULT 0,
+  scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT
 );
@@ -122,6 +126,11 @@ ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CAS
 
 -- M3 存量行回填
 UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;
+
+-- M4 FSRS：旧 review_state（含 ease/interval_days 列）直接重建（删库重来，不迁移进度）；
+-- practice_records 缺 fsrs_log 列则补列（条件均由执行侧 PRAGMA table_info 判断）：
+DROP TABLE review_state;
+ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;
 
 -- wrong_dismiss 为新表（无存量需回填）：存量库随幂等 DDL 自动建表，无需 M 步骤。
 ```
@@ -159,9 +168,9 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `practice_pool` | `limit?, type_filter?, bank_id?, ids?` | 有 bank_id 时过滤；ids 非空时按传入顺序返回存在的题（上限 500），忽略题型/随机逻辑（错题重练用） |
 | `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500 |
 | `wrong_dismiss` | `question_id` | 错题本手动移出（幂等）：记入 wrong_dismiss，不删练习记录；之后再答错自动解除 |
-| `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤 |
-| `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局 |
-| `record_answer` | 不变 | 不变 |
+| `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤；每题附加 `fsrs` 对象（无状态行为 null） |
+| `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期） |
+| `record_answer` | `items[]` 增可选 `card`（FSRS 卡片全字段）/`fsrs_log`（ReviewLog 快照） | 有 card 则 UPSERT review_state（范围校验）+ 写流水；无 card 只写流水 |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 | `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
@@ -179,22 +188,30 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `import_dbjson` | `path` | 兼容 v2/v3：banks 按 id UPSERT（name/description/updated_at），缺 banks 时确保默认库存在；question 无 bank_id → 默认库；UPSERT 见 v1 |
 | `save_text_file` | `filename: String, content: String` | 通用文本落盘到 `app_data_dir/export/`（仅纯文件名，防路径穿越），返回 `{"path"}`；供导入模板下载等 |
 
-- `plain_text` 聚合、SM-2、信封结构、AppState(Mutex<Connection>)、db 路径解析均沿用 v1。
+- `plain_text` 聚合、信封结构、AppState(Mutex<Connection>)、db 路径解析均沿用 v1；SM-2 已替换为 FSRS（见 §5）。
 
-## 5. SM-2（不变）
+## 5. FSRS-6 调度（前端 ts-fsrs@5.4.2，Pin 住 5.4.2 稳定版）
 
-```text
-again: lapses+=1; reps=0; ease=max(1.3, ease-0.20); interval_days=0;   due=now
-hard : reps+=1; ease=max(1.3, ease-0.15); interval_days=max(1, round(interval*1.2)); due=now+interval
-good : reps+=1; ease=min(3.0, ease+0.10); interval = reps==1?1 : reps==2?6 : round(interval*ease); due=now+interval
-easy : reps+=1; ease=min(3.0, ease+0.15); interval = max(2, round(interval==0?2 : interval*2)); due=now+interval
-```
-practice 映射：correct=true→good / false→again。`correct` 落地 = grade ∈ {good,easy}。
+- 职责划分：调度计算在前端（`src/utils/fsrs.js` 唯一封装，`ts-fsrs` 无运行时依赖）；
+  后端只做可信写入 + 范围校验（`state∈0..3`、数值≥0、`due_at` 可解析 ISO，非法 Err）。
+- 状态表 `review_state` 存 Card 序列化字段（`state` 口径与 ts-fsrs State 枚举一致：
+  0=New 1=Learning 2=Review 3=Relearning；`elapsed_days` 已废弃不落库）。
+- 映射：复习四键 again/hard/good/easy → Rating 1:1；练习 correct→Good / wrong→Again。
+- `practice_records.fsrs_log` 存每次作答的 ReviewLog 快照（只写不读，未来参数优化的数据源）。
+- 可调参数（设置页「间隔复习」分组，`settings.fsrs`，localStorage 持久化，缺键走默认）：
+  目标记忆保持率 0.9（0.75–0.95 五档）、学习步长 `1m,10m`、重学步长 `10m`（步长单位仅 m/h/d，
+  最多 6 步）、最大间隔 36500 天（30–36500）、随机抖动关、
+  练习入库范围 全部/`仅错题`（仅错题时答对只写流水不建卡）。21 个 w 权重不暴露（用官方默认）。
+- 复习页题量选择（输入框默认 20；“全部”按钮把今日到期数回填进输入框，无模式开关）。
+- 新卡 Good 进 Learning（默认 1m/10m 当天回来），毕业后进 Review；答错进 Relearning。
+- 旧库检测到 `ease`/`interval_days` 列则 DROP 重建 review_state（删库重来）；
+  前端对有历史作答的老用户一次性 toast 告知，全新安装静默。
+- `practice` 映射：correct=true→good / false→again。`correct` 落地 = grade ∈ {good,easy}。
 
 ## 6. review_stats（不变结构，支持 bank_id 可选聚合）
 
 ```json
-{"success":true,"data":{"total":n,"by_type":{...},"due_total":n,"due_today":n,
+{"success":true,"data":{"total":n,"by_type":{...},"due_total":n,"due_today":n,"learning_due":n,
  "practiced_total":n,"practiced_today":n,"correct_rate":82.5|null,
  "records_7d":[{"date":"2026-09-04","count":20,"correct":16}]}}}
 ```
@@ -268,12 +285,13 @@ export function persistBankFilter(page, id)
 ### Practice.vue（W3b）
 - 设置面板加「题库」下拉：全部(值为 '') + 各库；默认全部（按上规则记忆）。
 - 双模式（localStorage `qbank.practiceMode` 记忆）：练习＝作答判分计入复习；背题＝不渲染作答区，直接展示答案（选择类正确项高亮/填空答案章嵌题干+逐空列出/简答参考答案）+ 解析，仅上一题/下一题导航，不判分不写 practice_records；结束页只显已过题数与用时。错题重做/错题本重练入口强制回练习模式。
-- 组卷时 `practicePool({limit,type,bankId})`；其余逻辑不动。
+- 组卷时 `practicePool({limit,type,bankId})`（每题附 `fsrs`，无状态行为 null）；`commit()` 正确→Good/错误→Again 算卡并入 recordAnswer；`practiceScope==='wrong-only'` 且答对时不带 card（只写流水）。
 - 错题重练：`/practice?retry=1` + sessionStorage['qbank.retryIds'] → `practicePool({ids})` 直达作答；另修复本轮结束页「错题重做」未切回作答页的问题。
 - 键盘流：未判分 A–F 选题 / M 切材料 / 简答看答案后 1-2 自评 / Enter 提交；判分后 Enter 下一题，Esc 取消自动下一题；背题模式 ←/→ 或 Enter 翻题；输入区/组词/弹窗/修饰键不劫持。
 
 ### Review.vue（W3b）
-- 顶部设置同 Practice（题库下拉）；`reviewDue({limit:20, bankId})`；其余不动。
+- 顶部设置同 Practice（题库下拉 + 题量输入框默认 20/全部按钮）；`reviewDue({limit, bankId})`；徽章 SM-2→FSRS；待复习文案拆“其中学习中 N 题”（`stats.learning_due`，>0 才显示）；卡片 Learning/Relearning 态打“学习中”徽标。
+- `reviewGrade` 四键 1:1 映射 FSRS Rating，前端算卡（`cardFromRow(it.parent?.fsrs ?? it.q.fsrs)`）后 `card` + `fsrs_log` 并入 recordAnswer；其余（自评统计、材料记父题 id）不动。
 - 键盘流：未判分 A–F 选题 / M 切材料 / Enter 判分；判分后 1-4 自评（Enter 无动作）；规则同 Practice。
 
 ### Home.vue（W3c）
@@ -287,10 +305,10 @@ export function persistBankFilter(page, id)
 
 ## 8. 验证标准
 
-- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
-- **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例）；无 axios 残留。
+- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
+- **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；新增 `tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
-- **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）。输出 SMOKE PASS / 迁移统计。
+- **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
 - **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、debug EXE 启动建库冒烟、git commit。
 
 **升级条件**（同 v1）：失败 ≥2 次或计划假设失真 → 停止如实汇报，禁止臆造。

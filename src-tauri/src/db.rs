@@ -11,6 +11,22 @@ use tauri_plugin_opener::OpenerExt;
 // ---------------------------------------------------------------------------
 // SQLite DDL — must match PLAN §3 character-for-character
 // ---------------------------------------------------------------------------
+// FSRS-6 调度状态表（PLAN §5）：调度计算在前端（ts-fsrs），本表只存 Card 序列化字段。
+// state 口径与 ts-fsrs State 枚举一致：0=New 1=Learning 2=Review 3=Relearning。
+// 单独成 const 供 M4 重建复用；单测锁定它与 MIGRATIONS 逐字符一致。
+const REVIEW_STATE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS review_state (
+  question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+  due_at TEXT NOT NULL,
+  stability REAL NOT NULL DEFAULT 0,
+  difficulty REAL NOT NULL DEFAULT 0,
+  reps INTEGER NOT NULL DEFAULT 0,
+  lapses INTEGER NOT NULL DEFAULT 0,
+  state INTEGER NOT NULL DEFAULT 0,
+  learning_steps INTEGER NOT NULL DEFAULT 0,
+  scheduled_days REAL NOT NULL DEFAULT 0,
+  last_result TEXT,
+  last_reviewed_at TEXT
+);"#;
 pub const MIGRATIONS: &str = r#"CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -49,18 +65,22 @@ CREATE TABLE IF NOT EXISTS practice_records (
   correct INTEGER NOT NULL,
   answered_at TEXT NOT NULL,
   elapsed_ms INTEGER,
-  detail_json TEXT
+  detail_json TEXT,
+  fsrs_log TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
 CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
 
 CREATE TABLE IF NOT EXISTS review_state (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
-  ease REAL NOT NULL DEFAULT 2.5,
-  interval_days REAL NOT NULL DEFAULT 0,
+  due_at TEXT NOT NULL,
+  stability REAL NOT NULL DEFAULT 0,
+  difficulty REAL NOT NULL DEFAULT 0,
   reps INTEGER NOT NULL DEFAULT 0,
   lapses INTEGER NOT NULL DEFAULT 0,
-  due_at TEXT NOT NULL,
+  state INTEGER NOT NULL DEFAULT 0,
+  learning_steps INTEGER NOT NULL DEFAULT 0,
+  scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT
 );
@@ -166,7 +186,7 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, S
     Ok(false)
 }
 
-/// Runs the PLAN §3.2 MIGRATE steps (M1 seed / M2 column / M3 backfill) on a
+/// Runs the PLAN §3.2 MIGRATE steps (M1 seed / M2 column / M3 backfill / M4 FSRS) on a
 /// schema that already matches the §3.1 DDL.
 pub fn apply_migrations(conn: &Connection) -> Result<(), String> {
     // M1 种子默认题库（幂等）
@@ -180,6 +200,23 @@ pub fn apply_migrations(conn: &Connection) -> Result<(), String> {
     // M3 存量行回填
     conn.execute_batch(BACKFILL_BANK_ID)
         .map_err(|e| format!("migrate M3 failed: {e}"))?;
+    // M4 FSRS：旧 review_state（含 ease/interval_days 列）直接重建（删库重来，不迁移进度）；
+    // practice_records 缺 fsrs_log 列则补列
+    if table_exists(conn, "review_state")?
+        && (column_exists(conn, "review_state", "ease")?
+            || column_exists(conn, "review_state", "interval_days")?)
+    {
+        conn.execute_batch("DROP TABLE review_state;")
+            .map_err(|e| format!("migrate M4 failed: {e}"))?;
+        conn.execute_batch(REVIEW_STATE_DDL)
+            .map_err(|e| format!("migrate M4 failed: {e}"))?;
+    }
+    if table_exists(conn, "practice_records")?
+        && !column_exists(conn, "practice_records", "fsrs_log")?
+    {
+        conn.execute_batch("ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;")
+            .map_err(|e| format!("migrate M4 failed: {e}"))?;
+    }
     Ok(())
 }
 
@@ -377,132 +414,92 @@ fn aggregated_plain_text(q: &Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// SM-2 spaced repetition (PLAN §5)
+// FSRS-6 调度状态（PLAN §5）：调度计算在前端（ts-fsrs），后端只做可信写入 + 范围校验。
+// state 口径与 ts-fsrs State 枚举一致：0=New 1=Learning 2=Review 3=Relearning。
 // ---------------------------------------------------------------------------
-#[derive(Debug, Clone, PartialEq)]
-pub struct ReviewSnapshot {
-    pub ease: f64,
-    pub interval_days: f64,
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct FsrsCard {
+    pub stability: f64,
+    pub difficulty: f64,
     pub reps: i64,
     pub lapses: i64,
+    pub state: i64,
+    pub learning_steps: i64,
+    pub scheduled_days: f64,
     pub due_at: String,
+    pub last_reviewed_at: Option<String>,
+    pub last_result: Option<String>,
 }
 
-impl Default for ReviewSnapshot {
-    fn default() -> Self {
-        ReviewSnapshot {
-            ease: 2.5,
-            interval_days: 0.0,
-            reps: 0,
-            lapses: 0,
-            due_at: String::new(),
+fn parse_iso_field(v: &str, field: &str) -> Result<(), String> {
+    DateTime::parse_from_rfc3339(v)
+        .map(|_| ())
+        .map_err(|_| format!("invalid fsrs {field}: {v}"))
+}
+
+/// 后端范围校验：防止前端 bug 写坏调度态（非法一律 Err，不静默兜底）。
+fn validate_fsrs_card(c: &FsrsCard) -> Result<(), String> {
+    if !(0..=3).contains(&c.state) {
+        return Err(format!("invalid fsrs state: {}", c.state));
+    }
+    for (name, v) in [
+        ("stability", c.stability),
+        ("difficulty", c.difficulty),
+        ("scheduled_days", c.scheduled_days),
+    ] {
+        if !v.is_finite() || v < 0.0 {
+            return Err(format!("invalid fsrs {name}: {v}"));
         }
     }
-}
-
-const DAY_MS: f64 = 86_400_000.0;
-
-/// Applies one SM-2 grade on top of `current` state.
-pub fn sm2_next(current: &ReviewSnapshot, grade: &str, now: DateTime<Utc>) -> ReviewSnapshot {
-    let mut ease = current.ease;
-    let mut interval = current.interval_days;
-    let mut reps = current.reps;
-    let mut lapses = current.lapses;
-
-    let due = match grade {
-        "again" => {
-            lapses += 1;
-            reps = 0;
-            ease = (ease - 0.20).max(1.3);
-            interval = 0.0;
-            now
+    for (name, v) in [
+        ("reps", c.reps),
+        ("lapses", c.lapses),
+        ("learning_steps", c.learning_steps),
+    ] {
+        if v < 0 {
+            return Err(format!("invalid fsrs {name}: {v}"));
         }
-        "hard" => {
-            reps += 1;
-            ease = (ease - 0.15).max(1.3);
-            interval = ((interval * 1.2).round()).max(1.0);
-            now + Duration::milliseconds((interval * DAY_MS) as i64)
-        }
-        "good" => {
-            reps += 1;
-            ease = (ease + 0.10).min(3.0);
-            interval = if reps == 1 {
-                1.0
-            } else if reps == 2 {
-                6.0
-            } else {
-                (interval * ease).round()
-            };
-            now + Duration::milliseconds((interval * DAY_MS) as i64)
-        }
-        "easy" => {
-            reps += 1;
-            ease = (ease + 0.15).min(3.0);
-            interval = if interval == 0.0 {
-                2.0
-            } else {
-                (interval * 2.0).round()
-            };
-            interval = interval.max(2.0);
-            now + Duration::milliseconds((interval * DAY_MS) as i64)
-        }
-        _ => {
-            return current.clone();
-        }
-    };
-
-    ReviewSnapshot {
-        ease,
-        interval_days: interval,
-        reps,
-        lapses,
-        due_at: fmt_iso(due),
     }
+    parse_iso_field(&c.due_at, "due_at")?;
+    if let Some(s) = c.last_reviewed_at.as_deref() {
+        parse_iso_field(s, "last_reviewed_at")?;
+    }
+    if let Some(r) = c.last_result.as_deref() {
+        if !["again", "hard", "good", "easy"].contains(&r) {
+            return Err(format!("invalid fsrs last_result: {r}"));
+        }
+    }
+    Ok(())
 }
 
-fn sm2_update(conn: &Connection, question_id: &str, grade: &str, now: DateTime<Utc>) -> Result<(), String> {
-    let existing: Option<(f64, f64, i64, i64)> = conn
-        .query_row(
-            "SELECT ease, interval_days, reps, lapses FROM review_state WHERE question_id = ?1",
-            params![question_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()
-        .map_err(to_str)?;
-
-    let base = match existing {
-        Some((e, i, r, l)) => ReviewSnapshot {
-            ease: e,
-            interval_days: i,
-            reps: r,
-            lapses: l,
-            due_at: String::new(),
-        },
-        None => ReviewSnapshot::default(),
-    };
-    let next = sm2_next(&base, grade, now);
-    let reviewed_at = fmt_iso(now);
-
+fn fsrs_upsert(conn: &Connection, question_id: &str, card: &FsrsCard) -> Result<(), String> {
+    validate_fsrs_card(card)?;
     conn.execute(
-        "INSERT INTO review_state (question_id, ease, interval_days, reps, lapses, due_at, last_result, last_reviewed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(question_id) DO UPDATE SET
-           ease = excluded.ease,
-           interval_days = excluded.interval_days,
+           due_at = excluded.due_at,
+           stability = excluded.stability,
+           difficulty = excluded.difficulty,
            reps = excluded.reps,
            lapses = excluded.lapses,
-           due_at = excluded.due_at,
+           state = excluded.state,
+           learning_steps = excluded.learning_steps,
+           scheduled_days = excluded.scheduled_days,
            last_result = excluded.last_result,
            last_reviewed_at = excluded.last_reviewed_at",
         params![
             question_id,
-            next.ease,
-            next.interval_days,
-            next.reps,
-            next.lapses,
-            next.due_at,
-            grade,
-            reviewed_at
+            card.due_at,
+            card.stability,
+            card.difficulty,
+            card.reps,
+            card.lapses,
+            card.state,
+            card.learning_steps,
+            card.scheduled_days,
+            card.last_result,
+            card.last_reviewed_at
         ],
     )
     .map_err(to_str)?;
@@ -554,8 +551,55 @@ fn query_questions(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Re
 
 fn fetch_question(conn: &Connection, id: &str) -> Result<Option<Value>, String> {
     let sql = format!("SELECT {SELECT_FIELDS} FROM questions WHERE id = ?1");
-    let rows = query_questions(conn, &sql, params![id])?;
+    let mut rows = query_questions(conn, &sql, params![id])?;
+    attach_fsrs_states(conn, &mut rows)?;
     Ok(rows.into_iter().next())
+}
+
+/// 取题结果附加 FSRS 状态（有行则为 fsrs 对象，无行则 fsrs:null）。
+/// 单条 IN 查询批量拉取，避免 N+1。
+fn attach_fsrs_states(conn: &Connection, out: &mut [Value]) -> Result<(), String> {
+    let ids: Vec<&str> = out
+        .iter()
+        .filter_map(|q| q.get("id").and_then(Value::as_str))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at
+         FROM review_state WHERE question_id IN ({placeholders})"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+    let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let map: HashMap<String, Value> = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                json!({
+                    "due_at": row.get::<_, String>(1)?,
+                    "stability": row.get::<_, f64>(2)?,
+                    "difficulty": row.get::<_, f64>(3)?,
+                    "reps": row.get::<_, i64>(4)?,
+                    "lapses": row.get::<_, i64>(5)?,
+                    "state": row.get::<_, i64>(6)?,
+                    "learning_steps": row.get::<_, i64>(7)?,
+                    "scheduled_days": row.get::<_, f64>(8)?,
+                    "last_result": row.get::<_, Option<String>>(9)?,
+                    "last_reviewed_at": row.get::<_, Option<String>>(10)?,
+                }),
+            ))
+        })
+        .map_err(to_str)?
+        .collect::<Result<_, _>>()
+        .map_err(to_str)?;
+    for q in out.iter_mut() {
+        if let Some(id) = q.get("id").and_then(Value::as_str) {
+            q["fsrs"] = map.get(id).cloned().unwrap_or(Value::Null);
+        }
+    }
+    Ok(())
 }
 
 struct QuestionFields {
@@ -1134,7 +1178,9 @@ fn practice_pool_impl(
            AND (?3 IS NULL OR bank_id = ?3)
          ORDER BY RANDOM() LIMIT ?2"
     );
-    query_questions(conn, &sql, params![type_filter, limit, bank_id])
+    let mut out = query_questions(conn, &sql, params![type_filter, limit, bank_id])?;
+    attach_fsrs_states(conn, &mut out)?;
+    Ok(out)
 }
 
 /// 判分结论解析：判分主体是前端（手握题目+答案），后端只做合法性校验后落库。
@@ -1170,6 +1216,10 @@ pub struct RecordItem {
     pub grade: Option<String>,
     pub elapsed_ms: Option<i64>,
     pub detail: Option<Value>,
+    /// 前端算好的 FSRS 卡片状态（FSRS-6）；有则 UPSERT review_state，无则只写流水
+    pub card: Option<FsrsCard>,
+    /// 本次作答的 ReviewLog 快照（未来跑 FSRS 优化器的数据源，现在只写不读）
+    pub fsrs_log: Option<Value>,
 }
 
 #[tauri::command]
@@ -1198,10 +1248,14 @@ pub fn record_answer(
             Some(v) => Some(serde_json::to_string(v).map_err(to_str)?),
             None => None,
         };
+        let fsrs_log_opt: Option<String> = match &item.fsrs_log {
+            Some(v) => Some(serde_json::to_string(v).map_err(to_str)?),
+            None => None,
+        };
 
         tx.execute(
-            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json, fsrs_log)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 generate_id(),
                 item.question_id,
@@ -1210,7 +1264,8 @@ pub fn record_answer(
                 correct,
                 now_str,
                 item.elapsed_ms,
-                detail_opt
+                detail_opt,
+                fsrs_log_opt
             ],
         )
         .map_err(to_str)?;
@@ -1219,7 +1274,10 @@ pub fn record_answer(
         if correct == 0 {
             undismiss_wrong(&tx, &item.question_id)?;
         }
-        sm2_update(&tx, &item.question_id, &grade, now).map_err(to_str)?;
+        // FSRS：信任前端提交的卡片状态（无 card 时只写流水，不做任何调度推断）
+        if let Some(card) = &item.card {
+            fsrs_upsert(&tx, &item.question_id, card).map_err(to_str)?;
+        }
     }
 
     tx.commit().map_err(to_str)?;
@@ -1250,7 +1308,9 @@ fn review_due_impl(
          ORDER BY r.due_at ASC
          LIMIT ?2"
     );
-    query_questions(conn, &sql, params![cutoff, limit, bank_id])
+    let mut out = query_questions(conn, &sql, params![cutoff, limit, bank_id])?;
+    attach_fsrs_states(conn, &mut out)?;
+    Ok(out)
 }
 
 /// 错题本 CTE：每题算连续答对 streak（从最近一次往回数，遇到错即断）、累计错次数、最近错时间
@@ -1549,6 +1609,15 @@ fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value
             |r| r.get(0),
         )
         .map_err(to_str)?;
+    // 学习中：Learning/Relearning 态且已到期（当天短时巩固的卡，与长期复习区分展示）
+    let learning_due: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+             WHERE r.due_at <= ?1 AND r.state IN (1, 3) AND (?2 IS NULL OR q.bank_id = ?2)",
+            params![fmt_iso(end_today), bank_id],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
 
     let practiced_total: i64 = conn
         .query_row(
@@ -1613,6 +1682,7 @@ fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value
         "by_type": by_type,
         "due_total": due_total,
         "due_today": due_today,
+        "learning_due": learning_due,
         "practiced_total": practiced_total,
         "practiced_today": practiced_today,
         "correct_rate": correct_rate,
@@ -2245,90 +2315,129 @@ mod tests {
     }
 
     #[test]
-    fn sm2_again_resets_and_penalizes() {
-        let s = sm2_next(&ReviewSnapshot::default(), "again", t0());
-        assert_eq!(s.reps, 0);
-        assert_eq!(s.lapses, 1);
-        assert!((s.ease - 2.3).abs() < 1e-9);
-        assert!((s.interval_days - 0.0).abs() < 1e-9);
-        assert_eq!(s.due_at, fmt_iso(t0()));
-        // following a reset with good → back to interval 1, ease rises from 2.3
-        let s2 = sm2_next(&s, "good", t0());
-        assert_eq!(s2.reps, 1);
-        assert_eq!(s2.lapses, 1);
-        assert!((s2.ease - 2.4).abs() < 1e-9);
-        assert!((s2.interval_days - 1.0).abs() < 1e-9);
-        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(1)));
+    fn ddl_review_state_single_source() {
+        // REVIEW_STATE_DDL 与 MIGRATIONS 内建表语句逐字符一致（M4 重建复用同一份）
+        assert!(MIGRATIONS.contains(REVIEW_STATE_DDL));
     }
 
-    #[test]
-    fn sm2_hard_evolution() {
-        let s = sm2_next(&ReviewSnapshot::default(), "hard", t0());
-        assert_eq!(s.reps, 1);
-        assert_eq!(s.lapses, 0);
-        assert!((s.ease - 2.35).abs() < 1e-9);
-        assert!((s.interval_days - 1.0).abs() < 1e-9);
-        assert_eq!(s.due_at, fmt_iso(t0() + Duration::days(1)));
-        // second hard: interval = max(1, round(1*1.2)) = 1
-        let s2 = sm2_next(&s, "hard", t0() + Duration::days(1));
-        assert_eq!(s2.reps, 2);
-        assert!((s2.ease - 2.2).abs() < 1e-9);
-        assert!((s2.interval_days - 1.0).abs() < 1e-9);
-        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(2)));
-    }
-
-    #[test]
-    fn sm2_good_evolution() {
-        let s0 = ReviewSnapshot::default();
-        let s1 = sm2_next(&s0, "good", t0());
-        assert_eq!(s1.reps, 1);
-        assert!((s1.ease - 2.6).abs() < 1e-9);
-        assert!((s1.interval_days - 1.0).abs() < 1e-9);
-        assert_eq!(s1.due_at, fmt_iso(t0() + Duration::days(1)));
-
-        let s2 = sm2_next(&s1, "good", t0() + Duration::days(1));
-        assert_eq!(s2.reps, 2);
-        assert!((s2.ease - 2.7).abs() < 1e-9);
-        assert!((s2.interval_days - 6.0).abs() < 1e-9);
-        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(7)));
-
-        let s3 = sm2_next(&s2, "good", t0() + Duration::days(7));
-        assert_eq!(s3.reps, 3);
-        assert!((s3.ease - 2.8).abs() < 1e-9);
-        // round(6 * 2.8) = round(16.8) = 17
-        assert!((s3.interval_days - 17.0).abs() < 1e-9);
-        assert_eq!(s3.due_at, fmt_iso(t0() + Duration::days(24)));
-    }
-
-    #[test]
-    fn sm2_easy_evolution() {
-        let s0 = ReviewSnapshot::default();
-        let s1 = sm2_next(&s0, "easy", t0());
-        assert_eq!(s1.reps, 1);
-        assert!((s1.ease - 2.65).abs() < 1e-9);
-        assert!((s1.interval_days - 2.0).abs() < 1e-9);
-        assert_eq!(s1.due_at, fmt_iso(t0() + Duration::days(2)));
-
-        let s2 = sm2_next(&s1, "easy", t0() + Duration::days(2));
-        assert_eq!(s2.reps, 2);
-        assert!((s2.ease - 2.8).abs() < 1e-9);
-        assert!((s2.interval_days - 4.0).abs() < 1e-9);
-        assert_eq!(s2.due_at, fmt_iso(t0() + Duration::days(6)));
-    }
-
-    #[test]
-    fn sm2_ease_clamping() {
-        let mut s = ReviewSnapshot::default();
-        for _ in 0..10 {
-            s = sm2_next(&s, "again", t0());
+    fn sample_fsrs_card() -> FsrsCard {
+        FsrsCard {
+            stability: 2.5,
+            difficulty: 5.0,
+            reps: 1,
+            lapses: 0,
+            state: 2,
+            learning_steps: 0,
+            scheduled_days: 3.0,
+            due_at: "2026-09-13T12:00:00.000Z".to_string(),
+            last_reviewed_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+            last_result: Some("good".to_string()),
         }
-        assert!((s.ease - 1.3).abs() < 1e-9);
+    }
 
-        let mut s2 = ReviewSnapshot::default();
-        for _ in 0..10 {
-            s2 = sm2_next(&s2, "easy", t0());
+    #[test]
+    fn fsrs_card_validation_rejects_bad_input() {
+        assert!(validate_fsrs_card(&sample_fsrs_card()).is_ok());
+        let mut bad = sample_fsrs_card();
+        bad.state = 4;
+        assert!(validate_fsrs_card(&bad).is_err());
+        let mut bad = sample_fsrs_card();
+        bad.state = -1;
+        assert!(validate_fsrs_card(&bad).is_err());
+        let mut bad = sample_fsrs_card();
+        bad.stability = -0.5;
+        assert!(validate_fsrs_card(&bad).is_err());
+        let mut bad = sample_fsrs_card();
+        bad.stability = f64::NAN;
+        assert!(validate_fsrs_card(&bad).is_err());
+        let mut bad = sample_fsrs_card();
+        bad.reps = -1;
+        assert!(validate_fsrs_card(&bad).is_err());
+        let mut bad = sample_fsrs_card();
+        bad.due_at = "not-a-date".to_string();
+        assert!(validate_fsrs_card(&bad).is_err());
+        let mut bad = sample_fsrs_card();
+        bad.last_result = Some("bogus".to_string());
+        assert!(validate_fsrs_card(&bad).is_err());
+        // 可空字段缺省合法
+        let mut ok = sample_fsrs_card();
+        ok.last_reviewed_at = None;
+        ok.last_result = None;
+        assert!(validate_fsrs_card(&ok).is_ok());
+    }
+
+    #[test]
+    fn migration_m4_rebuilds_legacy_review_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // 旧库形态：review_state 含 ease/interval_days；practice_records 无 fsrs_log
+        conn.execute_batch(
+            "CREATE TABLE questions (
+                id TEXT PRIMARY KEY,
+                bank_id TEXT,
+                type TEXT NOT NULL DEFAULT 'single',
+                version INTEGER NOT NULL DEFAULT 2,
+                difficulty INTEGER NOT NULL DEFAULT 2,
+                score REAL,
+                status TEXT NOT NULL DEFAULT 'published',
+                stem_json TEXT NOT NULL DEFAULT '{}',
+                options_json TEXT,
+                answer_json TEXT,
+                analysis_json TEXT,
+                children_json TEXT,
+                plain_text TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE practice_records (
+                id TEXT PRIMARY KEY,
+                question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+                mode TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                correct INTEGER NOT NULL,
+                answered_at TEXT NOT NULL,
+                elapsed_ms INTEGER,
+                detail_json TEXT
+            );
+            CREATE TABLE review_state (
+                question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+                ease REAL NOT NULL DEFAULT 2.5,
+                interval_days REAL NOT NULL DEFAULT 0,
+                reps INTEGER NOT NULL DEFAULT 0,
+                lapses INTEGER NOT NULL DEFAULT 0,
+                due_at TEXT NOT NULL,
+                last_result TEXT,
+                last_reviewed_at TEXT
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO questions (id) VALUES ('q_old_1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO review_state (question_id, ease, due_at) VALUES ('q_old_1', 2.5, '2000-01-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        // 旧列消失、新列就位、旧进度行丢弃（删库重来）
+        assert!(!column_exists(&conn, "review_state", "ease").unwrap());
+        assert!(!column_exists(&conn, "review_state", "interval_days").unwrap());
+        for col in ["due_at", "stability", "difficulty", "reps", "lapses", "state", "learning_steps", "scheduled_days", "last_result", "last_reviewed_at"] {
+            assert!(column_exists(&conn, "review_state", col).unwrap(), "missing {col}");
         }
-        assert!((s2.ease - 3.0).abs() < 1e-9);
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM review_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+        assert!(column_exists(&conn, "practice_records", "fsrs_log").unwrap());
+
+        // 幂等：重跑不再 DROP（新表无旧列），且 banks 仍恰好一个
+        init_schema(&conn).unwrap();
+        let banks: i64 = conn.query_row("SELECT COUNT(*) FROM banks", [], |r| r.get(0)).unwrap();
+        assert_eq!(banks, 1);
     }
 
     #[test]
@@ -2517,31 +2626,43 @@ mod tests {
     }
 
     #[test]
-    fn db_sm2_persistence_and_cascade() {
+    fn db_fsrs_persistence_attach_and_cascade() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         conn.execute_batch(MIGRATIONS).unwrap();
 
         let q = sample_question();
         insert_question(&conn, &q).unwrap();
+        let mut q2 = sample_question();
+        q2["id"] = json!("q_test_2");
+        insert_question(&conn, &q2).unwrap();
 
-        let now = t0();
-        sm2_update(&conn, "q_test_1", "good", now).unwrap();
-        sm2_update(&conn, "q_test_1", "good", now + Duration::days(1)).unwrap();
-        let (ease, interval, reps, lapses, due_at): (f64, f64, i64, i64, String) = conn
+        // fsrs_upsert：新建 + 覆盖更新
+        let mut card = sample_fsrs_card();
+        card.due_at = "2026-09-17T12:00:00.000Z".to_string();
+        fsrs_upsert(&conn, "q_test_1", &card).unwrap();
+        card.stability = 5.5;
+        card.state = 1;
+        fsrs_upsert(&conn, "q_test_1", &card).unwrap();
+        let (stability, difficulty, reps, lapses, state, due_at): (f64, f64, i64, i64, i64, String) = conn
             .query_row(
-                "SELECT ease, interval_days, reps, lapses, due_at FROM review_state WHERE question_id = 'q_test_1'",
+                "SELECT stability, difficulty, reps, lapses, state, due_at FROM review_state WHERE question_id = 'q_test_1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )
             .unwrap();
-        assert_eq!(reps, 2);
-        assert_eq!(lapses, 0);
-        assert!((ease - 2.7).abs() < 1e-9);
-        assert!((interval - 6.0).abs() < 1e-9);
+        assert!((stability - 5.5).abs() < 1e-9);
+        assert!((difficulty - 5.0).abs() < 1e-9);
+        assert_eq!((reps, lapses, state), (1, 0, 1));
         assert_eq!(due_at, "2026-09-17T12:00:00.000Z");
+        // 非法卡片拒绝写入
+        let mut bad = sample_fsrs_card();
+        bad.state = 9;
+        assert!(fsrs_upsert(&conn, "q_test_2", &bad).is_err());
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM review_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
 
-        // review_due SQL template: not due at review time, due later
+        // review_due_sql 模板口径不变：不到期拉不出，到期拉得出
         let due_sql = format!(
             "SELECT {SELECT_FIELDS_Q} FROM questions q JOIN review_state r ON r.question_id = q.id WHERE r.due_at <= ?1 ORDER BY r.due_at ASC LIMIT ?2"
         );
@@ -2550,12 +2671,31 @@ mod tests {
         let due = query_questions(&conn, &due_sql, params!["2026-09-20T00:00:00.000Z", 20i64]).unwrap();
         assert_eq!(due.len(), 1);
 
-        // records_7d group SQL
+        // attach：有行挂 fsrs 对象，无行挂 null
+        let mut pool = practice_pool_impl(&conn, Some(20), None, None, None).unwrap();
+        assert_eq!(pool.len(), 2);
+        let with_fsrs = pool.iter().find(|x| x["id"] == "q_test_1").unwrap();
+        assert_eq!(with_fsrs["fsrs"]["state"], 1);
+        assert!((with_fsrs["fsrs"]["stability"].as_f64().unwrap() - 5.5).abs() < 1e-9);
+        let without = pool.iter().find(|x| x["id"] == "q_test_2").unwrap();
+        assert!(without["fsrs"].is_null());
+        let due_list = review_due_impl(&conn, Some(50), None).unwrap();
+        assert_eq!(due_list.len(), 1);
+        assert_eq!(due_list[0]["fsrs"]["due_at"], "2026-09-17T12:00:00.000Z");
+
+        // fsrs_log 列可写可读
+        let log_in = serde_json::to_string(&json!({"rating": 3})).unwrap();
         conn.execute(
-            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at) VALUES ('rec_rs_1', 'q_test_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z')",
-            [],
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, fsrs_log) VALUES ('rec_fs_1', 'q_test_1', 'review', 'good', 1, '2026-09-10T12:00:00.000Z', ?1)",
+            params![log_in],
         )
         .unwrap();
+        let log: String = conn
+            .query_row("SELECT fsrs_log FROM practice_records WHERE id = 'rec_fs_1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&log).unwrap(), json!({"rating": 3}));
+
+        // records_7d group SQL（口径回归）
         let mut stmt = conn
             .prepare(
                 "SELECT substr(answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(correct), 0) FROM practice_records WHERE answered_at >= ?1 GROUP BY d ORDER BY d",
@@ -2971,6 +3111,11 @@ mod tests {
         let stats = review_stats_impl(&conn, None).unwrap();
         assert_eq!(stats["due_total"], 1);
         assert_eq!(stats["due_today"], 2);
+        // learning_due：Learning/Relearning 态且已到期才计入（此处两行均为默认 state=0）
+        assert_eq!(stats["learning_due"], 0);
+        conn.execute("UPDATE review_state SET state = 1 WHERE question_id = 'q_due_overdue'", []).unwrap();
+        let stats2 = review_stats_impl(&conn, None).unwrap();
+        assert_eq!(stats2["learning_due"], 1);
     }
 
     #[test]

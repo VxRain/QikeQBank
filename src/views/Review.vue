@@ -6,11 +6,11 @@
     <section v-if="phase === 'due'" class="card max-w-[640px]">
       <div class="card-head">
         <h2 class="section-title flex items-center gap-2"><i class="i-lucide-repeat text-primary" />间隔复习</h2>
-        <span class="badge badge-type">SM-2</span>
+        <span class="badge badge-type">FSRS</span>
       </div>
       <p class="text-text-secondary text-[14px] leading-[1.8] m-0 mb-4.5">
-        {{ bankName ? `「${bankName}」` : '全部题库' }}当前待复习 <b class="text-primary text-[18px]">{{ dueTotal }}</b> 题，今日到期 <b class="text-primary text-[18px]">{{ dueToday }}</b> 题。
-        按遗忘曲线安排，每次最多复习 20 题。
+        {{ bankName ? `「${bankName}」` : '全部题库' }}当前待复习 <b class="text-primary text-[18px]">{{ dueTotal }}</b> 题，今日到期 <b class="text-primary text-[18px]">{{ dueToday }}</b> 题<span v-if="learningDue > 0">（其中学习中 <b class="text-primary text-[18px]">{{ learningDue }}</b> 题）</span>。
+        按记忆状态安排。
       </p>
 
       <div class="mb-4.5">
@@ -19,6 +19,33 @@
           <option value="">全部题库</option>
           <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
+      </div>
+
+      <div class="mb-4.5">
+        <div class="field-label">题量</div>
+        <div class="inline-flex items-stretch border border-line rounded-[8px] overflow-hidden shadow-sm bg-card transition-colors focus-within:border-primary">
+          <input
+            v-model="countText"
+            class="w-[64px] px-2 py-2 text-[14px] text-center text-text bg-transparent outline-none border-0"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            title="每次复习题数（1～500）"
+            @change="commitCount"
+            @blur="commitCount"
+            @keyup.enter="commitCount"
+            @keyup.esc="countText = String(lastCount)"
+          />
+          <span class="w-px bg-line my-1" aria-hidden="true" />
+          <button
+            type="button"
+            class="px-4 text-[14px] font-500 cursor-pointer transition-colors text-text-secondary hover:bg-bg-accent"
+            title="填入今日到期题数"
+            @click="fillAll"
+          >
+            全部
+          </button>
+        </div>
       </div>
 
       <div>
@@ -44,8 +71,11 @@
     <!-- 作答卡片 -->
     <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card flex flex-col gap-3.5" @keydown="onCardKeydown">
       <div class="flex items-center justify-between gap-3">
-        <span class="badge badge-type">{{ curBadge }}</span>
-        <span class="text-[13px] text-muted font-500">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="badge badge-type">{{ curBadge }}</span>
+          <span v-if="curFsrsState === 1 || curFsrsState === 3" class="badge shrink-0"><i class="i-lucide-book-open" />学习中</span>
+        </div>
+        <span class="text-[13px] text-muted font-500 shrink-0">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
@@ -201,7 +231,9 @@ import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
+import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { settings } from '@/stores/settings.js'
 import { ui } from '@/stores/ui.js'
 
 const TYPE_LABELS = {
@@ -210,12 +242,32 @@ const TYPE_LABELS = {
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref('')
+// 题量：输入框（默认 20，钳制 1–500）；“全部”按钮把今日到期数回填进输入框
+const countText = ref('20')
+const lastCount = ref(20)
+function fillAll() {
+  const n = Math.min(Math.max(dueToday.value || 0, 1), 500)
+  lastCount.value = n
+  countText.value = String(n)
+}
+function commitCount() {
+  const v = Number(String(countText.value).trim())
+  if (Number.isFinite(v) && Number.isInteger(v) && v >= 1 && v <= 500) {
+    lastCount.value = v
+    countText.value = String(v)
+  } else {
+    countText.value = String(lastCount.value)
+    error.value = '题量请输入 1～500 的整数'
+  }
+}
+const reviewLimit = computed(() => lastCount.value)
 const bankName = computed(() => bankStore.banks.find((b) => b.id === bankId.value)?.name || '')
 const error = ref('')
 const recordError = ref('')
 const dueLoading = ref(false)
 const dueTotal = ref(0)
 const dueToday = ref(0)
+const learningDue = ref(0)
 const remainingDue = ref(null)
 
 const pool = ref([])
@@ -256,6 +308,14 @@ const gradesCount = reactive({ again: 0, hard: 0, good: 0, easy: 0 })
 const isChoice = computed(() => cur.value && ['single', 'judge'].includes(cur.value.q.type))
 const isShort = computed(() => cur.value && cur.value.q.type === 'short')
 const canSelfGrade = computed(() => !!cur.value && (graded.value || (isShort.value && showRef.value)))
+
+// 当前题 FSRS 状态（子题看父题行；用于“学习中”徽标）
+const curFsrsRow = computed(() => {
+  const it = cur.value
+  if (!it) return null
+  return it.parent ? it.parent.fsrs : it.q.fsrs
+})
+const curFsrsState = computed(() => curFsrsRow.value?.state ?? null)
 
 const curBadge = computed(() => {
   const it = cur.value
@@ -427,6 +487,7 @@ async function refreshDue() {
     const s = await fetchStats(bankId.value || undefined)
     dueTotal.value = s?.due_total ?? 0
     dueToday.value = s?.due_today ?? 0
+    learningDue.value = s?.learning_due ?? 0
     remainingDue.value = dueTotal.value
   } catch (e) {
     console.error(e)
@@ -440,7 +501,8 @@ async function start() {
   dueLoading.value = true
   phase.value = 'loading'
   try {
-    const questions = await reviewDue({ limit: 20, bankId: bankId.value })
+    // 全部 = 后端上限 500（一轮拉完到期题；真超 500 的极端情况分多轮消化）
+    const questions = await reviewDue({ limit: reviewLimit.value, bankId: bankId.value })
     pool.value = buildItems(await expandQuestions(questions))
     if (!pool.value.length) {
       phase.value = 'due'
@@ -535,12 +597,28 @@ function reviewGrade(g) {
   reviewedCount.value++
   roundMs.value += elapsed
   const autoCorrect = gradeResult.value?.correct ?? null
+  // FSRS：四键 1:1 映射 Rating，前端算卡，后端可信写入
+  let card = null
+  let fsrsLog = null
+  try {
+    const fsrsRow = it.parent ? it.parent.fsrs : it.q.fsrs
+    const res = fsrsAnswer(cardFromRow(fsrsRow), g, settings.fsrs)
+    card = toRow(res.card, g)
+    fsrsLog = toLog(res.log)
+  } catch (e) {
+    console.error('fsrs answer failed', e)
+    recordError.value = '调度计算失败：' + (e?.message || e)
+    submitting.value = false
+    return
+  }
   recordAnswer([{
     question_id: it.isChild ? it.parent.id : it.q.id,
     mode: 'review',
     grade: g,
     elapsed_ms: elapsed,
-    detail: buildDetail(it, g, autoCorrect, elapsed)
+    detail: buildDetail(it, g, autoCorrect, elapsed),
+    card,
+    fsrs_log: fsrsLog
   }]).then(() => next()).catch((e) => {
     console.error('record_answer failed', e)
     recordError.value = (e?.message || e)

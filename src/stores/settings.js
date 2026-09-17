@@ -24,6 +24,36 @@ function normalizeDelay(v) {
   return Math.min(5000, Math.max(300, Math.round(n)))
 }
 
+// ── FSRS 间隔复习参数归一化 ──
+export const FSRS_LIMITS = {
+  retention: { min: 0.75, max: 0.95, def: 0.9 },
+  maxInterval: { min: 30, max: 36500, def: 36500 },
+  stepsMax: 6,
+}
+const STEP_RE = /^(\d+)([mhd])$/
+// 目标记忆保持率：钳制 0.75–0.95，非法回退 0.9
+export function normalizeRetention(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return FSRS_LIMITS.retention.def
+  return Math.min(FSRS_LIMITS.retention.max, Math.max(FSRS_LIMITS.retention.min, n))
+}
+// 最大间隔（天）：整数，钳制 30–36500，非法回退 36500
+export function normalizeMaxInterval(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return FSRS_LIMITS.maxInterval.def
+  return Math.min(FSRS_LIMITS.maxInterval.max, Math.max(FSRS_LIMITS.maxInterval.min, Math.round(n)))
+}
+// 学习/重学步长：数组或逗号文本，每项必须符合 数字+m/h/d，最多 6 步，全非法回退默认
+export function normalizeSteps(v, fallback) {
+  const list = Array.isArray(v) ? v : String(v ?? '').split(',')
+  const out = list.map((s) => String(s).trim()).filter((s) => STEP_RE.test(s)).slice(0, FSRS_LIMITS.stepsMax)
+  return out.length ? out : [...fallback]
+}
+// 练习入库范围：仅接受 'wrong-only'，其余一律 'all'
+export function normalizePracticeScope(v) {
+  return v === 'wrong-only' ? 'wrong-only' : 'all'
+}
+
 const saved = load()
 
 export const settings = reactive({
@@ -37,6 +67,15 @@ export const settings = reactive({
   rememberBankFilter: saved.rememberBankFilter ?? false,
   // 错题本：连续答对多少次后自动移出，默认 1
   wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
+  // FSRS 间隔复习（缺键老设置自动走默认；数组缺省由 normalizeSteps 兜底）
+  fsrs: {
+    requestRetention: normalizeRetention(saved.fsrs?.requestRetention),
+    maximumInterval: normalizeMaxInterval(saved.fsrs?.maximumInterval),
+    learningSteps: normalizeSteps(saved.fsrs?.learningSteps, ['1m', '10m']),
+    relearningSteps: normalizeSteps(saved.fsrs?.relearningSteps, ['10m']),
+    enableFuzz: saved.fsrs?.enableFuzz ?? false,
+    practiceScope: normalizePracticeScope(saved.fsrs?.practiceScope),
+  },
 })
 
 watch(

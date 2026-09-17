@@ -72,10 +72,11 @@
     <Teleport to="body">
       <Transition name="dg">
         <div v-if="showSettings" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="showSettings = false">
-          <div class="dg-card w-[min(440px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" aria-label="设置">
-            <h3 class="m-0 mb-4 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2">
+          <div class="dg-card w-[min(440px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" aria-label="设置">
+            <h3 class="m-0 mb-4 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2 shrink-0">
               <i class="i-lucide-settings-2 text-primary" />设置
             </h3>
+            <div class="overflow-y-auto min-h-0 pr-0.5">
             <div class="flex flex-col gap-2.5">
             <button
               type="button"
@@ -175,6 +176,53 @@
                 <span class="text-[12px] text-muted">次</span>
               </span>
             </div>
+            <div class="border border-line rounded-[10px] bg-card p-3.5 flex flex-col gap-3">
+              <span class="min-w-0">
+                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text"><i class="i-lucide-repeat text-primary" />间隔复习<InfoTip text="复习算法 FSRS：按记忆状态安排下次到期时间，修改立即对新作答生效；历史作答不受影响" /></span>
+              </span>
+              <div class="flex items-center justify-between gap-3">
+                <span class="inline-flex items-center gap-1 text-[13px] text-muted">目标记忆保持率<InfoTip text="到期时还记得的概率目标：设得越高复习越频繁、记得越牢，但每天要复习的题也越多；0.90 是兼顾效率与效果的常用值" /></span>
+                <select :value="settings.fsrs.requestRetention" class="select px-2 py-1.5 text-[13px]" @change="commitRetention">
+                  <option :value="0.75">0.75 · 宽松</option>
+                  <option :value="0.80">0.80</option>
+                  <option :value="0.85">0.85</option>
+                  <option :value="0.90">0.90 · 标准</option>
+                  <option :value="0.95">0.95 · 严格</option>
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="inline-flex items-center gap-1 text-[13px] text-muted">学习步长<InfoTip text="新卡答对后当天内重复的间隔，如 1m,10m 表示 1 分钟、10 分钟后各回来一次，毕业后进入长期复习" /></span>
+                <span class="flex items-center gap-1.5 shrink-0">
+                  <input v-model="learnStepsText" class="input w-[110px] px-2 py-1.5 text-[13px] text-center" type="text" autocomplete="off" placeholder="1m,10m" @change="commitLearnSteps" @blur="commitLearnSteps" @keyup.enter="commitLearnSteps" @keyup.esc="learnStepsText = settings.fsrs.learningSteps.join(',')" />
+                </span>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="inline-flex items-center gap-1 text-[13px] text-muted">重学步长<InfoTip text="答错后当天内重复的间隔，如 10m 表示 10 分钟后回来" /></span>
+                <span class="flex items-center gap-1.5 shrink-0">
+                  <input v-model="relearnStepsText" class="input w-[110px] px-2 py-1.5 text-[13px] text-center" type="text" autocomplete="off" placeholder="10m" @change="commitRelearnSteps" @blur="commitRelearnSteps" @keyup.enter="commitRelearnSteps" @keyup.esc="relearnStepsText = settings.fsrs.relearningSteps.join(',')" />
+                </span>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="inline-flex items-center gap-1 text-[13px] text-muted">最大间隔<InfoTip text="单张卡两次复习之间最长隔多少天：到期再久也只隔这么久就回来，防长期不碰的卡彻底遗忘；默认 100 年即不限" /></span>
+                <span class="flex items-center gap-1.5 shrink-0">
+                  <input v-model="maxIntervalText" class="input w-[76px] px-2 py-1.5 text-[13px] text-center" type="text" inputmode="numeric" autocomplete="off" @change="commitMaxInterval" @blur="commitMaxInterval" @keyup.enter="commitMaxInterval" @keyup.esc="maxIntervalText = String(settings.fsrs.maximumInterval)" />
+                  <span class="text-[12px] text-muted">天</span>
+                </span>
+              </div>
+              <button type="button" role="switch" :aria-checked="settings.fsrs.enableFuzz" class="w-full flex items-center justify-between gap-3 cursor-pointer text-left bg-transparent border-0 p-0" @click="settings.fsrs.enableFuzz = !settings.fsrs.enableFuzz">
+                <span class="inline-flex items-center gap-1 text-[13px] text-muted">随机间隔抖动<InfoTip text="开启后到期时间加一点随机偏移，避免同批题总在同一天到期" /></span>
+                <span class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative" :class="settings.fsrs.enableFuzz ? 'bg-primary' : 'bg-[var(--line-strong)]'">
+                  <span class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150" :class="settings.fsrs.enableFuzz ? 'left-[22px]' : 'left-[3px]'" />
+                </span>
+              </button>
+              <div class="flex items-center justify-between gap-3">
+                <span class="inline-flex items-center gap-1 text-[13px] text-muted">练习入库范围<InfoTip text="全部试题：练习答对也进入复习（当天短时巩固后毕业）；仅错题：答对的只记流水不进复习，只有答错的才进" /></span>
+                <span class="inline-flex items-center border border-line rounded-[8px] overflow-hidden shrink-0">
+                  <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="settings.fsrs.practiceScope === 'all' ? '!bg-primary-bg !text-primary' : ''" title="全部试题进入复习" @click="settings.fsrs.practiceScope = 'all'">全部</button>
+                  <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="settings.fsrs.practiceScope === 'wrong-only' ? '!bg-primary-bg !text-primary' : ''" title="仅答错的进入复习" @click="settings.fsrs.practiceScope = 'wrong-only'">仅错题</button>
+                </span>
+              </div>
+            </div>
             </div>
             <div class="border-t border-line mt-1 pt-3.5">
               <div class="flex items-center gap-1.5 text-[14px] font-600 text-text mb-2">
@@ -202,7 +250,8 @@
                 <button type="button" class="self-start text-[12px] text-muted-light hover:text-primary underline underline-offset-2" @click="openReleases">前往下载页查看所有版本</button>
               </div>
             </div>
-            <div class="flex justify-end gap-2.5 mt-4">
+            </div>
+            <div class="flex justify-end gap-2.5 mt-4 shrink-0">
               <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
             </div>
           </div>
@@ -218,11 +267,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { loadBanks, bankStore, clearBankFilters } from '@/stores/bank.js'
-import { settings } from '@/stores/settings.js'
+import { settings, normalizeRetention, normalizeMaxInterval, normalizeSteps } from '@/stores/settings.js'
 import { toast } from '@/stores/ui.js'
 import { cmd } from '@/api/bridge.js'
 import { list as listQuestions } from '@/api/questions.js'
-import { openDataDir as openDataDirApi } from '@/api/practice.js'
+import { openDataDir as openDataDirApi, stats as fetchStats } from '@/api/practice.js'
 import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
@@ -454,7 +503,51 @@ const navItems = [
   { to: '/review', label: '复习', icon: 'i-lucide-repeat' }
 ]
 
-onMounted(loadBanks)
+// FSRS 文本输入框：本地持有，change/blur/回车时归一化落盘（非法回滚 + toast）
+const learnStepsText = ref(settings.fsrs.learningSteps.join(','))
+watch(() => settings.fsrs.learningSteps, (v) => { learnStepsText.value = v.join(',') })
+function commitLearnSteps() {
+  const v = normalizeSteps(learnStepsText.value, ['1m', '10m'])
+  settings.fsrs.learningSteps = v
+  learnStepsText.value = v.join(',')
+}
+const relearnStepsText = ref(settings.fsrs.relearningSteps.join(','))
+watch(() => settings.fsrs.relearningSteps, (v) => { relearnStepsText.value = v.join(',') })
+function commitRelearnSteps() {
+  const v = normalizeSteps(relearnStepsText.value, ['10m'])
+  settings.fsrs.relearningSteps = v
+  relearnStepsText.value = v.join(',')
+}
+const maxIntervalText = ref(String(settings.fsrs.maximumInterval))
+watch(() => settings.fsrs.maximumInterval, (v) => { maxIntervalText.value = String(v) })
+function commitMaxInterval() {
+  const raw = maxIntervalText.value.trim()
+  const v = Number(raw)
+  if (Number.isFinite(v) && Number.isInteger(v) && v >= 30 && v <= 36500) {
+    settings.fsrs.maximumInterval = v
+    maxIntervalText.value = String(v)
+  } else {
+    maxIntervalText.value = String(settings.fsrs.maximumInterval)
+    toast('最大间隔请输入 30～36500 的整数（天）', 'error')
+  }
+}
+function commitRetention(e) {
+  settings.fsrs.requestRetention = normalizeRetention(e.target.value)
+}
+
+// FSRS 升级一次性提示：有历史作答记录的老用户才提示，全新安装静默
+const FSRS_MIGRATED_KEY = 'qbank.fsrsMigrated.v1'
+function maybeNotifyFsrsUpgrade() {
+  try {
+    if (localStorage.getItem(FSRS_MIGRATED_KEY)) return
+    localStorage.setItem(FSRS_MIGRATED_KEY, '1')
+    fetchStats().then((s) => {
+      if (s && (s.practiced_total ?? 0) > 0) toast('复习算法已升级为 FSRS，历史复习进度已重置', 'info')
+    }).catch(() => {})
+  } catch { /* 忽略持久化失败 */ }
+}
+
+onMounted(() => { loadBanks(); maybeNotifyFsrsUpgrade() })
 </script>
 
 <style>
