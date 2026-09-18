@@ -221,13 +221,16 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 | `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
-| `open_data_dir` | — | 打开数据根目录（app_data_dir 或便携 data/，后端直调 opener），返回 `{"path"}`；手动备份入口 |
+| `open_data_dir` | — | 打开数据根目录（app_data_dir 或便携 data/，后端直调 opener），返回 `{"path"}`；供查看 / 应急取数，**不是数据保全手段**（见下） |
 | `assets_put` | `data_b64: String, mime: String, width?: i64, height?: i64` | 图片入库：base64 解码（≤20MB）→ sha256 → `data/assets/<2hex>/<rest>.<ext>`（内容寻址，同名跳写）→ 登记表 UPSERT；mime 仅 webp/png/jpeg/gif（拒 svg）；返回 `{"sha","path"}` |
 | `assets_resolve` | `shas: string[]`（≤200） | 批量查登记表 → `{"items":[{"sha","path"\|null}]}`（文件缺失也给 null，前端缓存） |
 | `assets_gc` | — | 全库题面 JSON 扫 `asset:<sha>` 引用，清无引用文件+登记行（顺手收空分片目录）；返回 `{"removed","freed_bytes","total","scanned","dangling":[{"question_id","sha"}]}`（悬空=题在但文件/登记缺失，只上报不删） |
 | `is_portable_mode` | — | 返回 `{"portable":bool}`（data/ 或 portable.ini 存在即 true）；前端徽章/更新门控用，不经 DB 锁 |
 
 **导入导出（v3）**
+
+> **数据保全（未定）**：`export_dbjson` / `import_dbjson` 只是**权宜之计**——定位是题库内容交换、跨机一次性搬运与应急取数，**不是主推的备份 / 恢复方案**。正式数据保全方案（自动备份；版本化快照；或先落同步服务端——目前 `sync_*` 只有地基：墓碑 + 双时钟 + 合并核，无可用服务端）**尚未定案**，见 §9。
+> 定案前：文档与 UI 均**不得**把「导出 JSON」表述为备份手段，也不得新增带「备份」措辞的入口。
 
 | command | 参数 | 变更 |
 |---|---|---|
@@ -371,15 +374,22 @@ export function persistBankFilter(page, id)
 ### Home.vue（W3c）
 - 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。
 - 题库管理已独立为 `/banks` 路由（Banks.vue，导航「题库」），Home 不再内嵌管理卡，统计卡片只做跳转。
-- 其余卡片不动；导出数据继续调 `exportData()`。
+- 其余卡片不动。`src/api/practice.js` 的 `exportData()` / `importData()` 是保留的 API 包装（**当前 UI 无任何入口**）；数据保全定案前不要新增「备份」措辞入口，见 §4 数据保全（未定）。
 - streak 徽章：`recordsOverview` 的 days 算连续学习天数（今天未学从昨天起算，≥2 天显示火焰徽章；后端 UTC 日期口径，零点附近可差 1 天）。
 
 ## 8. 验证标准
 
-- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export v3 形状。
+- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export 形状（当前 v4，含 settings/delete_log）。
 - **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；`tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults；`tests/unit/parseDocx.test.js`：docx 章节题号解析回归）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
 - **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、debug EXE 启动建库冒烟、git commit。
 
 **升级条件**（同 v1）：失败 ≥2 次或计划假设失真 → 停止如实汇报，禁止臆造。
+
+## 9. 待定事项（Open——勿在文档 / UI 中当作已定能力宣传）
+
+| 事项 | 现状（代码事实） | 卡点 / 需要决策的内容 |
+|---|---|---|
+| **数据保全**（备份 / 恢复） | 仅 `export_dbjson`（权宜手段，UI 无入口）+ `open_data_dir`（手工看目录）；无自动备份、无快照、无服务端 | 方案未定：自动备份（频率 / 保留份数 / 落盘位置 / 便携模式差异）与同步服务端落地（形态、账号、冲突可视化）谁先谁后；便携模式（数据落包内）与安装模式的策略是否分离 |
+| **模考（exam）** | `practice_records.mode` CHECK 已放行 `'exam'`（`schema.rs:53`、`practice.rs:232`、`sync.rs:813` 均兼容），题面已有 `score` 分值字段；但 UI 无入口、**全库无一处把分值聚合成总分** | 未立项；组卷形态（即时规则组卷 vs 持久化「试卷」实体）、判分口径（多选漏选 / 部分给分）、是否进 FSRS 复习、成绩单与场次历史是否入库同步——实现方案待规划后写入本文件 |
