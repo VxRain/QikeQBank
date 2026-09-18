@@ -6,7 +6,7 @@
 //! - 墓碑是带时间戳的变更，参与 LWW（deleted_at >= updated_at 删除赢，否则编辑赢并物理淘汰墓碑）；
 //! - 两阶段 apply：Phase A 纯内存预裁决（存活集/零库守卫/地平线守卫），Phase B 单事务落库；
 //! - synced_at 中心写入重写、叶子 apply 保留（签名即防呆）。
-use super::practice::{record_content_eq, validate_fsrs_card, FsrsCard};
+use super::practice::{record_content_eq, validate_fsrs_card, IncomingRecordRow, StoredRecordRow, FsrsCard};
 use super::questions::{extract_fields, parse_json_opt};
 use super::schema::DEFAULT_BANK_ID;
 use super::{clamp_business_time, db_meta_value, fmt_iso, generate_id, now_iso, ok, to_str, AppState};
@@ -40,9 +40,8 @@ pub(crate) fn question_alive(conn: &Connection, qid: &str) -> Result<bool, Strin
     .map(|o| o.unwrap_or(false))
 }
 
-/// Deletes a bank and cascades to its questions (→ practice_records +
-/// review_state via the questions FK). Writes one tombstone per question plus
-/// one bank tombstone in the same transaction, then deletes.
+/// 墓碑地平线（PLAN §8.2，公式锁定）：建库不足 90 天返回 None（从未 GC，
+/// 无需重拉），否则返回 now - 90d。禁止用 MIN(synced_at)（随数据分布漂移）。
 pub(crate) fn tombstone_floor(conn: &Connection) -> Result<Option<String>, String> {
     let created = db_meta_value(conn, "created_at")?;
     match created {
@@ -600,12 +599,11 @@ pub fn apply_bundle(
             // 恢复：该库行若本地存在则回存活集
             if let Some(u) = local_banks.get(&bid) {
                 surv_banks.insert(bid.clone(), u.clone());
-            } else if let Some(b) = in_banks.get(&bid) {
-                if let Ok(u) = norm_incoming_time(b, "updated_at") {
+            } else if let Some(b) = in_banks.get(&bid)
+                && let Ok(u) = norm_incoming_time(b, "updated_at") {
                     surv_banks.insert(bid.clone(), u.clone());
                     write_banks.insert(bid.clone(), b.clone());
                 }
-            }
         }
         // 与被跳过 bank 墓碑同 bank_id 的 question 墓碑一并跳过：
         // 这些题回到存活集（行以本地/传入胜出版本为准，已在 surv_questions 中；
@@ -621,7 +619,7 @@ pub fn apply_bundle(
             let keep_dead = live_tombs
                 .get(&("question".to_string(), qid.clone()))
                 .and_then(|t| t.bank_id.clone())
-                .map_or(true, |b| !skipped_banks.contains(&b));
+                .is_none_or(|b| !skipped_banks.contains(&b));
             if !keep_dead {
                 // 与被跳过 bank 同级联的 question 墓碑一并跳过：记 conflict 可观测；
                 // 注意不得碰 drop_tomb——编辑赢的墓碑淘汰是独立裁决，跳过执行≠复活墓碑。
@@ -829,14 +827,13 @@ pub fn apply_bundle(
         let flog = r.get("fsrs_log").and_then(Value::as_str).map(|s| s.to_string());
         let synced = sync_stamp(bv_str(&r, "synced_at"));
         // 同 ID 现有行比对
-        let existing: Option<(String, String, String, i64, String, Option<i64>, Option<String>, Option<String>)> = tx.query_row(
+        let existing: Option<StoredRecordRow> = tx.query_row(
             "SELECT question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json, fsrs_log FROM practice_records WHERE id = ?1",
             params![rid],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
         ).optional().map_err(to_str)?;
         if let Some(stored) = existing {
-            if !record_content_eq(
-                &stored,
+            let incoming: IncomingRecordRow<'_> = (
                 &qid,
                 &mode,
                 &grade,
@@ -845,7 +842,8 @@ pub fn apply_bundle(
                 elapsed,
                 detail.as_deref(),
                 flog.as_deref(),
-            ) {
+            );
+            if !record_content_eq(&stored, &incoming) {
                 conflicts.push(conflict_entry("record", &rid, json!({"stored": "kept"}), json!({"bundle": "dropped"}), "same-id-different-content"));
             }
             continue;

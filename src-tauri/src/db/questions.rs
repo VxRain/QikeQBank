@@ -15,7 +15,7 @@ pub(crate) fn plain_text_of_doc(doc: &Value) -> String {
     if !doc.is_object() {
         return String::new();
     }
-    let has_content = doc.get("content").map_or(false, Value::is_array);
+    let has_content = doc.get("content").is_some_and(Value::is_array);
     if !has_content {
         return String::new();
     }
@@ -106,39 +106,32 @@ pub(crate) fn aggregated_plain_text(q: &Value) -> String {
                 parts.push(plain_text_of_doc(o.get("content").unwrap_or(&Value::Null)));
             }
         }
-        if let Some(answer) = c.get("answer") {
-            if let Some(reference) = answer.get("reference") {
-                if !reference.is_null() {
+        if let Some(answer) = c.get("answer")
+            && let Some(reference) = answer.get("reference")
+                && !reference.is_null() {
                     parts.push(plain_text_of_doc(reference));
                 }
-            }
-        }
-        if let Some(analysis) = c.get("analysis") {
-            if !analysis.is_null() {
+        if let Some(analysis) = c.get("analysis")
+            && !analysis.is_null() {
                 parts.push(plain_text_of_doc(analysis));
             }
-        }
     }
 
-    if children.is_empty() {
-        if let Some(opts) = q.get("options").and_then(Value::as_array) {
+    if children.is_empty()
+        && let Some(opts) = q.get("options").and_then(Value::as_array) {
             for o in opts {
                 parts.push(plain_text_of_doc(o.get("content").unwrap_or(&Value::Null)));
             }
         }
-    }
-    if let Some(answer) = q.get("answer") {
-        if let Some(reference) = answer.get("reference") {
-            if !reference.is_null() {
+    if let Some(answer) = q.get("answer")
+        && let Some(reference) = answer.get("reference")
+            && !reference.is_null() {
                 parts.push(plain_text_of_doc(reference));
             }
-        }
-    }
-    if let Some(analysis) = q.get("analysis") {
-        if !analysis.is_null() {
+    if let Some(analysis) = q.get("analysis")
+        && !analysis.is_null() {
             parts.push(plain_text_of_doc(analysis));
         }
-    }
 
     collapse_whitespace(&parts.join(" ")).trim().to_string()
 }
@@ -194,8 +187,8 @@ pub(crate) fn row_to_question_summary(row: &rusqlite::Row) -> rusqlite::Result<V
     let children_raw: Option<String> = row.get("children_json")?;
     let mut children_count: i64 = 0;
     let mut children_score: Value = Value::Null;
-    if let Some(s) = children_raw.as_deref() {
-        if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(s) {
+    if let Some(s) = children_raw.as_deref()
+        && let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(s) {
             children_count = arr.len() as i64;
             let sum: f64 = arr
                 .iter()
@@ -203,7 +196,6 @@ pub(crate) fn row_to_question_summary(row: &rusqlite::Row) -> rusqlite::Result<V
                 .sum();
             children_score = json!(sum);
         }
-    }
     Ok(json!({
         "id": row.get::<_, String>("id")?,
         "bank_id": row.get::<_, Option<String>>("bank_id")?,
@@ -506,24 +498,24 @@ pub(crate) fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<V
     q["id"] = json!(id.clone());
     if q.get("created_at")
         .and_then(Value::as_str)
-        .map_or(true, |s| s.is_empty())
+        .is_none_or(|s| s.is_empty())
     {
         q["created_at"] = json!(now.clone());
     }
     if q.get("updated_at")
         .and_then(Value::as_str)
-        .map_or(true, |s| s.is_empty())
+        .is_none_or(|s| s.is_empty())
     {
         q["updated_at"] = json!(now);
     }
     if q.get("version").and_then(Value::as_i64).is_none() {
         q["version"] = json!(2);
     }
-    if q.get("status").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+    if q.get("status").and_then(Value::as_str).is_none_or(|s| s.is_empty()) {
         q["status"] = json!("published");
     }
     // 缺 bank_id → 默认库（bank_default 存在则用之，否则首个 bank）
-    if q.get("bank_id").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+    if q.get("bank_id").and_then(Value::as_str).is_none_or(|s| s.is_empty()) {
         let bid = resolve_default_bank(conn)?;
         q["bank_id"] = json!(bid);
     }
@@ -566,9 +558,9 @@ pub(crate) fn questions_update_impl(conn: &Connection, id: &str, data: Value) ->
     let old = fetch_question(conn, id)?;
 
     let mut merged = data;
-    if let Some(old) = old {
-        if let Some(om) = old.as_object() {
-            if let Some(mm) = merged.as_object_mut() {
+    if let Some(old) = old
+        && let Some(om) = old.as_object()
+            && let Some(mm) = merged.as_object_mut() {
                 for (k, v) in om {
                     // body wins for present keys; fill missing ones from old
                     // (created_at preserved here; id/plain_text forced below;
@@ -578,15 +570,13 @@ pub(crate) fn questions_update_impl(conn: &Connection, id: &str, data: Value) ->
                     }
                 }
             }
-        }
-    }
     let now = now_iso();
     merged["id"] = json!(id);
     merged["updated_at"] = json!(now.clone());
     if merged
         .get("created_at")
         .and_then(Value::as_str)
-        .map_or(true, |s| s.is_empty())
+        .is_none_or(|s| s.is_empty())
     {
         merged["created_at"] = json!(now);
     }
@@ -596,7 +586,7 @@ pub(crate) fn questions_update_impl(conn: &Connection, id: &str, data: Value) ->
     if merged
         .get("status")
         .and_then(Value::as_str)
-        .map_or(true, |s| s.is_empty())
+        .is_none_or(|s| s.is_empty())
     {
         merged["status"] = json!("published");
     }
@@ -632,7 +622,7 @@ pub fn questions_remove(id: String, actor: Option<String>, state: State<'_, AppS
 pub(crate) fn ensure_child_ids(q: &mut Value, parent_id: &str) {
     if let Some(children) = q.get_mut("children").and_then(|c| c.as_array_mut()) {
         for (i, c) in children.iter_mut().enumerate() {
-            let missing = c.get("id").and_then(Value::as_str).map_or(true, |s| s.is_empty());
+            let missing = c.get("id").and_then(Value::as_str).is_none_or(|s| s.is_empty());
             if missing {
                 c["id"] = json!(format!("{parent_id}_c{}", i + 1));
             }

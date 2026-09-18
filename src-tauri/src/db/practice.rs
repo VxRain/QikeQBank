@@ -58,11 +58,10 @@ pub(crate) fn validate_fsrs_card(c: &FsrsCard) -> Result<(), String> {
     if let Some(s) = c.last_reviewed_at.as_deref() {
         parse_iso_field(s, "last_reviewed_at")?;
     }
-    if let Some(r) = c.last_result.as_deref() {
-        if !["again", "hard", "good", "easy"].contains(&r) {
+    if let Some(r) = c.last_result.as_deref()
+        && !["again", "hard", "good", "easy"].contains(&r) {
             return Err(format!("invalid fsrs last_result: {r}"));
         }
-    }
     Ok(())
 }
 
@@ -124,8 +123,8 @@ pub(crate) fn practice_pool_impl(
     ids: Option<Vec<String>>,
 ) -> Result<Vec<Value>, String> {
     // 指定 ids（错题重练）：按传入顺序返回存在的题目，忽略题型/随机逻辑
-    if let Some(ids) = ids.map(|v| v.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>()) {
-        if !ids.is_empty() {
+    if let Some(ids) = ids.map(|v| v.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>())
+        && !ids.is_empty() {
             let mut out = Vec::new();
             for id in ids.into_iter().take(500) {
                 if let Some(q) = fetch_question(conn, &id)? {
@@ -134,7 +133,6 @@ pub(crate) fn practice_pool_impl(
             }
             return Ok(out);
         }
-    }
     let limit = limit.unwrap_or(20).min(500) as i64;
     let type_filter = type_filter.filter(|s| !s.is_empty());
     let bank_id = bank_id.filter(|s| !s.is_empty());
@@ -180,28 +178,40 @@ pub struct RecordItem {
     pub fsrs_log: Option<Value>,
 }
 
+/// practice_records 行（除 synced_at 外的存储列，顺序同 SELECT 查询）。
+pub(crate) type StoredRecordRow = (
+    String,
+    String,
+    String,
+    i64,
+    String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+);
+/// 传入侧行（全借用形态，与 StoredRecordRow 按位对应）。
+pub(crate) type IncomingRecordRow<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    i64,
+    &'a str,
+    Option<i64>,
+    Option<&'a str>,
+    Option<&'a str>,
+);
+
 /// 流水内容等价（除 synced_at 外全字段）：record_answer 幂等与 sync apply 共用。
 /// 新增列时两处 SELECT/比较必须同步演进 —— 集中于此防漂移。
-pub(crate) fn record_content_eq(
-    stored: &(String, String, String, i64, String, Option<i64>, Option<String>, Option<String>),
-    question_id: &str,
-    mode: &str,
-    grade: &str,
-    correct: i64,
-    answered: &str,
-    elapsed_ms: Option<i64>,
-    detail_json: Option<&str>,
-    fsrs_log: Option<&str>,
-) -> bool {
-    let (q, m, g, c, a, e, d, f) = stored;
-    q == question_id
-        && m == mode
-        && g == grade
-        && *c == correct
-        && a == answered
-        && *e == elapsed_ms
-        && d.as_deref() == detail_json
-        && f.as_deref() == fsrs_log
+pub(crate) fn record_content_eq(stored: &StoredRecordRow, incoming: &IncomingRecordRow<'_>) -> bool {
+    stored.0 == incoming.0
+        && stored.1 == incoming.1
+        && stored.2 == incoming.2
+        && stored.3 == incoming.3
+        && stored.4 == incoming.4
+        && stored.5 == incoming.5
+        && stored.6.as_deref() == incoming.6
+        && stored.7.as_deref() == incoming.7
 }
 
 #[tauri::command]
@@ -254,7 +264,7 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
         };
 
         // 幂等：同 ID 已存在 → 内容一致则整项跳过，不一致整批 Err（响亮失败）
-        let existing: Option<(String, String, String, i64, String, Option<i64>, Option<String>, Option<String>)> = tx
+        let existing: Option<StoredRecordRow> = tx
             .query_row(
                 "SELECT question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json, fsrs_log
                  FROM practice_records WHERE id = ?1",
@@ -264,8 +274,7 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
             .optional()
             .map_err(to_str)?;
         if let Some(stored) = existing {
-            if record_content_eq(
-                &stored,
+            let incoming: IncomingRecordRow<'_> = (
                 &item.question_id,
                 &item.mode,
                 &grade,
@@ -274,7 +283,8 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
                 item.elapsed_ms,
                 detail_opt.as_deref(),
                 fsrs_log_opt.as_deref(),
-            ) {
+            );
+            if record_content_eq(&stored, &incoming) {
                 continue;
             }
             return Err(format!("record id conflict: {rid}"));
@@ -315,7 +325,7 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
                 )
                 .optional()
                 .map_err(to_str)?;
-            if existing_rs.map_or(true, |u| answered > u) {
+            if existing_rs.is_none_or(|u| answered > u) {
                 fsrs_upsert(&tx, &item.question_id, card, &answered).map_err(to_str)?;
             }
         }

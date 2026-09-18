@@ -147,11 +147,10 @@ pub(crate) fn assets_resolve_impl(conn: &Connection, root: &Path, shas: Vec<Stri
 pub(crate) fn collect_asset_refs(v: &Value, out: &mut HashSet<String>) {
     match v {
         Value::String(s) => {
-            if let Some(sha) = s.strip_prefix("asset:") {
-                if is_asset_sha(sha) {
+            if let Some(sha) = s.strip_prefix("asset:")
+                && is_asset_sha(sha) {
                     out.insert(sha.to_string());
                 }
-            }
         }
         Value::Array(a) => a.iter().for_each(|x| collect_asset_refs(x, out)),
         Value::Object(m) => m.values().for_each(|x| collect_asset_refs(x, out)),
@@ -189,13 +188,11 @@ pub(crate) fn assets_gc_impl(conn: &Connection, root: &Path) -> Result<Value, St
             let mut set = HashSet::new();
             for i in 1..6 {
                 let raw: Option<String> = row.get(i).map_err(to_str)?;
-                if let Some(s) = raw {
-                    if s.contains("asset:") {
-                        if let Ok(v) = serde_json::from_str::<Value>(&s) {
+                if let Some(s) = raw
+                    && s.contains("asset:")
+                        && let Ok(v) = serde_json::from_str::<Value>(&s) {
                             collect_asset_refs(&v, &mut set);
                         }
-                    }
-                }
             }
             for sha in set {
                 used.push((qid.clone(), sha));
@@ -216,15 +213,14 @@ pub(crate) fn assets_gc_impl(conn: &Connection, root: &Path) -> Result<Value, St
         if used_set.contains(sha) {
             continue;
         }
-        if let Some(ext) = asset_mime_ext(mime) {
-            if let Ok(p) = asset_path_for(root, sha, ext) {
+        if let Some(ext) = asset_mime_ext(mime)
+            && let Ok(p) = asset_path_for(root, sha, ext) {
                 let _ = fs::remove_file(&p); // 文件缺失也继续删登记行
                 // 顺手收空分片目录（非空则静默跳过，剩幽灵目录只碍眼不碍事）
                 if let Some(parent) = p.parent() {
                     let _ = fs::remove_dir(parent);
                 }
             }
-        }
         conn.execute("DELETE FROM assets WHERE sha = ?1", params![sha])
             .map_err(to_str)?;
         removed += 1;
@@ -270,11 +266,10 @@ pub(crate) fn extract_asset_sha(s: &str) -> Option<String> {
                     .next()
                     .map(|c| c.is_whitespace())
                     .unwrap_or(false);
-            if boundary_ok {
-                if let Some(sha) = tail_sha(&s[..abs]) {
+            if boundary_ok
+                && let Some(sha) = tail_sha(&s[..abs]) {
                     return Some(sha);
                 }
-            }
             search = &search[pos + needle.len()..];
             base = abs + needle.len();
         }

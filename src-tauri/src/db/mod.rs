@@ -70,11 +70,10 @@ pub(crate) fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("QKEBANK_DB") {
-        if !p.trim().is_empty() {
+    if let Ok(p) = std::env::var("QKEBANK_DB")
+        && !p.trim().is_empty() {
             return Ok(PathBuf::from(p));
         }
-    }
     let dir = data_root(app)?;
     Ok(dir.join("qbank.db"))
 }
@@ -154,8 +153,6 @@ pub(crate) fn db_meta_value(conn: &Connection, key: &str) -> Result<Option<Strin
         .optional()
         .map_err(to_str)
 }
-
-/// 墓碑地平线（PLAN §8.2，公式锁定）：建库不足 90 天返回 None（从未 GC，
 
 #[cfg(test)]
 mod tests {

@@ -159,11 +159,10 @@ pub(crate) fn banks_update_impl(
     if !exists {
         return Err("Not Found".into());
     }
-    if let Some(n) = name {
-        if n.trim().is_empty() {
+    if let Some(n) = name
+        && n.trim().is_empty() {
             return Err("题库名称不能为空".into());
         }
-    }
     let now = now_iso();
     match (name, description) {
         (Some(n), Some(d)) => conn
@@ -196,7 +195,8 @@ pub fn banks_remove(id: String, actor: Option<String>, state: State<'_, AppState
     ok(data)
 }
 
-/// 墓碑写入（UPSERT）：重复删除刷新时间戳，不打爆唯一索引。
+/// 删库：级联清其下题目（→ 流水/复习态经 questions 外键）。同事务逐题 +
+/// 题库各写一条墓碑后删除。拒绝删除最后一个题库。
 pub(crate) fn banks_remove_impl(conn: &mut Connection, id: &str, actor: Option<&str>) -> Result<Value, String> {
     let exists: bool = conn
         .query_row(

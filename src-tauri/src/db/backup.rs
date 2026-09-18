@@ -78,7 +78,7 @@ pub(crate) fn export_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn ensure_template_files(app: &AppHandle) -> Result<(), String> {
-    let dir = export_dir(&app)?;
+    let dir = export_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
     for (name, bytes) in TEMPLATE_FILES {
         let p = dir.join(name);
@@ -204,19 +204,19 @@ pub(crate) fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Va
         if !q.is_object() {
             return Err("dbjson: question entry is not an object".into());
         }
-        if q.get("id").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+        if q.get("id").and_then(Value::as_str).is_none_or(|s| s.is_empty()) {
             q["id"] = json!(generate_id());
         }
         let now = now_iso();
         if q.get("created_at")
             .and_then(Value::as_str)
-            .map_or(true, |s| s.is_empty())
+            .is_none_or(|s| s.is_empty())
         {
             q["created_at"] = json!(now.clone());
         }
         if q.get("updated_at")
             .and_then(Value::as_str)
-            .map_or(true, |s| s.is_empty())
+            .is_none_or(|s| s.is_empty())
         {
             q["updated_at"] = json!(now);
         }
@@ -224,13 +224,13 @@ pub(crate) fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Va
             q["version"] = json!(2);
         }
         // 无 bank_id → 默认库
-        if q.get("bank_id").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+        if q.get("bank_id").and_then(Value::as_str).is_none_or(|s| s.is_empty()) {
             let bid = resolve_default_bank(&tx)?;
             q["bank_id"] = json!(bid);
         }
         q["plain_text"] = json!(aggregated_plain_text(&q));
         // v2/v3 行缺 synced_at：落库填 now（§7.4 新列填充）
-        if q.get("synced_at").and_then(Value::as_str).map_or(true, |s| s.is_empty()) {
+        if q.get("synced_at").and_then(Value::as_str).is_none_or(|s| s.is_empty()) {
             q["synced_at"] = json!(now_iso());
         }
         upsert_question(&tx, &q)?;
@@ -291,7 +291,7 @@ mod tests {
         // v4 shape: version 4 + db_uuid/exported_at/settings/delete_log
         let doc = build_export_doc(&conn).unwrap();
         assert_eq!(doc["version"], 4);
-        assert!(doc["db_uuid"].as_str().map_or(false, |s| !s.is_empty()));
+        assert!(doc["db_uuid"].as_str().is_some_and(|s| !s.is_empty()));
         assert!(doc["exported_at"].as_str().is_some());
         assert!(doc["settings"].as_array().is_some());
         assert!(doc["delete_log"].as_array().is_some());
