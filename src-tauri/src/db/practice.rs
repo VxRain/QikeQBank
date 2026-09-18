@@ -311,8 +311,9 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
             continue;
         }
         inserted += 1;
-        // 答错 → 解除手动移出（重回错题本），发生时间驱动软状态
-        if correct == 0 {
+        // 答错 → 解除手动移出（重回错题本），发生时间驱动软状态。
+        // 模考错题不影响错题本（wrong_list CTE 已排除 exam，这里同样不触发重回）
+        if correct == 0 && item.mode != "exam" {
             undismiss_wrong(&tx, &item.question_id, &answered)?;
         }
         // FSRS：仅当本项实际插入才推进；gated 比较防补录倒退（并列保留现有）
@@ -365,11 +366,12 @@ pub(crate) fn review_due_impl(
 }
 
 /// 错题本 CTE：每题算连续答对 streak（从最近一次往回数，遇到错即断）、累计错次数、最近错时间
+/// 只统计练习/复习流水（mode != 'exam'）：模考错题不进错题本口径，只服务成绩单
 /// detail 只对最终页的 50 行用关联子查询点查（idx_records_question），不进窗口排序
 pub(crate) const WRONG_RANKED_CTE: &str = "WITH ranked AS (
   SELECT question_id, correct, answered_at,
          ROW_NUMBER() OVER (PARTITION BY question_id ORDER BY answered_at DESC, id DESC) AS rn
-  FROM practice_records
+  FROM practice_records WHERE mode != 'exam'
 ),
 streak AS (
   SELECT question_id,
@@ -421,7 +423,7 @@ pub(crate) fn wrong_list_impl(
     let sql = format!(
         "{WRONG_RANKED_CTE} SELECT {SELECT_FIELDS_Q}, streak.wrong_count AS wrong_count, streak.last_wrong_at AS last_wrong_at,
          (SELECT p.detail_json FROM practice_records p
-          WHERE p.question_id = q.id AND p.correct = 0 ORDER BY p.answered_at DESC, p.id DESC LIMIT 1) AS last_wrong_detail
+          WHERE p.question_id = q.id AND p.correct = 0 AND p.mode != 'exam' ORDER BY p.answered_at DESC, p.id DESC LIMIT 1) AS last_wrong_detail
          FROM questions q JOIN streak ON streak.question_id = q.id
          WHERE {WRONG_WHERE}
          ORDER BY streak.last_wrong_at DESC
@@ -499,6 +501,7 @@ pub(crate) fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) 
             .prepare(
                 "SELECT substr(answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(correct), 0),
                  COALESCE(AVG(elapsed_ms), 0) FROM practice_records
+                 WHERE mode != 'exam'
                  GROUP BY d ORDER BY d DESC LIMIT ?1",
             )
             .map_err(to_str)?;
@@ -518,6 +521,7 @@ pub(crate) fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) 
             .prepare(
                 "SELECT q.type, COUNT(*), COALESCE(SUM(p.correct), 0), COALESCE(AVG(p.elapsed_ms), 0)
                  FROM practice_records p JOIN questions q ON q.id = p.question_id
+                 WHERE p.mode != 'exam'
                  GROUP BY q.type ORDER BY COUNT(*) DESC",
             )
             .map_err(to_str)?;
@@ -604,7 +608,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let practiced_total: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM practice_records p JOIN questions q ON q.id = p.question_id
-             WHERE (?1 IS NULL OR q.bank_id = ?1)",
+             WHERE p.mode != 'exam' AND (?1 IS NULL OR q.bank_id = ?1)",
             params![bank_id],
             |r| r.get(0),
         )
@@ -612,7 +616,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let practiced_today: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM practice_records p JOIN questions q ON q.id = p.question_id
-             WHERE p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
+             WHERE p.mode != 'exam' AND p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
             params![fmt_iso(start_today), bank_id],
             |r| r.get(0),
         )
@@ -621,7 +625,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let (rec_total, rec_correct): (i64, i64) = conn
         .query_row(
             "SELECT COUNT(*), COALESCE(SUM(p.correct), 0) FROM practice_records p
-             JOIN questions q ON q.id = p.question_id WHERE (?1 IS NULL OR q.bank_id = ?1)",
+             JOIN questions q ON q.id = p.question_id WHERE p.mode != 'exam' AND (?1 IS NULL OR q.bank_id = ?1)",
             params![bank_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -638,7 +642,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
             .prepare(
                 "SELECT substr(p.answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(p.correct), 0)
                  FROM practice_records p JOIN questions q ON q.id = p.question_id
-                 WHERE p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
+                 WHERE p.mode != 'exam' AND p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
                  GROUP BY d ORDER BY d",
             )
             .map_err(to_str)?;
@@ -734,6 +738,11 @@ mod tests {
         assert_eq!(resolve_grade("review", Some("hard")).unwrap(), "hard");
         assert!(resolve_grade("review", None).is_err());
         assert!(resolve_grade("review", Some("bogus")).is_err());
+        // 模考四键全收（成绩单按得分率映射：0→again / <0.6→hard / <1→good / 1→easy）
+        assert_eq!(resolve_grade("exam", Some("easy")).unwrap(), "easy");
+        assert_eq!(resolve_grade("exam", Some("hard")).unwrap(), "hard");
+        assert!(resolve_grade("exam", None).is_err());
+        assert!(resolve_grade("exam", Some("bogus")).is_err());
     }
 
     #[test]
@@ -757,6 +766,78 @@ mod tests {
         assert_eq!(v["by_type"][0]["type"], "single");
         assert_eq!(v["by_type"][0]["count"], 3);
         assert_eq!(v["by_type"][0]["avg_ms"], 5667);
+    }
+
+    #[test]
+    fn exam_records_isolated_from_stats_and_wrong_list() {
+        // 模考流水（mode='exam'）只服务成绩单：不进 review_stats / records_overview / 错题本，
+        // 也不触发答错重回错题本（undismiss 仅 practice/review 触发）
+        let mut conn = test_conn();
+        for id in ["q_e_1", "q_e_2"] {
+            let mut q = sample_question();
+            q["id"] = json!(id);
+            q["bank_id"] = json!("bank_default");
+            insert_question(&conn, &q).unwrap();
+        }
+        let rec = |conn: &Connection, qid: &str, mode: &str, grade: &str, correct: i64, at: &str| {
+            conn.execute(
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                params![generate_id(), qid, mode, grade, correct, at],
+            )
+            .unwrap();
+        };
+        let answer = |conn: &mut Connection, qid: &str, mode: &str, grade: &str, at: &str| {
+            record_answer_impl(
+                conn,
+                &[RecordItem {
+                    id: None,
+                    question_id: qid.to_string(),
+                    mode: mode.to_string(),
+                    grade: Some(grade.to_string()),
+                    answered_at: Some(at.to_string()),
+                    elapsed_ms: None,
+                    detail: None,
+                    card: None,
+                    fsrs_log: None,
+                }],
+            )
+            .unwrap();
+        };
+        rec(&conn, "q_e_1", "practice", "again", 0, "2026-09-10T10:00:00.000Z");
+        rec(&conn, "q_e_1", "exam", "good", 1, "2026-09-10T11:00:00.000Z");
+        rec(&conn, "q_e_2", "exam", "again", 0, "2026-09-10T12:00:00.000Z");
+
+        // review_stats：只数练习/复习流水（1 条错 → correct_rate 0）
+        let stats = review_stats_impl(&conn, None).unwrap();
+        assert_eq!(stats["practiced_total"], 1);
+        assert_eq!(stats["correct_rate"], 0.0);
+
+        // records_overview：days/by_type 只含练习流水
+        let ov = records_overview_impl(&conn, None).unwrap();
+        let day = ov["days"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["date"] == "2026-09-10")
+            .unwrap();
+        assert_eq!(day["count"], 1);
+        assert_eq!(day["correct"], 0);
+        assert_eq!(ov["by_type"][0]["count"], 1);
+
+        // 错题本：q_e_1（练习错）在册；q_e_2（仅模考错）不进册
+        let w = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        assert_eq!(w["total"], 1);
+        assert_eq!(w["items"][0]["id"], "q_e_1");
+
+        // 手动移出后模考再答错：不触发重回错题本（undismiss 仅 practice/review 触发）
+        dismiss_wrong(&conn, "q_e_1").unwrap();
+        answer(&mut conn, "q_e_1", "exam", "again", "2026-09-10T13:00:00.000Z");
+        let w2 = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        assert_eq!(w2["total"], 0);
+        // 对比：练习答错仍会解除移出（软状态翻转回归，走 record_answer 真实入口）
+        answer(&mut conn, "q_e_1", "practice", "again", "2026-09-10T14:00:00.000Z");
+        let w3 = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        assert_eq!(w3["total"], 1);
     }
 
     #[test]
