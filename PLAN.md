@@ -38,7 +38,17 @@ QikeQBank/
 | **W3c 首页** | `src/views/Home.vue` |
 | **W4 工具** | `tools/migrate-dbjson.mjs`、`tools/smoke-test.mjs`、`tools/make-portable.mjs`、`tests/unit/*` |
 
-## 3. SQLite（v2 权威定义：DDL 幂等语句 + MIGRATE 级联步骤，Rust 与 W4 必须逐字符一致）
+## 3. SQLite（v3 权威定义：DDL 幂等语句 + 条件种子，Rust 与 W4 必须逐字符一致）
+
+> v3（同步地基）：新增 `delete_log`（墓碑）、`app_settings`（需同步的设置）、
+> `db_meta`（库身份/版本/游标）；banks/questions/practice_records 加 `synced_at`
+> （同步游标，落库方 stamp）；review_state 加 `updated_at`（LWW 时钟）；
+> wrong_dismiss 重塑为软状态（`is_dismissed + updated_at`）。
+> 旧库无迁移路径（未发版，删库重建）。**v3 守卫**：`init_schema` 检测到旧版
+> schema（banks 存在但任一 v3 关键列缺失）→ 自动删表重建（assets 表 schema
+> 未变予以保留）；全新库直接建表。双时钟语义：业务时间
+> （`updated_at/answered_at/deleted_at/dismissed_at/last_reviewed_at`）只用于 LWW，
+> `synced_at` 只用于增量过滤与墓碑 GC。
 
 ### 3.1 DDL（幂等，可重复执行）
 
@@ -48,8 +58,10 @@ CREATE TABLE IF NOT EXISTS banks (
   name TEXT NOT NULL,
   description TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_banks_synced ON banks(synced_at);
 
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY,
@@ -66,12 +78,14 @@ CREATE TABLE IF NOT EXISTS questions (
   children_json TEXT,
   plain_text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
 CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_questions_synced ON questions(synced_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
   id TEXT PRIMARY KEY,
@@ -82,10 +96,12 @@ CREATE TABLE IF NOT EXISTS practice_records (
   answered_at TEXT NOT NULL,
   elapsed_ms INTEGER,
   detail_json TEXT,
-  fsrs_log TEXT
+  fsrs_log TEXT,
+  synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
 CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
+CREATE INDEX IF NOT EXISTS idx_records_synced ON practice_records(synced_at);
 
 CREATE TABLE IF NOT EXISTS review_state (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
@@ -98,12 +114,16 @@ CREATE TABLE IF NOT EXISTS review_state (
   learning_steps INTEGER NOT NULL DEFAULT 0,
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
-  last_reviewed_at TEXT
+  last_reviewed_at TEXT,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
-  dismissed_at TEXT NOT NULL
+  is_dismissed INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  dismissed_at TEXT,
+  synced_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -114,28 +134,42 @@ CREATE TABLE IF NOT EXISTS assets (
   height INTEGER,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS delete_log (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('bank','question')),
+  entity_id TEXT NOT NULL,
+  bank_id TEXT,
+  deleted_at TEXT NOT NULL,
+  actor TEXT,
+  synced_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_delete_log_entity ON delete_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_delete_log_synced ON delete_log(synced_at);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS db_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 ```
 
-### 3.2 MIGRATE 步骤（先 DDL 后按序执行；`<now>` 一律用 SQL `strftime('%Y-%m-%dT%H:%M:%fZ','now')`）
+### 3.2 种子（幂等，无 legacy 迁移）
 
 ```sql
--- M1 种子默认题库（幂等）
-INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at)
+-- S1 种子默认题库（幂等，双防线）：delete_log 有 bank_default 墓碑则跳过；
+-- 业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）
+INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at, synced_at)
 VALUES ('bank_default', '默认题库', NULL,
-        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+        '1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z',
+        strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
--- M2 存量库补列（仅当 questions 无 bank_id 列时执行）：
-ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE;
-
--- M3 存量行回填
-UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;
-
--- M4 FSRS：旧 review_state（含 ease/interval_days 列）直接重建（删库重来，不迁移进度）；
--- practice_records 缺 fsrs_log 列则补列（条件均由执行侧 PRAGMA table_info 判断）：
-DROP TABLE review_state;
-ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;
-
--- wrong_dismiss 为新表（无存量需回填）：存量库随幂等 DDL 自动建表，无需 M 步骤。
+-- S2 种子库元信息（幂等）：db_uuid / schema_version='3' / created_at / sync_cursor_server_time（游标，同步时更新）
 ```
 
 - 连接设置：`PRAGMA foreign_keys=ON`、`PRAGMA journal_mode=WAL`。
@@ -153,7 +187,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `banks_list` | — | `{"success":true,"data":[{id,name,description,question_count,created_at,updated_at}]}`（question_count 用 LEFT JOIN COUNT） |
 | `banks_create` | `name: String, description?: Option<String>` | name trim 后非空，否则 Err("题库名称不能为空")；id=UUIDv7（与试题同算法；种子库固定为 `bank_default`）；补时间戳 |
 | `banks_update` | `id: String, name?: Option<String>, description?: Option<String>` | 改名/改说明；name 给出时须非空；不存在 Err("Not Found") |
-| `banks_remove` | `id: String` | 级联删该库全部题（→ 流水/复习态）。**若为最后一个题库 → Err("至少保留一个题库")**。返回 `{"success":true,"data":{"id":...}}` |
+| `banks_remove` | `id: String, actor?: Option<String>`（前端 `cmd()` 自动注入 device_id） | 同事务逐题墓碑 + 库墓碑 UPSERT 后 `DELETE`（级联清题/流水/复习态/移出标记）。**若为最后一个题库 → Err**。返回 `{"success":true,"data":{"id":...}}` |
 
 **试题（bank_id 过滤 + 归属）**
 
@@ -161,8 +195,18 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 |---|---|---|
 | `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}` |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
-| `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；其余不变 |
-| `questions_get` / `questions_remove` | 不变 | 不变 |
+| `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；本地编辑刷新 `updated_at` **和** `synced_at`；其余不变（**apply 路径禁止复用此函数**，走原生 gated upsert，防来源戳被洗） |
+| `questions_get` / `questions_remove` | `questions_remove(id, actor?)`：单题墓碑 UPSERT + `DELETE` 同事务；不存在 Err("Not Found") | 不变 |
+
+**设置与同步（v3 新增 5 个）**
+
+| command | 参数 | 返回 |
+|---|---|---|
+| `settings_get` | — | `{success:true, data:[{key, value_json, updated_at}]}`（仅显式设置过的键） |
+| `settings_set` | `items: [{key, value_json}]` | 校验 JSON 合法；同一批同一戳 UPSERT；返回 `{updated:[keys], updated_at}` |
+| `sync_pull` | `since?: String`（缺省全量） | 先 GC 墓碑 → 取 `server_time` → 增量 `(since, server_time]` + 全量表 + 墓碑 + `tombstone_floor`；持久化游标。返回 `{server_time, tombstone_floor, bundle}` |
+| `sync_push` | `bundle`（`{device_id, banks[], questions[], records[], review_state[], wrong_dismiss[], settings[], tombstones[]}`） | 中心 `apply_bundle(role=Center)`：两阶段预裁决→落库（LWW/墓碑/零库守卫/地平线守卫/钳制）。返回 `{applied, skipped, dropped_orphans, conflicts}` |
+| `sync_apply_snapshot` | `bundle` | 叶子落快照：`apply_bundle(role=Leaf)`（`>=` 采纳中心，保留 `synced_at`） |
 
 **刷题/复习/统计（bank 可选过滤）**
 
@@ -170,10 +214,10 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 |---|---|---|
 | `practice_pool` | `limit?, type_filter?, bank_id?, ids?` | 有 bank_id 时过滤；ids 非空时按传入顺序返回存在的题（上限 500），忽略题型/随机逻辑（错题重练用） |
 | `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500 |
-| `wrong_dismiss` | `question_id` | 错题本手动移出（幂等）：记入 wrong_dismiss，不删练习记录；之后再答错自动解除 |
+| `wrong_dismiss` | `question_id` | 软状态：UPSERT `is_dismissed=1, updated_at=now`（不删练习记录）；答错时翻转为 0（重回错题本）；`wrong_list` 谓词改为 `is_dismissed=1` 才隐藏 |
 | `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤；每题附加 `fsrs` 对象（无状态行为 null） |
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期） |
-| `record_answer` | `items[]` 增可选 `card`（FSRS 卡片全字段）/`fsrs_log`（ReviewLog 快照） | 有 card 则 UPSERT review_state（范围校验）+ 写流水；无 card 只写流水 |
+| `record_answer` | `items[]`：`{id?, question_id, mode, grade?, answered_at?, elapsed_ms?, detail?, card?, fsrs_log?}` | `id` 合法 UUID 采用（离线幂等，缺省生成；非法 Err）；`answered_at` 合法 ISO 采用 + 未来钳制（缺省 now）；`INSERT OR IGNORE`，同 ID 同内容跳过、异内容整批 Err；题目不存在/有墓碑则该项跳过（`skipped`）；**仅实际插入才 upsert `review_state`**；`review_state.updated_at = last_reviewed_at = answered_at`（发生时间），gated 比较防补退。返回 `{inserted, skipped}` |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 | `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
@@ -187,8 +231,8 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `export_dbjson` | — | 输出 `{"version":3,"banks":[{id,name,description,created_at,updated_at}],"questions":[...]}`（questions 含 bank_id） |
-| `import_dbjson` | `path` | 兼容 v2/v3：banks 按 id UPSERT（name/description/updated_at），缺 banks 时确保默认库存在；question 无 bank_id → 默认库；UPSERT 见 v1 |
+| `export_dbjson` | — | 输出 `{"version":4,"db_uuid","exported_at","banks":[...],"questions":[...],"settings":[{key,value_json,updated_at}],"delete_log":[...]}` |
+| `import_dbjson` | `path` | 兼容 v2/v3/v4：banks 按 id UPSERT，缺 banks 时确保默认库存在；question 无 bank_id → 默认库；**v2/v3 行缺 `synced_at` 落库填 now**；v4 settings 按 `updated_at` LWW。**文件导入三不**：不执行删除、不合并 `delete_log`（彻底忽略该段）、不进入同步传播链 |
 | `save_text_file` | `filename: String, content: String` | 通用文本落盘到 `app_data_dir/export/`（仅纯文件名，防路径穿越），返回 `{"path"}`；供导入模板下载等 |
 
 - `plain_text` 聚合、信封结构、AppState(Mutex<Connection>)、db 路径解析均沿用 v1；SM-2 已替换为 FSRS（见 §5）。
@@ -199,15 +243,17 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
   后端只做可信写入 + 范围校验（`state∈0..3`、数值≥0、`due_at` 可解析 ISO，非法 Err）。
 - 状态表 `review_state` 存 Card 序列化字段（`state` 口径与 ts-fsrs State 枚举一致：
   0=New 1=Learning 2=Review 3=Relearning；`elapsed_days` 已废弃不落库）。
+  `updated_at` 为 LWW 时钟（答题/重置/挂起统一刷新），同步按它裁决，
+  `last_reviewed_at` 仅业务展示。
 - 映射：复习四键 again/hard/good/easy → Rating 1:1；练习 correct→Good / wrong→Again。
 - `practice_records.fsrs_log` 存每次作答的 ReviewLog 快照（只写不读，未来参数优化的数据源）。
-- 可调参数（设置页「间隔复习」分组，`settings.fsrs`，localStorage 持久化，缺键走默认）：
+- 可调参数（设置页「间隔复习」分组，`settings.fsrs`，**进库同步**（app_settings，缺键走默认）；其余偏好留 localStorage）：
   目标记忆保持率 0.9（0.75–0.95 五档）、学习步长 `1m,10m`、重学步长 `10m`（步长单位仅 m/h/d，
   最多 6 步）、最大间隔 36500 天（30–36500）、随机抖动关、
   练习入库范围 全部/`仅错题`（仅错题时答对只写流水不建卡）。21 个 w 权重不暴露（用官方默认）。
 - 复习页题量选择（输入框默认 20；“全部”按钮把今日到期数回填进输入框，无模式开关）。
 - 新卡 Good 进 Learning（默认 1m/10m 当天回来），毕业后进 Review；答错进 Relearning。
-- 旧库检测到 `ease`/`interval_days` 列则 DROP 重建 review_state（删库重来）；
+- 旧库检测到 `ease`/`interval_days` 列则 DROP 重建 review_state（删库重来）；（v3：无旧库，删库重建基线）
   前端对有历史作答的老用户一次性 toast 告知，全新安装静默。
 - `practice` 映射：correct=true→good / false→again。`correct` 落地 = grade ∈ {good,easy}。
 
@@ -223,8 +269,18 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 ## 7. 前端模块契约
 
-### api/bridge.js（不变）
-`cmd(name, args)` 封装 invoke。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。
+### api/bridge.js（v3：Provider 接口 + actor 自动注入）
+`cmd(name, args)` 封装 invoke，走 `currentProvider`（默认 TauriProvider；HttpProvider/LocalProvider 以后填签名位，`api/*.js` 零改动）。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。`banks_remove`/`questions_remove`/`sync_push` 自动注入 `actor`/`device_id`（`src/utils/device.js`，localStorage 持久化）。
+
+### api/settings.js（v3 新建）
+```js
+settingsGet()  → cmd('settings_get') → [{key,value_json,updated_at}]
+settingsSet(items) → cmd('settings_set',{items}) → {updated,updated_at}
+syncPull(since?) / syncPush(bundle) / syncApplySnapshot(bundle)
+```
+
+### stores/settings.js（v3：键分裂 + 注水守卫）
+进库同步：`fsrs.*`（6 键）+ `wrongLeaveAfterCorrect`；留本机：编辑偏好/自动下一题/筛选记忆。localStorage 只做写透缓存。`hydrateFromDb()` 启动调用一次、每次同步 pull-apply 后调用一次；注水期 watch 禁写（防脏时间戳）。
 
 ### api/banks.js（W2 新建）
 ```js

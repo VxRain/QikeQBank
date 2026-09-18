@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * W4 · tools/migrate-dbjson.mjs（迭代二：多题库 v2）
- * 将 QBank Web 版 DB.json 迁移为 SQLite 库（v2 结构：banks + questions.bank_id）。
+ * W4 · tools/migrate-dbjson.mjs（迭代三：同步地基 v3）
+ * 将 QBank Web 版 DB.json 迁移为 SQLite 库（v3 结构：+synced_at/墓碑/设置/元信息）。
  * 用法:
  *   node tools/migrate-dbjson.mjs <input-DB.json> <output.db> [--dry-run]
  *
  * 流程: 参数校验 → 打开/创建 output.db → 执行 PLAN.md §3.1 DDL（逐字符一致）
- *       → 执行 §3.2 MIGRATE M1/M2/M3（M1 种子默认题库、M2 仅当缺 bank_id 列时补列、M3 存量行回填）
+ *       → 执行 §3.2 种子 S1/S2（条件种子默认题库 + db_meta）
  *       → 读 input.questions 数组 → 逐题 INSERT（附 bank_id，源无 bank_id → 'bank_default'）
  *       → 打印总题数/各 type 计数/默认题库（bank_default）已就绪/写入路径。
  *
@@ -22,6 +22,7 @@
  *   - plain_text 缺 → 省略列，由 DDL DEFAULT '' 兜底
  *   - created_at/updated_at 缺 → 补当前 ISO-8601 UTC（DDL NOT NULL 且无 DEFAULT，
  *     显式 NULL 会被 NOT NULL 拒绝；与 §4 questions_create“补 created_at/updated_at”约定一致）
+ *   - synced_at 缺 → 补当前 ISO（v3 新列 NOT NULL 无 DEFAULT，对应 Rust 侧新列填充 §7.4）
  *   - 可空 JSON 列（options/answer/analysis/children）与 score 缺 → 存 NULL
  *   - id 缺 → 生成 q_<unixms>_<4hex>（同 §4 生成规则）
  */
@@ -31,13 +32,16 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** PLAN.md §3.1 SQLite v2 表结构 —— 唯一权威 DDL，禁止与 PLAN 有任何字符差异 */
+/** PLAN.md §3.1 SQLite v3 表结构 —— 唯一权威 DDL，禁止与 PLAN 有任何字符差异 */
 export const DDL = `CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_banks_synced ON banks(synced_at);
 
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY,
@@ -54,12 +58,14 @@ CREATE TABLE IF NOT EXISTS questions (
   children_json TEXT,
   plain_text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
 CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_questions_synced ON questions(synced_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
   id TEXT PRIMARY KEY,
@@ -70,10 +76,12 @@ CREATE TABLE IF NOT EXISTS practice_records (
   answered_at TEXT NOT NULL,
   elapsed_ms INTEGER,
   detail_json TEXT,
-  fsrs_log TEXT
+  fsrs_log TEXT,
+  synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
 CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
+CREATE INDEX IF NOT EXISTS idx_records_synced ON practice_records(synced_at);
 
 CREATE TABLE IF NOT EXISTS review_state (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
@@ -86,12 +94,16 @@ CREATE TABLE IF NOT EXISTS review_state (
   learning_steps INTEGER NOT NULL DEFAULT 0,
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
-  last_reviewed_at TEXT
+  last_reviewed_at TEXT,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
-  dismissed_at TEXT NOT NULL
+  is_dismissed INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  dismissed_at TEXT,
+  synced_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -101,49 +113,50 @@ CREATE TABLE IF NOT EXISTS assets (
   width INTEGER,
   height INTEGER,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS delete_log (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('bank','question')),
+  entity_id TEXT NOT NULL,
+  bank_id TEXT,
+  deleted_at TEXT NOT NULL,
+  actor TEXT,
+  synced_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_delete_log_entity ON delete_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_delete_log_synced ON delete_log(synced_at);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS db_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );`;
 
-/** PLAN.md §3.2 MIGRATE —— M1/M2/M3，与 PLAN 逐字符一致（<now> 一律用 strftime 表达式） */
-export const MIGRATE_M1 = `-- M1 种子默认题库（幂等）
-INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at)
-VALUES ('bank_default', '默认题库', NULL,
-        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));`;
-
-export const MIGRATE_M2 = `-- M2 存量库补列（仅当 questions 无 bank_id 列时执行）：
-ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE;`;
-
-export const MIGRATE_M3 = `-- M3 存量行回填
-UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;`;
-
-export const MIGRATE_M4 = `-- M4 FSRS：旧 review_state（含 ease/interval_days 列）直接重建（删库重来，不迁移进度）；
--- practice_records 缺 fsrs_log 列则补列（条件均由执行侧 PRAGMA table_info 判断）：
-DROP TABLE review_state;
-ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;`;
-
-/** §3.2 完整文本（M1 + M2 + M3 + M4 拼接，与 PLAN §3.2 代码块逐字符一致），供 SQL 逐字符比对 */
-export const MIGRATE = `${MIGRATE_M1}\n\n${MIGRATE_M2}\n\n${MIGRATE_M3}\n\n${MIGRATE_M4}`;
+export const SEED_EPOCH = '1970-01-01T00:00:00.000Z';
 
 /**
- * 按 PLAN §3.2 顺序执行 MIGRATE 三步（先 DDL 后调用；与 tools/smoke-test.mjs 逻辑完全相同）：
- *   M1 INSERT OR IGNORE —— 恒执行（幂等，重复执行无害）；
- *   M2 ALTER 补列 —— 仅当 questions 无 bank_id 列时执行（先 PRAGMA table_info 判断）；
- *   M3 存量行回填 —— 恒执行（无 NULL 行时为空操作）。
+ * PLAN.md §3.2 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
+ *   S1 条件种子默认库 —— delete_log 有 bank_default 墓碑则跳过（防复活）；
+ *        业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）；
+ *   S2 db_meta —— db_uuid / schema_version='3' / created_at（INSERT OR IGNORE）。
  */
-export function migrateV2(db) {
-  db.exec(MIGRATE_M1);
-  const cols = db.prepare("SELECT name FROM pragma_table_info('questions')").all().map((c) => c.name);
-  if (!cols.includes('bank_id')) db.exec(MIGRATE_M2);
-  db.exec(MIGRATE_M3);
-  // M4 FSRS：旧 review_state 直接重建 + practice_records 补 fsrs_log 列
-  const rsCols = db.prepare("SELECT name FROM pragma_table_info('review_state')").all().map((c) => c.name);
-  if (rsCols.includes('ease') || rsCols.includes('interval_days')) {
-    db.exec('DROP TABLE review_state');
-    db.exec(DDL); // 重建被 DROP 的表（其余 CREATE IF NOT EXISTS 为空操作）
+export function seedV3(db) {
+  const tomb = db.prepare("SELECT 1 AS t FROM delete_log WHERE entity_type = 'bank' AND entity_id = 'bank_default'").get();
+  if (!tomb) {
+    db.prepare("INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at, synced_at) VALUES ('bank_default', '默认题库', NULL, '" + SEED_EPOCH + "', '" + SEED_EPOCH + "', strftime('%Y-%m-%dT%H:%M:%fZ','now'))").run();
   }
-  const prCols = db.prepare("SELECT name FROM pragma_table_info('practice_records')").all().map((c) => c.name);
-  if (!prCols.includes('fsrs_log')) db.exec('ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT');
+  const now = new Date().toISOString();
+  const uuid = globalThis.crypto?.randomUUID?.() ?? `seed-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('db_uuid', ?)").run(uuid);
+  db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('schema_version', '3')").run();
+  db.prepare('INSERT OR IGNORE INTO db_meta (key, value) VALUES (?, ?)').run('created_at', now);
 }
-
 const QUESTION_TYPES = ['single', 'multi', 'judge', 'fill', 'short', 'material'];
 const nowISO = () => new Date().toISOString();
 const rand4Hex = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0');
@@ -165,7 +178,7 @@ function buildInsert(q, id, now) {
   if (q.stem === undefined || q.stem === null) throw new Error('缺少 stem（stem_json NOT NULL）');
 
   const cols = ['id', 'bank_id', 'type', 'stem_json', 'options_json', 'answer_json', 'analysis_json',
-    'children_json', 'score', 'created_at', 'updated_at'];
+    'children_json', 'score', 'created_at', 'updated_at', 'synced_at'];
   const params = {
     id,
     bank_id: typeof q.bank_id === 'string' && q.bank_id ? q.bank_id : 'bank_default',
@@ -178,6 +191,7 @@ function buildInsert(q, id, now) {
     score: q.score != null ? q.score : null,
     created_at: typeof q.created_at === 'string' && q.created_at ? q.created_at : now,
     updated_at: typeof q.updated_at === 'string' && q.updated_at ? q.updated_at : now,
+    synced_at: typeof q.synced_at === 'string' && q.synced_at ? q.synced_at : now,
   };
   if (q.difficulty != null) { cols.push('difficulty'); params.difficulty = q.difficulty; }
   if (q.status != null) { cols.push('status'); params.status = q.status; }
@@ -214,8 +228,8 @@ function main() {
     db.exec('PRAGMA foreign_keys=ON');
     db.exec('PRAGMA journal_mode=WAL');
     db.exec(DDL);
-    // 3. PLAN §3.2 MIGRATE：M1 种子默认题库 → M2（仅缺列时）补 bank_id → M3 存量回填
-    migrateV2(db);
+    // 3. PLAN §3.2 种子：S1 条件种子默认题库 → S2 db_meta
+    seedV3(db);
   } catch (e) {
     console.error(`[migrate] 打开/初始化数据库失败（目录不存在？）: ${e.message}`);
     process.exit(1);

@@ -1,7 +1,20 @@
-import { reactive, watch } from 'vue'
+import { reactive, watch, nextTick } from 'vue'
+import { settingsGet, settingsSet } from '../api/settings.js'
 
-// 应用设置：localStorage 持久化（key 独立于题库记忆）
+// 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。
+// localStorage 仅作写透缓存，DB 为准（同步地基 §6）。
 const KEY = 'qbank.settings.v1'
+
+// 进库（同步）flat keys
+const SYNC_KEYS = [
+  'fsrs.requestRetention',
+  'fsrs.maximumInterval',
+  'fsrs.learningSteps',
+  'fsrs.relearningSteps',
+  'fsrs.enableFuzz',
+  'fsrs.practiceScope',
+  'wrongLeaveAfterCorrect',
+]
 
 function load() {
   try {
@@ -65,9 +78,9 @@ export const settings = reactive({
   autoNextDelayMs: normalizeDelay(saved.autoNextDelayMs),
   // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
   rememberBankFilter: saved.rememberBankFilter ?? false,
-  // 错题本：连续答对多少次后自动移出，默认 1
+  // 错题本：连续答对多少次后自动移出，默认 1（进库同步）
   wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
-  // FSRS 间隔复习（缺键老设置自动走默认；数组缺省由 normalizeSteps 兜底）
+  // FSRS 间隔复习（缺键老设置自动走默认；数组缺省由 normalizeSteps 兜底）（进库同步）
   fsrs: {
     requestRetention: normalizeRetention(saved.fsrs?.requestRetention),
     maximumInterval: normalizeMaxInterval(saved.fsrs?.maximumInterval),
@@ -78,14 +91,117 @@ export const settings = reactive({
   },
 })
 
+// 同步键取值（序列化为 value_json）
+function syncSnapshot() {
+  return {
+    'fsrs.requestRetention': settings.fsrs.requestRetention,
+    'fsrs.maximumInterval': settings.fsrs.maximumInterval,
+    'fsrs.learningSteps': settings.fsrs.learningSteps,
+    'fsrs.relearningSteps': settings.fsrs.relearningSteps,
+    'fsrs.enableFuzz': settings.fsrs.enableFuzz,
+    'fsrs.practiceScope': settings.fsrs.practiceScope,
+    wrongLeaveAfterCorrect: settings.wrongLeaveAfterCorrect,
+  }
+}
+
+// 同步键赋值（归一化后写入 store）
+function applySyncValues(raw) {
+  if (raw['fsrs.requestRetention'] !== undefined)
+    settings.fsrs.requestRetention = normalizeRetention(raw['fsrs.requestRetention'])
+  if (raw['fsrs.maximumInterval'] !== undefined)
+    settings.fsrs.maximumInterval = normalizeMaxInterval(raw['fsrs.maximumInterval'])
+  if (raw['fsrs.learningSteps'] !== undefined)
+    settings.fsrs.learningSteps = normalizeSteps(raw['fsrs.learningSteps'], ['1m', '10m'])
+  if (raw['fsrs.relearningSteps'] !== undefined)
+    settings.fsrs.relearningSteps = normalizeSteps(raw['fsrs.relearningSteps'], ['10m'])
+  if (raw['fsrs.enableFuzz'] !== undefined) settings.fsrs.enableFuzz = !!raw['fsrs.enableFuzz']
+  if (raw['fsrs.practiceScope'] !== undefined)
+    settings.fsrs.practiceScope = normalizePracticeScope(raw['fsrs.practiceScope'])
+  if (raw.wrongLeaveAfterCorrect !== undefined)
+    settings.wrongLeaveAfterCorrect = normalizeLeaveCount(raw.wrongLeaveAfterCorrect)
+}
+
+// 注水守卫：DB 覆盖期间禁止 watch 回写（防脏时间戳竞争）。
+// 用深度计数而非布尔：启动注水与同步后注水可能重叠，
+// 布尔会被先完成一方的 finally 提前开门，漏出另一方的赋值回写。
+// 初始 0：模块底部会发起首次 hydrateFromDb()，由它把深度抬到 1 再归零。
+let hydrateDepth = 0
+let saveTimer = null
+
+function persistLocalCache() {
+  try {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        keepContentOnTypeChange: settings.keepContentOnTypeChange,
+        autoNextOnCorrect: settings.autoNextOnCorrect,
+        autoNextDelayMs: settings.autoNextDelayMs,
+        rememberBankFilter: settings.rememberBankFilter,
+        wrongLeaveAfterCorrect: settings.wrongLeaveAfterCorrect,
+        fsrs: { ...settings.fsrs },
+      })
+    )
+  } catch {
+    /* 忽略持久化失败 */
+  }
+}
+
+function scheduleDbWrite() {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(async () => {
+    try {
+      const snap = syncSnapshot()
+      await settingsSet(
+        Object.entries(snap).map(([key, value]) => ({ key, value_json: JSON.stringify(value) }))
+      )
+    } catch {
+      /* 后端不可用（纯前端预览）时只留本地缓存 */
+    }
+  }, 400)
+}
+
+// 从 DB 注水：启动调用一次，每次同步 pull-apply 完成后调用一次
+export async function hydrateFromDb() {
+  hydrateDepth++
+  // 关键：取消挂起的防抖回写。否则时序「用户改设置 → 定时器排队 → 同步完成注水」
+  // 下，定时器会把刚注水进来的值原样回写并打上新 updated_at，跨端 LWW 污染
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  try {
+    const items = await settingsGet()
+    if (Array.isArray(items) && items.length) {
+      const raw = {}
+      for (const it of items) {
+        if (!it || typeof it.key !== 'string') continue
+        if (!SYNC_KEYS.includes(it.key)) continue
+        try {
+          raw[it.key] = JSON.parse(it.value_json)
+        } catch {
+          /* 脏行跳过 */
+        }
+      }
+      applySyncValues(raw)
+      persistLocalCache()
+    }
+    await nextTick()
+  } catch {
+    /* 后端不可用时沿用本地缓存 */
+  } finally {
+    hydrateDepth--
+  }
+}
+
 watch(
   () => ({ ...settings }),
-  (v) => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(v))
-    } catch {
-      /* 忽略持久化失败 */
-    }
+  () => {
+    persistLocalCache()
+    if (hydrateDepth > 0) return
+    scheduleDbWrite()
   },
   { deep: true }
 )
+
+// 首屏先画本地缓存，后台以 DB 为准覆盖
+hydrateFromDb()

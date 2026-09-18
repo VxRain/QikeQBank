@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * W4 · tools/smoke-test.mjs（迭代二：多题库 v2）
- * 冒烟测试: 临时库（与 migrate-dbjson.mjs 相同的 §3.1 DDL + §3.2 MIGRATE）
+ * W4 · tools/smoke-test.mjs（迭代三：同步地基 v3）
+ * 冒烟测试: 临时库（与 migrate-dbjson.mjs 相同的 §3.1 DDL + §3.2 种子）
  * → 插入 6 类最小合法题（带 bank_id）→ 验证：
  *   v1 原有 9 断言:
  *     ① count(*)=6
@@ -9,7 +9,7 @@
  *     ③ plain_text LIKE 搜索命中
  *     ④ UPDATE 往返
  *     ⑤ DELETE 后 practice_records / review_state 级联删除（先插流水与复习态再删题）
- *   v2 新增断言:
+ *   v2 断言（多题库）:
  *     ⑥ banks 表存在 + 默认题库种子命中（id=bank_default）
  *     ⑦ questions 插入带 bank_id（归属 bank_default）
  *     ⑧ 按 bank_id 过滤命中（存在库 6 道 / 不存在库 0 道）
@@ -17,6 +17,14 @@
  *     ⑩ 最后一个题库保护：SQL 层无法表达「至少保留一个题库」→ 按脚本能力设计直接 SQL 删除政策，
  *        即只允许直接 SQL 删除自有（非默认）测试库；断言「删除自有非默认库后默认库 bank_default 仍存在」
  *        （业务层拦截由 Rust banks_remove 承担，SQL 层仅保证默认库兜底存在）。
+ *   v3 新增断言（同步地基）:
+ *     ⑪ 新列/新表就位：banks/questions/practice_records.synced_at、review_state.updated_at、
+ *        delete_log/app_settings/db_meta 表、wrong_dismiss 软状态列
+ *     ⑫ app_settings 读写往返
+ *     ⑬ delete_log UPSERT（重删不打爆唯一索引）
+ *     ⑭ 种子 epoch + 条件种子（bank_default 墓碑存在时跳过播种）
+ *     ⑮ review_state.updated_at / practice_records.synced_at 非空约束生效
+ *     ⑯ db_meta 三行（db_uuid/schema_version='3'/created_at）
  * 全部通过打印 "SMOKE PASS"（exit 0）；任一失败打印细节并 exit 1。
  *
  * 最小合法题的 Blocks JSON 结构对齐
@@ -29,14 +37,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** PLAN.md §3.1 SQLite v2 表结构 —— 与 tools/migrate-dbjson.mjs 完全一致、与 PLAN 逐字符一致 */
+/** PLAN.md §3.1 SQLite v3 表结构 —— 与 tools/migrate-dbjson.mjs 完全一致、与 PLAN 逐字符一致 */
+/** PLAN.md §3.1 SQLite v3 表结构 —— 唯一权威 DDL，禁止与 PLAN 有任何字符差异 */
 export const DDL = `CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_banks_synced ON banks(synced_at);
 
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY,
@@ -53,12 +64,14 @@ CREATE TABLE IF NOT EXISTS questions (
   children_json TEXT,
   plain_text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_questions_type   ON questions(type);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
 CREATE INDEX IF NOT EXISTS idx_questions_bank   ON questions(bank_id);
 CREATE INDEX IF NOT EXISTS idx_questions_updated ON questions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_questions_synced ON questions(synced_at);
 
 CREATE TABLE IF NOT EXISTS practice_records (
   id TEXT PRIMARY KEY,
@@ -69,10 +82,12 @@ CREATE TABLE IF NOT EXISTS practice_records (
   answered_at TEXT NOT NULL,
   elapsed_ms INTEGER,
   detail_json TEXT,
-  fsrs_log TEXT
+  fsrs_log TEXT,
+  synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_records_question ON practice_records(question_id);
 CREATE INDEX IF NOT EXISTS idx_records_answered ON practice_records(answered_at);
+CREATE INDEX IF NOT EXISTS idx_records_synced ON practice_records(synced_at);
 
 CREATE TABLE IF NOT EXISTS review_state (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
@@ -85,12 +100,16 @@ CREATE TABLE IF NOT EXISTS review_state (
   learning_steps INTEGER NOT NULL DEFAULT 0,
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
-  last_reviewed_at TEXT
+  last_reviewed_at TEXT,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
   question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
-  dismissed_at TEXT NOT NULL
+  is_dismissed INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  dismissed_at TEXT,
+  synced_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -100,49 +119,50 @@ CREATE TABLE IF NOT EXISTS assets (
   width INTEGER,
   height INTEGER,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS delete_log (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('bank','question')),
+  entity_id TEXT NOT NULL,
+  bank_id TEXT,
+  deleted_at TEXT NOT NULL,
+  actor TEXT,
+  synced_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_delete_log_entity ON delete_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_delete_log_synced ON delete_log(synced_at);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS db_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );`;
 
-/** PLAN.md §3.2 MIGRATE —— M1/M2/M3，与 PLAN 逐字符一致（<now> 一律用 strftime 表达式） */
-export const MIGRATE_M1 = `-- M1 种子默认题库（幂等）
-INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at)
-VALUES ('bank_default', '默认题库', NULL,
-        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));`;
-
-export const MIGRATE_M2 = `-- M2 存量库补列（仅当 questions 无 bank_id 列时执行）：
-ALTER TABLE questions ADD COLUMN bank_id TEXT REFERENCES banks(id) ON DELETE CASCADE;`;
-
-export const MIGRATE_M3 = `-- M3 存量行回填
-UPDATE questions SET bank_id='bank_default' WHERE bank_id IS NULL;`;
-
-export const MIGRATE_M4 = `-- M4 FSRS：旧 review_state（含 ease/interval_days 列）直接重建（删库重来，不迁移进度）；
--- practice_records 缺 fsrs_log 列则补列（条件均由执行侧 PRAGMA table_info 判断）：
-DROP TABLE review_state;
-ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT;`;
-
-/** §3.2 完整文本（M1 + M2 + M3 + M4 拼接，与 PLAN §3.2 代码块逐字符一致），供 SQL 逐字符比对 */
-export const MIGRATE = `${MIGRATE_M1}\n\n${MIGRATE_M2}\n\n${MIGRATE_M3}\n\n${MIGRATE_M4}`;
+export const SEED_EPOCH = '1970-01-01T00:00:00.000Z';
 
 /**
- * 按 PLAN §3.2 顺序执行 MIGRATE 三步（先 DDL 后调用；与 tools/migrate-dbjson.mjs 逻辑完全相同）：
- *   M1 INSERT OR IGNORE —— 恒执行（幂等，重复执行无害）；
- *   M2 ALTER 补列 —— 仅当 questions 无 bank_id 列时执行（先 PRAGMA table_info 判断）；
- *   M3 存量行回填 —— 恒执行（无 NULL 行时为空操作）。
+ * PLAN.md §3.2 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
+ *   S1 条件种子默认库 —— delete_log 有 bank_default 墓碑则跳过（防复活）；
+ *        业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）；
+ *   S2 db_meta —— db_uuid / schema_version='3' / created_at（INSERT OR IGNORE）。
  */
-export function migrateV2(db) {
-  db.exec(MIGRATE_M1);
-  const cols = db.prepare("SELECT name FROM pragma_table_info('questions')").all().map((c) => c.name);
-  if (!cols.includes('bank_id')) db.exec(MIGRATE_M2);
-  db.exec(MIGRATE_M3);
-  // M4 FSRS：旧 review_state 直接重建 + practice_records 补 fsrs_log 列
-  const rsCols = db.prepare("SELECT name FROM pragma_table_info('review_state')").all().map((c) => c.name);
-  if (rsCols.includes('ease') || rsCols.includes('interval_days')) {
-    db.exec('DROP TABLE review_state');
-    db.exec(DDL); // 重建被 DROP 的表（其余 CREATE IF NOT EXISTS 为空操作）
+export function seedV3(db) {
+  const tomb = db.prepare("SELECT 1 AS t FROM delete_log WHERE entity_type = 'bank' AND entity_id = 'bank_default'").get();
+  if (!tomb) {
+    db.prepare("INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at, synced_at) VALUES ('bank_default', '默认题库', NULL, '" + SEED_EPOCH + "', '" + SEED_EPOCH + "', strftime('%Y-%m-%dT%H:%M:%fZ','now'))").run();
   }
-  const prCols = db.prepare("SELECT name FROM pragma_table_info('practice_records')").all().map((c) => c.name);
-  if (!prCols.includes('fsrs_log')) db.exec('ALTER TABLE practice_records ADD COLUMN fsrs_log TEXT');
+  const now = new Date().toISOString();
+  const uuid = globalThis.crypto?.randomUUID?.() ?? `seed-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('db_uuid', ?)").run(uuid);
+  db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('schema_version', '3')").run();
+  db.prepare('INSERT OR IGNORE INTO db_meta (key, value) VALUES (?, ?)').run('created_at', now);
 }
-
 const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const opt = (id, text) => ({ id, content: doc(text) });
 
@@ -225,14 +245,14 @@ function main() {
     db.exec('PRAGMA foreign_keys=ON');
     db.exec('PRAGMA journal_mode=WAL');
     db.exec(DDL);
-    migrateV2(db); // §3.2 MIGRATE：M1 种子默认库 → M2（仅缺列时）补 bank_id → M3 回填
+    seedV3(db); // §3.2 种子 S1/S2（条件种子默认库 + db_meta）
     console.log(`临时库: ${dbPath}`);
     console.log('插入 6 类最小合法题（带 bank_id=bank_default）…');
 
     const now = new Date().toISOString();
     const ins = db.prepare(`INSERT INTO questions
-      (id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at)
-      VALUES (:id, 'bank_default', :type, 2, :difficulty, :score, 'published', :stem_json, :options_json, :answer_json, :analysis_json, :children_json, :plain_text, :created_at, :updated_at)`);
+      (id, bank_id, type, version, difficulty, score, status, stem_json, options_json, answer_json, analysis_json, children_json, plain_text, created_at, updated_at, synced_at)
+      VALUES (:id, 'bank_default', :type, 2, :difficulty, :score, 'published', :stem_json, :options_json, :answer_json, :analysis_json, :children_json, :plain_text, :created_at, :updated_at, :synced_at)`);
     for (const q of QUESTIONS) {
       ins.run({
         id: q.id,
@@ -247,10 +267,11 @@ function main() {
         plain_text: q.plain_text,
         created_at: now,
         updated_at: now,
+        synced_at: now,
       });
     }
 
-    // ⑥ banks 表存在 + 默认题库种子命中（M1）
+    // ⑥ banks 表存在 + 默认题库种子命中（S1）
     const bankTable = db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='banks'").get().c;
     check('banks 表存在（sqlite_master）', bankTable === 1, `实际 ${bankTable}`);
     const seedBank = db.prepare("SELECT id, name FROM banks WHERE id = 'bank_default'").get();
@@ -289,8 +310,8 @@ function main() {
     check('UPDATE 往返（score=9.5, difficulty=3）', upd.score === 9.5 && upd.difficulty === 3, JSON.stringify(upd));
 
     // ⑤ 级联删除（删题 → 流水/复习态级联）：先插流水 + 复习态，再删题
-    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json) VALUES ('smoke_rec_1', 'smoke_judge_1', 'practice', 'good', 1, :at, '{}')").run({ at: now });
-    db.prepare("INSERT INTO review_state (question_id, due_at, last_result) VALUES ('smoke_judge_1', :at, 'good')").run({ at: now });
+    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at) VALUES ('smoke_rec_1', 'smoke_judge_1', 'practice', 'good', 1, :at, '{}', :at)").run({ at: now });
+    db.prepare("INSERT INTO review_state (question_id, due_at, last_result, updated_at) VALUES ('smoke_judge_1', :at, 'good', :at)").run({ at: now });
     const preP = db.prepare("SELECT COUNT(*) c FROM practice_records WHERE question_id = 'smoke_judge_1'").get().c;
     const preR = db.prepare("SELECT COUNT(*) c FROM review_state WHERE question_id = 'smoke_judge_1'").get().c;
     check('删除前已插 1 条流水 + 1 条复习态', preP === 1 && preR === 1, `records=${preP} review=${preR}`);
@@ -303,13 +324,13 @@ function main() {
     check('删除后 count(*)=5', totalAfter === 5, `实际 ${totalAfter}`);
 
     // ⑨ 删库级联：先插自有测试库及其题/流水/复习态，再删库 → 全级联
-    db.prepare("INSERT INTO banks (id, name, created_at, updated_at) VALUES ('smoke_bank_cascade', '测试级联库', :at, :at)").run({ at: now });
-    const insCas = db.prepare(`INSERT INTO questions (id, bank_id, type, version, stem_json, plain_text, created_at, updated_at)
-      VALUES (:id, 'smoke_bank_cascade', :type, 2, :stem, :text, :at, :at)`);
+    db.prepare("INSERT INTO banks (id, name, created_at, updated_at, synced_at) VALUES ('smoke_bank_cascade', '测试级联库', :at, :at, :at)").run({ at: now });
+    const insCas = db.prepare(`INSERT INTO questions (id, bank_id, type, version, stem_json, plain_text, created_at, updated_at, synced_at)
+      VALUES (:id, 'smoke_bank_cascade', :type, 2, :stem, :text, :at, :at, :at)`);
     insCas.run({ id: 'smoke_cas_q1', type: 'single', stem: JSON.stringify(doc('级联测试1')), text: '级联测试1', at: now });
     insCas.run({ id: 'smoke_cas_q2', type: 'judge', stem: JSON.stringify(doc('级联测试2')), text: '级联测试2', at: now });
-    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at) VALUES ('smoke_rec_2', 'smoke_cas_q1', 'practice', 'good', 1, :at)").run({ at: now });
-    db.prepare("INSERT INTO review_state (question_id, due_at, last_result) VALUES ('smoke_cas_q2', :at, 'good')").run({ at: now });
+    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at) VALUES ('smoke_rec_2', 'smoke_cas_q1', 'practice', 'good', 1, :at, :at)").run({ at: now });
+    db.prepare("INSERT INTO review_state (question_id, due_at, last_result, updated_at) VALUES ('smoke_cas_q2', :at, 'good', :at)").run({ at: now });
     db.prepare("DELETE FROM banks WHERE id = 'smoke_bank_cascade'").run();
     const bankGone = db.prepare("SELECT COUNT(*) c FROM banks WHERE id = 'smoke_bank_cascade'").get().c;
     const casQGone = db.prepare("SELECT COUNT(*) c FROM questions WHERE bank_id = 'smoke_bank_cascade'").get().c;
@@ -328,29 +349,61 @@ function main() {
     const onlyDefault = banksAfter.length === 1 && banksAfter[0].id === 'bank_default';
     check('最后一个题库保护（SQL 层无法拦删最后一个；断言：删除自有非默认库后默认库 bank_default 仍在且为仅剩题库）', onlyDefault, JSON.stringify(banksAfter));
 
-    // ⑪ FSRS：新列存在 + 旧列消失 + 状态写读 + M4 旧库重建
+    // ⑪ v3 同步地基列/表就位 + FSRS 状态写读
     const rsCols = db.prepare("SELECT name FROM pragma_table_info('review_state')").all().map((c) => c.name);
-    const rsOk = ['due_at', 'stability', 'difficulty', 'reps', 'lapses', 'state', 'learning_steps', 'scheduled_days', 'last_result', 'last_reviewed_at'].every((c) => rsCols.includes(c))
-      && !rsCols.includes('ease') && !rsCols.includes('interval_days');
-    check('review_state 为 FSRS 列（无 ease/interval_days）', rsOk, JSON.stringify(rsCols));
+    const rsOk = ['due_at', 'stability', 'difficulty', 'reps', 'lapses', 'state', 'learning_steps', 'scheduled_days', 'last_result', 'last_reviewed_at', 'updated_at'].every((c) => rsCols.includes(c));
+    check('review_state 为 v3 列（含 updated_at）', rsOk, JSON.stringify(rsCols));
     const prCols = db.prepare("SELECT name FROM pragma_table_info('practice_records')").all().map((c) => c.name);
-    check('practice_records 含 fsrs_log 列', prCols.includes('fsrs_log'), JSON.stringify(prCols));
-    db.prepare("INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at) VALUES ('smoke_single_1', :at, 2.5, 5.0, 1, 0, 2, 0, 3.0, 'good', :at)").run({ at: now });
-    const fsrsRow = db.prepare('SELECT stability, difficulty, state FROM review_state WHERE question_id = \'smoke_single_1\'').get();
+    check('practice_records 含 fsrs_log/synced_at 列', prCols.includes('fsrs_log') && prCols.includes('synced_at'), JSON.stringify(prCols));
+    const wdCols = db.prepare("SELECT name FROM pragma_table_info('wrong_dismiss')").all().map((c) => c.name);
+    check('wrong_dismiss 为软状态列', ['is_dismissed', 'updated_at', 'dismissed_at', 'synced_at'].every((c) => wdCols.includes(c)), JSON.stringify(wdCols));
+    const newTables = ['delete_log', 'app_settings', 'db_meta'].map((t) =>
+      db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name=?").get(t).c);
+    check('delete_log/app_settings/db_meta 三表存在', newTables.every((c) => c === 1), JSON.stringify(newTables));
+    db.prepare("INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at) VALUES ('smoke_single_1', :at, 2.5, 5.0, 1, 0, 2, 0, 3.0, 'good', :at, :at)").run({ at: now });
+    const fsrsRow = db.prepare("SELECT stability, difficulty, state FROM review_state WHERE question_id = 'smoke_single_1'").get();
     check('FSRS 状态写读往返', fsrsRow.stability === 2.5 && fsrsRow.difficulty === 5.0 && fsrsRow.state === 2, JSON.stringify(fsrsRow));
-    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, fsrs_log) VALUES ('smoke_rec_fs', 'smoke_single_1', 'review', 'good', 1, :at, '{\"rating\":3}')").run({ at: now });
+    db.prepare("INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, fsrs_log, synced_at) VALUES ('smoke_rec_fs', 'smoke_single_1', 'review', 'good', 1, :at, '{\"rating\":3}', :at)").run({ at: now });
     const fsrsLog = db.prepare("SELECT fsrs_log FROM practice_records WHERE id = 'smoke_rec_fs'").get().fsrs_log;
     check('fsrs_log 写读往返', JSON.parse(fsrsLog).rating === 3, String(fsrsLog));
-    // M4：模拟旧库（ease 列 + 无 fsrs_log）→ migrateV2 重建
-    db.exec('ALTER TABLE review_state ADD COLUMN ease REAL DEFAULT 2.5');
-    db.exec('CREATE TABLE practice_records_legacy AS SELECT id, question_id, mode, grade, correct, answered_at, elapsed_ms, detail_json FROM practice_records');
-    db.exec('DROP TABLE practice_records');
-    db.exec('ALTER TABLE practice_records_legacy RENAME TO practice_records');
-    migrateV2(db);
-    const rsCols2 = db.prepare("SELECT name FROM pragma_table_info('review_state')").all().map((c) => c.name);
-    const prCols2 = db.prepare("SELECT name FROM pragma_table_info('practice_records')").all().map((c) => c.name);
-    check('M4：旧 review_state 被重建（ease 消失）', !rsCols2.includes('ease') && rsCols2.includes('stability'), JSON.stringify(rsCols2));
-    check('M4：practice_records 补回 fsrs_log 列', prCols2.includes('fsrs_log'), JSON.stringify(prCols2));
+
+    // ⑫ app_settings 读写往返
+    db.prepare("INSERT INTO app_settings (key, value_json, updated_at) VALUES ('fsrs.requestRetention', '0.9', :at)").run({ at: now });
+    const sv = db.prepare("SELECT value_json FROM app_settings WHERE key = 'fsrs.requestRetention'").get().value_json;
+    check('app_settings 读写往返', JSON.parse(sv) === 0.9, String(sv));
+
+    // ⑬ delete_log UPSERT（重删不打爆唯一索引）
+    db.prepare("INSERT INTO delete_log (id, entity_type, entity_id, bank_id, deleted_at, actor, synced_at) VALUES ('t1', 'question', 'smoke_single_1', 'bank_default', :at, 'smoke', :at)").run({ at: now });
+    db.prepare(`INSERT INTO delete_log (id, entity_type, entity_id, bank_id, deleted_at, actor, synced_at) VALUES ('t2', 'question', 'smoke_single_1', 'bank_default', :at, 'smoke', :at)
+      ON CONFLICT(entity_type, entity_id) DO UPDATE SET deleted_at = excluded.deleted_at, synced_at = excluded.synced_at`).run({ at: now });
+    const tombN = db.prepare("SELECT COUNT(*) c FROM delete_log WHERE entity_id = 'smoke_single_1'").get().c;
+    check('delete_log 唯一冲突 UPSERT（仍 1 行）', tombN === 1, `实际 ${tombN}`);
+
+    // ⑭ 种子 epoch + 条件种子（bank_default 墓碑存在时跳过播种）
+    const seedTimes = db.prepare("SELECT created_at, updated_at FROM banks WHERE id = 'bank_default'").get();
+    check('种子业务时间为 epoch', seedTimes.created_at === SEED_EPOCH && seedTimes.updated_at === SEED_EPOCH, JSON.stringify(seedTimes));
+    db.prepare("INSERT INTO delete_log (id, entity_type, entity_id, bank_id, deleted_at, actor, synced_at) VALUES ('t-seed', 'bank', 'bank_default', 'bank_default', :at, 'smoke', :at)").run({ at: now });
+    db.prepare("DELETE FROM banks WHERE id = 'bank_default'").run();
+    seedV3(db); // 有墓碑 → 跳过播种
+    const reborn = db.prepare("SELECT COUNT(*) c FROM banks WHERE id = 'bank_default'").get().c;
+    check('条件种子：有墓碑时不复活默认库', reborn === 0, `实际 ${reborn}`);
+    db.prepare("DELETE FROM delete_log WHERE id = 't-seed'").run();
+    seedV3(db); // 无墓碑 → 播种
+    const reborn2 = db.prepare("SELECT COUNT(*) c FROM banks WHERE id = 'bank_default'").get().c;
+    check('条件种子：无墓碑时正常播种', reborn2 === 1, `实际 ${reborn2}`);
+
+    // ⑮ 非空约束生效（缺 synced_at/updated_at 直接失败）
+    let notNullOk = false;
+    try {
+      db.prepare("INSERT INTO review_state (question_id, due_at) VALUES ('smoke_single_1', :at)").run({ at: now });
+    } catch { notNullOk = true; }
+    check('review_state.updated_at 非空约束生效', notNullOk, '缺列插入竟成功');
+
+    // ⑯ db_meta 三行
+    const metaVer = db.prepare("SELECT value FROM db_meta WHERE key = 'schema_version'").get()?.value;
+    const metaUuid = db.prepare("SELECT value FROM db_meta WHERE key = 'db_uuid'").get()?.value;
+    const metaCreated = db.prepare("SELECT value FROM db_meta WHERE key = 'created_at'").get()?.value;
+    check("db_meta 三行（schema_version='3'）", metaVer === '3' && !!metaUuid && !!metaCreated, JSON.stringify({ metaVer, metaUuid, metaCreated }));
   } catch (e) {
     failures.push(`异常: ${e.stack || e.message}`);
   } finally {

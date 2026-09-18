@@ -1,4 +1,4 @@
-mod db;
+pub mod db;
 
 use tauri::Manager;
 
@@ -75,6 +75,11 @@ pub fn run() {
             db::review_stats,
             db::records_overview,
             db::export_dbjson,
+            db::settings_get,
+            db::settings_set,
+            db::sync_pull,
+            db::sync_push,
+            db::sync_apply_snapshot,
             db::is_portable_mode,
             db::assets_put,
             db::assets_resolve,
