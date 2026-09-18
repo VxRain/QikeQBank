@@ -35,7 +35,6 @@
     "@iconify-json/lucide": "^1.2.130",
     "@iconify-json/ri": "^1.2.10",
     "@tauri-apps/cli": "^2",
-    "@unocss/preset-attributify": "^66.10.1",
     "@unocss/preset-icons": "^66.10.1",
     "@unocss/preset-uno": "^66.10.1",
     "@vitejs/plugin-vue": "^5.0.5",

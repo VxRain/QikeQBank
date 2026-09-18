@@ -1,4 +1,4 @@
-import { defineConfig, presetUno, presetAttributify, presetIcons } from 'unocss'
+import { defineConfig, presetUno, presetIcons } from 'unocss'
 
 /**
  * UnoCSS 设计系统
@@ -8,7 +8,8 @@ import { defineConfig, presetUno, presetAttributify, presetIcons } from 'unocss'
 export default defineConfig({
   presets: [
     presetUno(),
-    presetAttributify(),
+    // presetAttributify 已移除：项目全程 class="..." 写法，attributify 未被使用；
+    // 其提取器会把 i-lucide-repeat 与后续 token 粘连成假图标候选（failed to load icon 警告）
     presetIcons({
       scale: 1,
       extraProperties: {

@@ -66,9 +66,6 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.11.4
-      '@unocss/preset-attributify':
-        specifier: ^66.10.1
-        version: 66.10.1
       '@unocss/preset-icons':
         specifier: ^66.10.1
         version: 66.10.1
