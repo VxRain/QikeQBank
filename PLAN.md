@@ -18,7 +18,7 @@ QikeQBank/
 │   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
-├── src-tauri/                     ← Rust（db.rs 承载全部逻辑）
+├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
 ├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
 └── tests/unit/  fsrs.test.js  parseDocx.test.js（node:test，零依赖）
@@ -31,7 +31,7 @@ QikeQBank/
 | 角色 | 拥有文件（相对 D:/Workspaces/QikeQBank） |
 |---|---|
 | 主线程 | 根配置、PLAN.md、src-tauri/icons/、README、集成验证/提交 |
-| **W1 Rust** | `src-tauri/Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`、`src/db.rs` |
+| **W1 Rust** | `src-tauri/Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`、`src/db/`（模块目录） |
 | **W2 前端管道** | `src/api/bridge.js`、`src/api/questions.js`、`src/api/practice.js`、`src/api/banks.js`(新)、`src/api/assets.js`、`src/stores/bank.js`(新)、`src/stores/settings.js`、`src/utils/*`、`src/App.vue` |
 | **W3a 列表/编辑/录题** | `src/views/List.vue`、`src/views/Form.vue`、`src/views/Banks.vue`、`src/components/*`（TiptapDocEditor/QuestionForm/QuestionEditor/QuestionPreview/ImportFileBox/PasteBox/ui） |
 | **W3b 刷题/复习/错题** | `src/views/Practice.vue`、`src/views/Review.vue`、`src/views/Wrong.vue` |
