@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test:unit": "node --test \"tests/unit/*.test.js\"",
+    "lint": "cd src-tauri && cargo clippy --lib --tests -- -D warnings",
     "portable": "node tools/make-portable.mjs",
     "build:all": "pnpm tauri build && node tools/make-portable.mjs --skip-build"
   },
