@@ -74,6 +74,7 @@ pub fn run() {
             db::review_due,
             db::review_stats,
             db::records_overview,
+            db::exam_sessions,
             db::export_dbjson,
             db::settings_get,
             db::settings_set,

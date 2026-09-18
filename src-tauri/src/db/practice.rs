@@ -538,6 +538,47 @@ pub(crate) fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) 
     Ok(json!({ "days": days, "by_type": by_type }))
 }
 
+/// 模考场次列表：mode='exam' 按 detail.exam_id 聚合（供 /exam 准备页「最近模考」）。
+/// 流水天然进同步链（records 段）；题被删则级联清除，场次随之收敛，无需额外表。
+#[tauri::command]
+pub fn exam_sessions(limit: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(exam_sessions_impl(&conn, limit)?)
+}
+
+pub(crate) fn exam_sessions_impl(conn: &Connection, limit: Option<u64>) -> Result<Value, String> {
+    let limit = limit.unwrap_or(10).clamp(1, 50) as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT json_extract(detail_json, '$.exam_id') AS exam_id,
+                    MIN(answered_at) AS started_at, MAX(answered_at) AS ended_at,
+                    COUNT(*) AS item_count, COALESCE(SUM(correct), 0) AS correct_count,
+                    COALESCE(SUM(CAST(json_extract(detail_json, '$.score_earned') AS REAL)), 0) AS score,
+                    COALESCE(SUM(CAST(json_extract(detail_json, '$.full_score') AS REAL)), 0) AS full_score
+             FROM practice_records
+             WHERE mode = 'exam' AND detail_json IS NOT NULL
+               AND json_extract(detail_json, '$.exam_id') IS NOT NULL
+             GROUP BY exam_id
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )
+        .map_err(to_str)?;
+    let mut rows = stmt.query(params![limit]).map_err(to_str)?;
+    let mut items = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        items.push(json!({
+            "exam_id": row.get::<_, String>(0).map_err(to_str)?,
+            "started_at": row.get::<_, String>(1).map_err(to_str)?,
+            "ended_at": row.get::<_, String>(2).map_err(to_str)?,
+            "item_count": row.get::<_, i64>(3).map_err(to_str)?,
+            "correct_count": row.get::<_, i64>(4).map_err(to_str)?,
+            "score": row.get::<_, f64>(5).map_err(to_str)?,
+            "full_score": row.get::<_, f64>(6).map_err(to_str)?,
+        }));
+    }
+    Ok(json!({ "items": items }))
+}
+
 /// 批量导入：一次调用入库多题（文件导入用）。逐条独立成功/跳过/失败，可重入（库内 plain_text 完全一致视为重复跳过）。
 /// 返回 {batch_id, items:[{index,status:'inserted'|'duplicate'|'error',id?,message?}]}
 #[tauri::command]
@@ -838,6 +879,51 @@ mod tests {
         answer(&mut conn, "q_e_1", "practice", "again", "2026-09-10T14:00:00.000Z");
         let w3 = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
         assert_eq!(w3["total"], 1);
+    }
+
+    #[test]
+    fn exam_sessions_aggregates_by_exam_id() {
+        // 场次反查：mode='exam' 流水按 detail.exam_id 聚合，最近在前；无 exam_id 的流水不进列表
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_x");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rec = |exam_id: &str, earned: f64, full: f64, correct: i64, at: &str| {
+            conn.execute(
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at)
+                 VALUES (?1, 'q_x', 'exam', 'good', ?2, ?3, ?4, ?3)",
+                params![
+                    generate_id(),
+                    correct,
+                    at,
+                    format!("{{\"exam_id\":\"{exam_id}\",\"score_earned\":{earned},\"full_score\":{full}}}"),
+                ],
+            )
+            .unwrap();
+        };
+        rec("e1", 5.0, 5.0, 1, "2026-09-15T10:00:00.000Z");
+        rec("e1", 0.0, 5.0, 0, "2026-09-15T10:05:00.000Z");
+        rec("e2", 2.0, 5.0, 0, "2026-09-16T10:00:00.000Z");
+        // 无 exam_id 的 exam 流水（异常数据）不进列表
+        conn.execute(
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at)
+             VALUES (?1, 'q_x', 'exam', 'good', 1, '2026-09-17T10:00:00.000Z', '2026-09-17T10:00:00.000Z')",
+            params![generate_id()],
+        )
+        .unwrap();
+        let v = exam_sessions_impl(&conn, None).unwrap();
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["exam_id"], "e2");
+        assert_eq!(items[1]["exam_id"], "e1");
+        assert_eq!(items[1]["item_count"], 2);
+        assert_eq!(items[1]["correct_count"], 1);
+        assert_eq!(items[1]["score"], 5.0);
+        assert_eq!(items[1]["full_score"], 10.0);
+        assert_eq!(items[1]["started_at"], "2026-09-15T10:00:00.000Z");
+        let limited = exam_sessions_impl(&conn, Some(1)).unwrap();
+        assert_eq!(limited["items"].as_array().unwrap().len(), 1);
     }
 
     #[test]
