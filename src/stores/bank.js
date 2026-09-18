@@ -19,7 +19,7 @@ export function bankExists(id) {
   return !!id && bankStore.banks.some((b) => b.id === id)
 }
 
-// 各页题库筛选记忆（设置 rememberBankFilter 开启时才用；page = list/practice/review/wrong/create）
+// 各页题库筛选记忆（设置 rememberBankFilter 开启时才用；page = list/practice/review/wrong/create/exam）
 const FILTER_KEY_PREFIX = 'qbank.bankFilter.'
 export function loadBankFilter(page) {
   try {

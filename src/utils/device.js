@@ -15,6 +15,11 @@ function randomId() {
 
 let cached = null
 
+// 通用 UUID（模考记录/场次 id 等客户端幂等场景，非设备身份）
+export function randomUUID() {
+  return randomId()
+}
+
 export function getDeviceId() {
   if (cached) return cached
   try {

@@ -232,6 +232,7 @@ import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
+import { fillBlankCorrect } from '@/utils/grading.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 import { ui } from '@/stores/ui.js'
@@ -547,9 +548,7 @@ function gradeItem(it) {
     if (!blanks.length) return { valid: false, message: '题目缺少答案（blank）' }
     const results = blanks.map((b) => {
       const raw = (fillValues[b.id] || '').trim()
-      const norm = raw.toLowerCase()
-      const correct = (b.answers || []).some((a) => String(a).trim().toLowerCase() === norm)
-      return { id: b.id, value: raw, correct }
+      return { id: b.id, value: raw, correct: fillBlankCorrect(b, raw) }
     })
     return { valid: true, correct: results.every((r) => r.correct), results }
   }
