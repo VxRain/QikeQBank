@@ -169,7 +169,8 @@ VALUES ('bank_default', '默认题库', NULL,
         '1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z',
         strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
--- S2 种子库元信息（幂等）：db_uuid / schema_version='3' / created_at / sync_cursor_server_time（游标，同步时更新）
+-- S2 种子库元信息（幂等）：db_uuid / schema_version='3' / created_at / sync_clock（单调接收时钟，
+--    由 next_sync_stamp 维护；旧库首次 init 以 MAX(synced_at) 校准）
 ```
 
 - 连接设置：`PRAGMA foreign_keys=ON`、`PRAGMA journal_mode=WAL`。
@@ -198,15 +199,21 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；本地编辑刷新 `updated_at` **和** `synced_at`；其余不变（**apply 路径禁止复用此函数**，走原生 gated upsert，防来源戳被洗） |
 | `questions_get` / `questions_remove` | `questions_remove(id, actor?)`：单题墓碑 UPSERT + `DELETE` 同事务；不存在 Err("Not Found") | 不变 |
 
-**设置与同步（v3 新增 5 个）**
+**设置与同步（v3 新增 5 个 + 全量重建 1 个 + 资产通道 3 个）**
 
 | command | 参数 | 返回 |
 |---|---|---|
 | `settings_get` | — | `{success:true, data:[{key, value_json, updated_at}]}`（仅显式设置过的键） |
 | `settings_set` | `items: [{key, value_json}]` | 校验 JSON 合法；同一批同一戳 UPSERT；返回 `{updated:[keys], updated_at}` |
-| `sync_pull` | `since?: String`（缺省全量） | 先 GC 墓碑 → 取 `server_time` → 增量 `(since, server_time]` + 全量表 + 墓碑 + `tombstone_floor`；持久化游标。返回 `{server_time, tombstone_floor, bundle}` |
-| `sync_push` | `bundle`（`{device_id, banks[], questions[], records[], review_state[], wrong_dismiss[], settings[], tombstones[]}`） | 中心 `apply_bundle(role=Center)`：两阶段预裁决→落库（LWW/墓碑/零库守卫/地平线守卫/钳制）。返回 `{applied, skipped, dropped_orphans, conflicts}` |
-| `sync_apply_snapshot` | `bundle` | 叶子落快照：`apply_bundle(role=Leaf)`（`>=` 采纳中心，保留 `synced_at`） |
+| `sync_pull` | `since?: String`（缺省全量） | GC 墓碑 → 取单调边界 `server_time` → 校验游标：`since < tombstone_floor`（已 GC 的删除永远学不到）或 `since > server_time`（游标损坏/来自未来）→ `{full_resync_required:true, server_time:null, tombstone_floor, bundle:null}`，**不落游标**；否则增量 `(since, server_time]`（banks/questions/records/wrong_dismiss/tombstones）+ 全量 review_state/settings。正常返回 `{full_resync_required:false, server_time, tombstone_floor, bundle}`（`bundle.full=true` 表示全量，可配合 `sync_replace_snapshot`）。**游标由调用方持有**（`server_time`），中心不落库，多设备互不覆盖 |
+| `sync_push` | `bundle`（`{device_id, banks[], questions[], records[], review_state[], wrong_dismiss[], settings[], tombstones[]}`） | 中心 `apply_bundle(role=Center)`：两阶段预裁决→落库（LWW/墓碑/零库守卫/地平线守卫/钳制）；本批所有 `synced_at` 统一改写为单调接收戳。返回 `{applied, skipped, dropped_orphans, conflicts}` |
+| `sync_apply_snapshot` | `bundle` | 叶子落快照：`apply_bundle(role=Leaf)`（`>=` 采纳中心，保留 `synced_at`；commit 后校准本机 `sync_clock`） |
+| `sync_replace_snapshot` | `bundle`（必须 `full=true` 且 `banks` 非空） | **全量重建**：单事务内清空本地同步表（banks/questions/records/review_state/wrong_dismiss/delete_log/app_settings）→ `apply_bundle(role=Leaf)`；assets / db_meta 保留；commit 后校准时钟。用于 `sync_pull` 返回 `full_resync_required:true` 的恢复路径 |
+| `sync_assets_missing` | — | 扫描全库题面 `asset:<sha>` 引用，返回 `{total, items:[{sha, question_ids}]}`（登记行或文件缺失均算缺；接收方 apply 后调用） |
+| `sync_assets_pull` | `shas: string[]`（≤200）, `max_bytes?` | 源端取 blob：默认 32MB、上限 64MB 预算；逐条复核 sha256。返回 `{items:[{sha,mime,size,data_b64}], skipped:[{sha,reason}], total_bytes}` |
+| `sync_assets_push` | `items:[{sha,mime,data_b64,width?,height?}]`（≤200） | 目标端落 blob：base64 解码 + sha256 校验（不符拒收）→ 内容寻址入库（同内容幂等跳过）。返回 `{imported, skipped, errors:[{sha,reason}]}` |
+
+**接收时钟（数据保全不变量）**：`synced_at` 不取墙钟，统一由 `next_sync_stamp`（`db_meta.sync_clock`）单调发放：`max(now_ms, last+1ms)`。旧库首次 `init_schema` 以各表 `MAX(synced_at)` 校准；叶子落快照、JSON 导入后同样校准。因此中心墙钟回拨/VM 快照恢复不会让新行落在客户端游标之前（旧实现会永久漏行）。
 
 **刷题/复习/统计（bank 可选过滤）**
 
@@ -279,8 +286,15 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 ```js
 settingsGet()  → cmd('settings_get') → [{key,value_json,updated_at}]
 settingsSet(items) → cmd('settings_set',{items}) → {updated,updated_at}
-syncPull(since?) / syncPush(bundle) / syncApplySnapshot(bundle)
+syncPull(since?) → {full_resync_required, server_time, tombstone_floor, bundle|null}
+syncPush(bundle) / syncApplySnapshot(bundle)
+syncReplaceSnapshot(bundle) → 全量重建（仅 full=true 且 banks 非空的 bundle）
+syncAssetsMissing() → {total, items:[{sha, question_ids}]}
+syncAssetsPull(shas, maxBytes?) → {items:[{sha,mime,size,data_b64}], skipped, total_bytes}
+syncAssetsPush(items) → {imported, skipped, errors}
 ```
+
+> 同步客户端循环：`pull → apply(若 full_resync_required 则用 since=null 重拉全量，再 syncReplaceSnapshot) → syncAssetsMissing → 对缺图 sha 调源端 syncAssetsPull → syncAssetsPush`。游标存调用方（`server_time`），不要复用其他设备的游标。apply / replace 成功后前端需重新 `loadBanks()` 与 `hydrateFromDb()`（stores 是缓存，DB 为准）。
 
 ### stores/settings.js（v3：键分裂 + 注水守卫）
 进库同步：`fsrs.*`（6 键）+ `wrongLeaveAfterCorrect`；留本机：编辑偏好/自动下一题/筛选记忆。localStorage 只做写透缓存。`hydrateFromDb()` 启动调用一次、每次同步 pull-apply 后调用一次；注水期 watch 禁写（防脏时间戳）。

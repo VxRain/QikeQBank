@@ -144,7 +144,7 @@ export const SEED_EPOCH = '1970-01-01T00:00:00.000Z';
  * PLAN.md §3.2 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
  *   S1 条件种子默认库 —— delete_log 有 bank_default 墓碑则跳过（防复活）；
  *        业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）；
- *   S2 db_meta —— db_uuid / schema_version='3' / created_at（INSERT OR IGNORE）。
+ *   S2 db_meta —— db_uuid / schema_version='3' / created_at / sync_clock（INSERT OR IGNORE）。
  */
 export function seedV3(db) {
   const tomb = db.prepare("SELECT 1 AS t FROM delete_log WHERE entity_type = 'bank' AND entity_id = 'bank_default'").get();
@@ -156,6 +156,8 @@ export function seedV3(db) {
   db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('db_uuid', ?)").run(uuid);
   db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('schema_version', '3')").run();
   db.prepare('INSERT OR IGNORE INTO db_meta (key, value) VALUES (?, ?)').run('created_at', now);
+  // 单调接收时钟：应用侧 next_sync_stamp 从该值继续；墙钟回拨不会让新行落到游标之前。
+  db.prepare('INSERT OR IGNORE INTO db_meta (key, value) VALUES (?, ?)').run('sync_clock', now);
 }
 const QUESTION_TYPES = ['single', 'multi', 'judge', 'fill', 'short', 'material'];
 const nowISO = () => new Date().toISOString();

@@ -4,7 +4,7 @@ use super::banks::{list_all_banks, resolve_default_bank};
 use super::questions::{aggregated_plain_text, query_questions, upsert_question, SELECT_FIELDS};
 use super::schema::seed_default_bank;
 use super::sync::{tombstone_row, TOMBSTONE_FIELDS};
-use super::{data_root, db_meta_value, generate_id, now_iso, ok, to_str, AppState};
+use super::{data_root, db_meta_value, fmt_iso, generate_id, next_sync_stamp, now_iso, ok, refresh_sync_clock, to_str, AppState};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -186,7 +186,8 @@ pub(crate) fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Va
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .unwrap_or(&fallback);
-        let now = now_iso();
+        // synced_at 走单调接收时钟：导入行不得因源库时钟偏差而落在游标之前。
+        let stamp = next_sync_stamp(&tx)?;
         tx.execute(
             "INSERT INTO banks (id, name, description, created_at, updated_at, synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
@@ -194,7 +195,7 @@ pub(crate) fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Va
                description = excluded.description,
                updated_at = excluded.updated_at,
                synced_at = excluded.synced_at",
-            params![id, name, description, created_at, updated_at, now],
+            params![id, name, description, created_at, updated_at, stamp],
         )
         .map_err(to_str)?;
         banks_imported += 1;
@@ -229,10 +230,20 @@ pub(crate) fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Va
             q["bank_id"] = json!(bid);
         }
         q["plain_text"] = json!(aggregated_plain_text(&q));
-        // v2/v3 行缺 synced_at：落库填 now（§7.4 新列填充）
-        if q.get("synced_at").and_then(Value::as_str).is_none_or(|s| s.is_empty()) {
-            q["synced_at"] = json!(now_iso());
-        }
+        // synced_at：缺省/非法 → 单调接收戳；合法 → 归一化为毫秒 UTC
+        //（保证 MAX(synced_at) 与游标比较的字符串序等价于时间序）。
+        let stamp = match q
+            .get("synced_at")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            Some(s) => match DateTime::parse_from_rfc3339(s) {
+                Ok(d) => fmt_iso(d.with_timezone(&Utc)),
+                Err(_) => next_sync_stamp(&tx)?,
+            },
+            None => next_sync_stamp(&tx)?,
+        };
+        q["synced_at"] = json!(stamp);
         upsert_question(&tx, &q)?;
         imported += 1;
     }
@@ -259,6 +270,8 @@ pub(crate) fn import_dbjson_impl(conn: &mut Connection, text: &str) -> Result<Va
         }
     }
     tx.commit().map_err(to_str)?;
+    // 源库时钟可能快于本机：校准接收时钟，避免已导入行被后续游标跳过。
+    refresh_sync_clock(conn)?;
     Ok(json!({ "imported": imported, "banks_imported": banks_imported, "settings_imported": settings_imported }))
 }
 
@@ -327,6 +340,8 @@ mod tests {
             .query_row("SELECT synced_at FROM questions WHERE id = 'q_imp_2'", [], |r| r.get(0))
             .unwrap();
         assert!(!synced.is_empty());
+        assert_eq!(synced.len(), 24, "synced_at 归一化为毫秒 UTC: {synced}");
+        assert!(synced.ends_with('Z'));
         let bsynced: String = conn2
             .query_row("SELECT synced_at FROM banks WHERE id = 'bank_default'", [], |r| r.get(0))
             .unwrap();
@@ -369,6 +384,30 @@ mod tests {
         let renamed = banks3.iter().find(|b| b["id"] == bid).unwrap();
         assert_eq!(renamed["name"], "题库D改名");
         assert_eq!(renamed["description"], "new desc");
+    }
+
+    #[test]
+    fn import_normalizes_provided_synced_at() {
+        // 非规范时间串（无毫秒）归一化后才能参与 MAX/游标字符串比较
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        init_schema(&conn).unwrap();
+        let doc = json!({
+            "version": 4,
+            "questions": [{
+                "id": "q_fmt",
+                "type": "single",
+                "stem": {"type":"doc","content":[]},
+                "created_at": "2026-09-01T00:00:00.000Z",
+                "updated_at": "2026-09-01T00:00:00.000Z",
+                "synced_at": "2026-09-18T00:00:00Z"
+            }]
+        });
+        import_dbjson_impl(&mut conn, &serde_json::to_string(&doc).unwrap()).unwrap();
+        let s: String = conn
+            .query_row("SELECT synced_at FROM questions WHERE id = 'q_fmt'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(s, "2026-09-18T00:00:00.000Z");
     }
 
 }

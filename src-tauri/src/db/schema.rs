@@ -2,9 +2,10 @@
 //! + 条件种子 + v3 守卫。
 //!
 //! 双时钟语义：业务时间（updated_at/answered_at/deleted_at/dismissed_at）只用于 LWW；
-//! synced_at 只用于增量过滤与墓碑 GC。种子业务时间硬编码 epoch（防新设备播种被
-//! LWW 误判为新编辑），synced_at 取落库时间。
-use super::{generate_id, now_iso, to_str};
+//! synced_at 只用于增量过滤与墓碑 GC，且必须由 `next_sync_stamp`（db_meta.sync_clock）
+//! 单调发放——墙钟回拨不得让新行落到旧游标之前。种子业务时间硬编码 epoch（防新设备
+//! 播种被 LWW 误判为新编辑），synced_at 取单调接收时钟。
+use super::{generate_id, next_sync_stamp, now_iso, refresh_sync_clock, to_str};
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// 种子时间戳：预置行的业务时间硬编码 epoch，防止新设备播种被 LWW 误判为"用户刚刚创建的新编辑"。
@@ -133,16 +134,30 @@ pub(crate) fn seed_default_bank(conn: &Connection) -> Result<(), String> {
     if tombstoned {
         return Ok(());
     }
+    // 已存在则不产生任何写入（避免每次启动/导入都空推接收时钟）
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM banks WHERE id = ?1",
+            params![DEFAULT_BANK_ID],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(to_str)?
+        .unwrap_or(false);
+    if exists {
+        return Ok(());
+    }
+    let stamp = next_sync_stamp(conn)?;
     conn.execute(
         "INSERT OR IGNORE INTO banks (id, name, description, created_at, updated_at, synced_at)
          VALUES (?1, '默认题库', NULL, ?2, ?2, ?3)",
-        params![DEFAULT_BANK_ID, SEED_EPOCH, now_iso()],
+        params![DEFAULT_BANK_ID, SEED_EPOCH, stamp],
     )
     .map_err(|e| format!("seed default bank failed: {e}"))?;
     Ok(())
 }
 
-/// 种子库元信息（幂等）：库身份 / schema 版本 / 建库时间。
+/// 种子库元信息（幂等）：库身份 / schema 版本 / 建库时间 / 单调接收时钟。
 pub(crate) fn seed_db_meta(conn: &Connection) -> Result<(), String> {
     let now = now_iso();
     for (k, v) in [
@@ -156,6 +171,12 @@ pub(crate) fn seed_db_meta(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("seed db_meta failed: {e}"))?;
     }
+    // 旧库首次升级时 sync_clock 不存在：以现有数据最大 synced_at 校准，
+    // 避免历史行（可能来自时钟偏快的设备）被新游标跳过。
+    refresh_sync_clock(conn)?;
+    // 废弃的中心全局游标（游标改由调用方持有）：清掉残留键，防误用。
+    conn.execute("DELETE FROM db_meta WHERE key = 'sync_cursor_server_time'", [])
+        .map_err(to_str)?;
     Ok(())
 }
 

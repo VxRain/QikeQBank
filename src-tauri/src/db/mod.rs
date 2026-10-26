@@ -154,6 +154,78 @@ pub(crate) fn db_meta_value(conn: &Connection, key: &str) -> Result<Option<Strin
         .map_err(to_str)
 }
 
+// ---------------------------------------------------------------------------
+// 接收时钟（synced_at 的唯一来源）
+// ---------------------------------------------------------------------------
+// 双时钟语义：业务时间（updated_at/answered_at/deleted_at…）只用于 LWW 与展示；
+// synced_at 只用于增量游标与墓碑 GC。二者必须解耦，且接收时钟必须单调。
+//
+// 旧实现 `synced_at = now_iso()` 的缺陷：墙钟回拨后，新写入行的时间戳会落回
+// 客户端游标之前，增量拉取永远看不到它（永久漏行，且无法自愈）。这里把墙钟
+// “抬平”为 max(now, last + 1ms) 并持久化到 db_meta.sync_clock，保证同一库内
+// 所有接收时间戳严格递增；游标因此永远落在所有既有行之后。
+
+fn upsert_db_meta(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO db_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .map_err(to_str)?;
+    Ok(())
+}
+
+/// 取下一条接收时间戳：严格大于库内已发出的任何一条（含墙钟回拨场景）。
+/// 副作用：推进并持久化 db_meta.sync_clock；事务内调用随事务一起回滚，安全。
+pub(crate) fn next_sync_stamp(conn: &Connection) -> Result<String, String> {
+    let prev = db_meta_value(conn, "sync_clock")?
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&Utc));
+    let now = Utc::now();
+    // 截到毫秒：fmt_iso 只保留毫秒，带纳秒比较会让“同一毫秒内两次取戳”返回同一字符串。
+    let now = DateTime::from_timestamp_millis(now.timestamp_millis()).unwrap_or(now);
+    let next = match prev {
+        Some(p) if p >= now => p + Duration::milliseconds(1),
+        _ => now,
+    };
+    let stamp = fmt_iso(next);
+    upsert_db_meta(conn, "sync_clock", &stamp)?;
+    Ok(stamp)
+}
+
+/// 把接收时钟抬到 `candidate`（只升不降）。用于叶子落中心快照 / 文件导入后
+/// 校准：保证随后本地写入的 synced_at 仍然大于所有已落库行。
+pub(crate) fn bump_sync_clock(conn: &Connection, candidate: &str) -> Result<(), String> {
+    let cur = db_meta_value(conn, "sync_clock")?;
+    if cur.as_deref().is_none_or(|c| c < candidate) {
+        upsert_db_meta(conn, "sync_clock", candidate)?;
+    }
+    Ok(())
+}
+
+/// 以现有数据校准接收时钟：sync_clock = max(sync_clock, 各表 MAX(synced_at))。
+/// 旧库首次升级、叶子落快照、文件导入后调用，防止“未来时间戳行”被游标跳过。
+pub(crate) fn refresh_sync_clock(conn: &Connection) -> Result<(), String> {
+    let data_max: Option<String> = conn
+        .query_row(
+            "SELECT MAX(m) FROM (
+               SELECT MAX(synced_at) AS m FROM banks
+               UNION ALL SELECT MAX(synced_at) FROM questions
+               UNION ALL SELECT MAX(synced_at) FROM practice_records
+               UNION ALL SELECT MAX(synced_at) FROM delete_log
+               UNION ALL SELECT MAX(synced_at) FROM wrong_dismiss
+             )",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(to_str)?;
+    match data_max {
+        Some(m) if !m.is_empty() => bump_sync_clock(conn, &m),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,8 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn command_envelopes_wrap_impl_results() {
-        // 回归：wrapper 必须包 {success,data} 信封（曾因 impl 重构漏包导致前端 res.data=undefined）
+    fn command_envelopes_wrap_impl_results() {        // 回归：wrapper 必须包 {success,data} 信封（曾因 impl 重构漏包导致前端 res.data=undefined）
         let conn = test_conn();
         let st = review_stats_impl(&conn, None).unwrap();
         assert!(st.get("total").is_some());
@@ -302,6 +373,29 @@ mod tests {
         let stats_def = review_stats_impl(&conn, Some("bank_default".to_string())).unwrap();
         assert_eq!(stats_def["practiced_total"], 0);
         assert_eq!(stats_def["correct_rate"], Value::Null);
+    }
+
+    #[test]
+    fn sync_stamp_is_monotonic_under_clock_rollback() {
+        let conn = test_conn();
+        let a = next_sync_stamp(&conn).unwrap();
+        let b = next_sync_stamp(&conn).unwrap();
+        assert!(b > a, "接收时间戳必须严格递增: {a} -> {b}");
+        // 模拟墙钟曾跳到未来后又回拨：把 sync_clock 抬到 2 小时后
+        let future = fmt_iso(Utc::now() + Duration::hours(2));
+        conn.execute(
+            "UPDATE db_meta SET value = ?1 WHERE key = 'sync_clock'",
+            params![future],
+        )
+        .unwrap();
+        let c = next_sync_stamp(&conn).unwrap();
+        assert!(c > future, "回拨后新行必须仍排在旧游标之后: {future} -> {c}");
+        // refresh 只升不降
+        refresh_sync_clock(&conn).unwrap();
+        let after = db_meta_value(&conn, "sync_clock").unwrap().unwrap();
+        assert!(after >= c);
+        bump_sync_clock(&conn, "2000-01-01T00:00:00.000Z").unwrap();
+        assert_eq!(db_meta_value(&conn, "sync_clock").unwrap().unwrap(), after);
     }
 
 }

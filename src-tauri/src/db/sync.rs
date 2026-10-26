@@ -5,16 +5,28 @@
 //! - LWW 中心权威：Center 严格 > 覆盖（并列保留现有），Leaf >= 采纳中心快照；
 //! - 墓碑是带时间戳的变更，参与 LWW（deleted_at >= updated_at 删除赢，否则编辑赢并物理淘汰墓碑）；
 //! - 两阶段 apply：Phase A 纯内存预裁决（存活集/零库守卫/地平线守卫），Phase B 单事务落库；
-//! - synced_at 中心写入重写、叶子 apply 保留（签名即防呆）。
+//! - synced_at 由 next_sync_stamp 单调发放（db_meta.sync_clock）：中心写入重写、
+//!   叶子 apply 保留（归一化为毫秒 UTC）并在 commit 后校准本机时钟。
+use super::assets::{
+    asset_file_present, asset_mime_ext, asset_path_for, asset_registry_get, assets_put_bytes_impl,
+    ensure_assets_dir, is_asset_sha, scan_question_asset_refs, sha256_hex, ASSET_MAX_BYTES,
+};
 use super::practice::{record_content_eq, validate_fsrs_card, IncomingRecordRow, StoredRecordRow, FsrsCard};
 use super::questions::{extract_fields, parse_json_opt};
 use super::schema::DEFAULT_BANK_ID;
-use super::{clamp_business_time, db_meta_value, fmt_iso, generate_id, now_iso, ok, to_str, AppState};
+use super::{
+    clamp_business_time, db_meta_value, fmt_iso, generate_id, next_sync_stamp, now_iso, ok,
+    refresh_sync_clock, to_str, AppState,
+};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
-use tauri::State;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use tauri::{AppHandle, State};
+
+use base64::Engine as _;
 pub(crate) fn write_tombstone(
     tx: &rusqlite::Transaction,
     entity_type: &str,
@@ -23,7 +35,8 @@ pub(crate) fn write_tombstone(
     deleted_at: &str,
     actor: Option<&str>,
 ) -> Result<(), String> {
-    write_tombstone_tx(tx, entity_type, entity_id, bank_id, deleted_at, actor, &now_iso())
+    let stamp = next_sync_stamp(tx)?;
+    write_tombstone_tx(tx, entity_type, entity_id, bank_id, deleted_at, actor, &stamp)
 }
 
 /// 题目存活检查（运行时路径）：行存在且无墓碑。单机不变式保证二者不共存，
@@ -74,11 +87,24 @@ pub(crate) const TOMBSTONE_FIELDS: &str =
     "entity_type, entity_id, bank_id, deleted_at, actor, synced_at";
 
 /// 增量导出（对称原语）：返回 (bundle, server_time)。
-/// server_time 在快照起点取值；增量为左开右闭 (since, server_time]。
-/// bundle 形状复用 v4 item（questions 为前端形态 + synced_at）。
+/// server_time 取自单调接收时钟（严格大于库内任何已落库 synced_at）；
+/// 增量为左开右闭 (since, server_time]。bundle 形状复用 v4 item（questions 为前端形态 + synced_at）。
+///
+/// 命令路径走 `export_delta_at`（先判定 stale cursor）；本函数保留为对称原语/测试入口。
+#[allow(dead_code)]
 pub fn export_delta(conn: &Connection, since: Option<&str>) -> Result<(Value, String), String> {
-    let server_time = now_iso();
+    let server_time = next_sync_stamp(conn)?;
+    Ok((export_delta_at(conn, since, &server_time)?, server_time))
+}
+
+/// 以调用方给定的边界导出（sync_pull 先判定 stale cursor，再读数据，避免无谓扫描）。
+pub(crate) fn export_delta_at(
+    conn: &Connection,
+    since: Option<&str>,
+    server_time: &str,
+) -> Result<Value, String> {
     let since = since.unwrap_or("");
+    let full = since.is_empty();
     // banks
     let mut stmt = conn
         .prepare(
@@ -189,11 +215,11 @@ pub fn export_delta(conn: &Connection, since: Option<&str>) -> Result<(Value, St
     let mut stmt = conn
         .prepare(
             "SELECT question_id, is_dismissed, updated_at, dismissed_at, synced_at
-             FROM wrong_dismiss ORDER BY question_id ASC",
+             FROM wrong_dismiss WHERE synced_at > ?1 AND synced_at <= ?2 ORDER BY question_id ASC",
         )
         .map_err(to_str)?;
     let wrong_dismiss = stmt
-        .query_map([], |r| {
+        .query_map(params![since, server_time], |r| {
             Ok(json!({
                 "question_id": r.get::<_, String>(0)?,
                 "is_dismissed": r.get::<_, i64>(1)?,
@@ -232,6 +258,8 @@ pub fn export_delta(conn: &Connection, since: Option<&str>) -> Result<(Value, St
         .collect::<Result<Vec<_>, _>>()
         .map_err(to_str)?;
     let bundle = json!({
+        // full=true 时才是可用于 replace_snapshot 的全量快照（增量 bundle 无此标记）
+        "full": full,
         "banks": banks,
         "questions": questions,
         "records": records,
@@ -240,7 +268,7 @@ pub fn export_delta(conn: &Connection, since: Option<&str>) -> Result<(Value, St
         "settings": settings,
         "tombstones": tombstones,
     });
-    Ok((bundle, server_time))
+    Ok(bundle)
 }
 
 // ---------------------------------------------------------------------------
@@ -307,15 +335,67 @@ pub(crate) struct InTomb {
     synced_at: String,
 }
 
-/// 两阶段 apply（对称原语）。Phase A 纯内存预裁决，Phase B 单事务落库。
+/// 两阶段 apply（对称原语）。Phase A 纯内存预裁决，Phase B 落库（调用方事务）。
 /// 中心接收 push 用 role=Center；叶子落中心快照用 role=Leaf。
 pub fn apply_bundle(
     conn: &mut Connection,
     bundle: &Value,
     role: SyncRole,
 ) -> Result<Value, String> {
+    let tx = conn.transaction().map_err(to_str)?;
+    let res = apply_bundle_tx(&tx, bundle, role, false)?;
+    tx.commit().map_err(to_str)?;
+    if role == SyncRole::Leaf {
+        // 中心时间戳可能领先本机（时钟偏差）：校准接收时钟，
+        // 否则随后本地写入的 synced_at 会落在已应用行之前，被下次增量跳过。
+        refresh_sync_clock(conn)?;
+    }
+    Ok(res)
+}
+
+/// 全量快照替换：清空本地同步表后应用中心全量 bundle（同一事务，失败整体回滚）。
+/// 仅接受 `full=true` 且 banks 非空的 bundle（防误清库）；assets/db_meta 保留。
+/// 用于 `sync_pull` 返回 `full_resync_required:true` 后的恢复路径。
+pub fn replace_snapshot(conn: &mut Connection, bundle: &Value) -> Result<Value, String> {
+    if bundle.get("full").and_then(Value::as_bool) != Some(true) {
+        return Err("仅接受全量快照（sync_pull 不带 since 的 bundle）".into());
+    }
+    if bundle_arr(bundle, "banks").is_empty() {
+        return Err("全量快照缺少 banks，拒绝清空本地库".into());
+    }
+    let tx = conn.transaction().map_err(to_str)?;
+    let res = apply_bundle_tx(&tx, bundle, SyncRole::Leaf, true)?;
+    tx.commit().map_err(to_str)?;
+    refresh_sync_clock(conn)?;
+    Ok(res)
+}
+
+/// 清空参与同步的业务表（保留 assets / db_meta / schema）。按外键依赖顺序删。
+fn wipe_synced_tables(tx: &Connection) -> Result<(), String> {
+    tx.execute_batch(
+        "DELETE FROM wrong_dismiss;
+         DELETE FROM review_state;
+         DELETE FROM practice_records;
+         DELETE FROM delete_log;
+         DELETE FROM app_settings;
+         DELETE FROM questions;
+         DELETE FROM banks;",
+    )
+    .map_err(to_str)?;
+    Ok(())
+}
+
+fn apply_bundle_tx(
+    tx: &Connection,
+    bundle: &Value,
+    role: SyncRole,
+    mirror: bool,
+) -> Result<Value, String> {
+    if mirror {
+        wipe_synced_tables(tx)?;
+    }
     let device_id = bv_str(bundle, "device_id");
-    let floor = tombstone_floor(conn)?;
+    let floor = tombstone_floor(tx)?;
     let is_zombie = |t: &str| -> bool {
         match &floor {
             None => false,
@@ -326,7 +406,7 @@ pub fn apply_bundle(
     // ---- 本地快照 ----
     let mut local_banks: HashMap<String, String> = HashMap::new();
     {
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare("SELECT id, updated_at FROM banks")
             .map_err(to_str)?;
         let rows = stmt
@@ -339,7 +419,7 @@ pub fn apply_bundle(
     }
     let mut local_questions: HashMap<String, (String, Option<String>)> = HashMap::new();
     {
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare("SELECT id, updated_at, bank_id FROM questions")
             .map_err(to_str)?;
         let rows = stmt
@@ -358,7 +438,7 @@ pub fn apply_bundle(
     }
     let mut local_tombs: HashMap<(String, String), InTomb> = HashMap::new();
     {
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare("SELECT entity_type, entity_id, deleted_at, bank_id, actor, synced_at FROM delete_log")
             .map_err(to_str)?;
         let rows = stmt
@@ -422,7 +502,7 @@ pub fn apply_bundle(
                     bank_id: bv_str(&t, "bank_id"),
                     deleted_at,
                     actor: bv_str(&t, "actor").or_else(|| device_id.clone()),
-                    synced_at: bv_str(&t, "synced_at").unwrap_or_else(now_iso),
+                    synced_at: bv_str(&t, "synced_at").unwrap_or_default(),
                 },
             );
         }
@@ -689,9 +769,11 @@ pub fn apply_bundle(
         write_banks.remove(bid);
     }
 
-    // ---- Phase B 落库（单事务） ----
-    let tx = conn.transaction().map_err(to_str)?;
-    let now = now_iso();
+    // ---- Phase B 落库（调用方事务内） ----
+    let wall = now_iso();
+    // Center：本次 apply 统一发放一个单调接收戳；
+    // Leaf：保留中心自带的 synced_at（签名即防呆），仅在缺失时用本地戳补位。
+    let batch_stamp = next_sync_stamp(tx)?;
     let mut applied = json!({"banks": 0, "questions": 0, "records": 0, "review_state": 0, "wrong_dismiss": 0, "settings": 0, "tombstones": 0});
     let mut skipped: i64 = 0;
     let mut dropped_orphans: i64 = 0;
@@ -701,15 +783,20 @@ pub fn apply_bundle(
     };
     let sync_stamp = |bundle_val: Option<String>| -> String {
         match role {
-            SyncRole::Center => now.clone(),
-            SyncRole::Leaf => bundle_val.unwrap_or_else(|| now.clone()),
+            SyncRole::Center => batch_stamp.clone(),
+            // Leaf：保留中心时间戳，但归一化为毫秒 UTC（非规范格式会让 MAX/游标比较失真）
+            SyncRole::Leaf => bundle_val
+                .filter(|s| !s.is_empty())
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|d| fmt_iso(d.with_timezone(&Utc)))
+                .unwrap_or_else(|| batch_stamp.clone()),
         }
     };
     // 1. banks gated upsert
     for (id, b) in &write_banks {
         let name = bv_str(b, "name").unwrap_or_default();
         let description = b.get("description").and_then(Value::as_str).map(|s| s.to_string());
-        let created = bv_str(b, "created_at").unwrap_or_else(|| now.clone());
+        let created = bv_str(b, "created_at").unwrap_or_else(|| wall.clone());
         let updated = norm_incoming_time(b, "updated_at")?;
         let synced = sync_stamp(bv_str(b, "synced_at"));
         let sql = format!(
@@ -729,7 +816,7 @@ pub fn apply_bundle(
             let u = norm_incoming_time(q, "updated_at")?;
             let n = tx.execute(
                 "UPDATE questions SET bank_id = ?1, updated_at = ?2, synced_at = ?3 WHERE id = ?4",
-                params![fb, u, now, id],
+                params![fb, u, sync_stamp(None), id],
             ).map_err(to_str)?;
             applied["questions"] = json!(applied["questions"].as_i64().unwrap_or(0) + n as i64);
             continue;
@@ -766,23 +853,23 @@ pub fn apply_bundle(
     }
     for qid in &dead_questions {
         if let Some(t) = live_tombs.get(&("question".to_string(), qid.clone())) {
-            if tomb_already_logged(&tx, &t.entity_type, &t.entity_id, &t.deleted_at)? {
+            if tomb_already_logged(tx, &t.entity_type, &t.entity_id, &t.deleted_at)? {
                 skipped += 1; // 幂等：相同墓碑已落库，不刷新 synced（防回声重发）
                 continue;
             }
             let synced = sync_stamp(Some(t.synced_at.clone()));
-            write_tombstone_tx(&tx, &t.entity_type, &t.entity_id, t.bank_id.as_deref(), &t.deleted_at, t.actor.as_deref(), &synced)?;
+            write_tombstone_tx(tx, &t.entity_type, &t.entity_id, t.bank_id.as_deref(), &t.deleted_at, t.actor.as_deref(), &synced)?;
             applied["tombstones"] = json!(applied["tombstones"].as_i64().unwrap_or(0) + 1);
         }
     }
     for bid in &dead_banks {
         if let Some(t) = live_tombs.get(&("bank".to_string(), bid.clone())) {
-            if tomb_already_logged(&tx, &t.entity_type, &t.entity_id, &t.deleted_at)? {
+            if tomb_already_logged(tx, &t.entity_type, &t.entity_id, &t.deleted_at)? {
                 skipped += 1;
                 continue;
             }
             let synced = sync_stamp(Some(t.synced_at.clone()));
-            write_tombstone_tx(&tx, &t.entity_type, &t.entity_id, t.bank_id.as_deref(), &t.deleted_at, t.actor.as_deref(), &synced)?;
+            write_tombstone_tx(tx, &t.entity_type, &t.entity_id, t.bank_id.as_deref(), &t.deleted_at, t.actor.as_deref(), &synced)?;
             applied["tombstones"] = json!(applied["tombstones"].as_i64().unwrap_or(0) + 1);
         }
     }
@@ -966,7 +1053,7 @@ pub fn apply_bundle(
         ).map_err(to_str)?;
         applied["settings"] = json!(applied["settings"].as_i64().unwrap_or(0) + 1);
     }
-    tx.commit().map_err(to_str)?;
+    // 事务由 apply_bundle / replace_snapshot 统一提交；此处只返回统计。
     Ok(json!({
         "applied": applied,
         "skipped": skipped,
@@ -977,7 +1064,7 @@ pub fn apply_bundle(
 
 /// 墓碑幂等：同实体同 deleted_at 已落库则跳过（不刷新 synced，防回声重发）。
 pub(crate) fn tomb_already_logged(
-    tx: &rusqlite::Transaction,
+    tx: &Connection,
     entity_type: &str,
     entity_id: &str,
     deleted_at: &str,
@@ -994,8 +1081,9 @@ pub(crate) fn tomb_already_logged(
 }
 
 /// write_tombstone 的 synced_at 显式版（同步通道按 role 落库时间）。
+/// 接受 `&Connection`，调用方传 `&Transaction` 时自动 deref。
 pub(crate) fn write_tombstone_tx(
-    tx: &rusqlite::Transaction,
+    tx: &Connection,
     entity_type: &str,
     entity_id: &str,
     bank_id: Option<&str>,
@@ -1016,11 +1104,15 @@ pub(crate) fn write_tombstone_tx(
     .map_err(|e| format!("write tombstone failed: {e}"))?;
     Ok(())
 }
-/// 增量拉取（中心）：GC → server_time → floor → 读增量，顺序锁定（§8.2）。
-/// 附带持久化游标 db_meta.sync_cursor_server_time。
+/// 增量拉取（中心）：GC → 边界 → 地平线/游标合法性判定 → 读增量。
+/// 游标由调用方持有（返回值 server_time），中心不落库：多设备/多叶子各自独立。
 #[tauri::command]
 pub fn sync_pull(since: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
+    ok(sync_pull_impl(&conn, since)?)
+}
+
+pub(crate) fn sync_pull_impl(conn: &Connection, since: Option<String>) -> Result<Value, String> {
     // 1. 墓碑 GC（写操作先行）
     let gc_before = fmt_iso(Utc::now() - Duration::days(90));
     conn.execute(
@@ -1028,18 +1120,47 @@ pub fn sync_pull(since: Option<String>, state: State<'_, AppState>) -> Result<Va
         params![gc_before],
     )
     .map_err(to_str)?;
-    // 2-4. 快照起点 → floor → 增量读
-    let (bundle, server_time) = export_delta(&conn, since.as_deref())?;
-    let floor = tombstone_floor(&conn)?;
-    conn.execute(
-        "INSERT INTO db_meta (key, value) VALUES ('sync_cursor_server_time', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![server_time],
-    )
-    .map_err(to_str)?;
-    ok(json!({
-        "server_time": server_time,
+    // 2. 地平线 + 本次快照边界（单调接收时钟，严格大于库内所有行）
+    let floor = tombstone_floor(conn)?;
+    let server_time = next_sync_stamp(conn)?;
+    let since = since.as_deref().filter(|s| !s.trim().is_empty());
+    // 3. 游标合法性（按真实时间解析，不靠字符串比较；无法解析的游标一律全量）：
+    //    - 早于墓碑地平线 → 已 GC 的删除永远学不到（永久残留）；
+    //    - 晚于库内边界 → 游标损坏/来自未来（之后的写入会被跳过）。
+    let since_dt = since
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&Utc));
+    let server_dt = DateTime::parse_from_rfc3339(&server_time)
+        .map(|d| d.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+    let stale = match since {
+        None => false,
+        Some(_) => match since_dt {
+            None => true,
+            Some(d) => {
+                let before_floor = floor
+                    .as_deref()
+                    .and_then(|f| DateTime::parse_from_rfc3339(f).ok())
+                    .is_some_and(|f| d < f.with_timezone(&Utc));
+                before_floor || d > server_dt
+            }
+        },
+    };
+    if stale {
+        return Ok(json!({
+            "full_resync_required": true,
+            "tombstone_floor": floor,
+            "server_time": Value::Null,
+            "bundle": Value::Null,
+        }));
+    }
+    // 4. 增量读。游标由调用方持有（返回 server_time），中心不落库：
+    //    多设备/多叶子各自独立，不存在互相覆盖的全局游标键。
+    let bundle = export_delta_at(conn, since, &server_time)?;
+    Ok(json!({
+        "full_resync_required": false,
         "tombstone_floor": floor,
+        "server_time": server_time,
         "bundle": bundle,
     }))
 }
@@ -1051,11 +1172,196 @@ pub fn sync_push(bundle: Value, state: State<'_, AppState>) -> Result<Value, Str
     ok(apply_bundle(&mut conn, &bundle, SyncRole::Center)?)
 }
 
-/// 快照落库（叶子端：L2 桌面叶子与未来传输层用，v1 预留可测）：固定 role=Leaf。
+/// 快照落库（叶子端：保留中心 `synced_at`，commit 后校准本机时钟）。
 #[tauri::command]
 pub fn sync_apply_snapshot(bundle: Value, state: State<'_, AppState>) -> Result<Value, String> {
     let mut conn = state.0.lock().map_err(to_str)?;
     ok(apply_bundle(&mut conn, &bundle, SyncRole::Leaf)?)
+}
+
+/// 全量重建（叶子端）：清空本地同步表后应用全量快照，用于 stale cursor 恢复。
+/// 幂等：重复调用结果相同；assets/db_meta 保留。
+#[tauri::command]
+pub fn sync_replace_snapshot(bundle: Value, state: State<'_, AppState>) -> Result<Value, String> {
+    let mut conn = state.0.lock().map_err(to_str)?;
+    ok(replace_snapshot(&mut conn, &bundle)?)
+}
+
+// ---------------------------------------------------------------------------
+// 资产通道：内容寻址 blob 的传输与缺图清单（不参与 LWW，天然幂等）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AssetBlobItem {
+    pub sha: String,
+    pub mime: String,
+    pub data_b64: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+}
+
+/// 本机缺图清单：题面引用了、但登记行或文件缺失的 sha。
+/// 接收方 apply 完 bundle 后调用，把返回的 sha 交给源端 `sync_assets_pull`。
+#[tauri::command]
+pub fn sync_assets_missing(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    let root = ensure_assets_dir(&app)?;
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(sync_assets_missing_impl(&conn, &root)?)
+}
+
+pub(crate) fn sync_assets_missing_impl(conn: &Connection, root: &Path) -> Result<Value, String> {
+    let refs = scan_question_asset_refs(conn)?;
+    let mut by_sha: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (qid, sha) in refs {
+        let qids = by_sha.entry(sha).or_default();
+        if !qids.contains(&qid) {
+            qids.push(qid);
+        }
+    }
+    let mut items = Vec::new();
+    for (sha, qids) in by_sha {
+        if !asset_file_present(conn, root, &sha)? {
+            items.push(json!({ "sha": sha, "question_ids": qids }));
+        }
+    }
+    Ok(json!({ "total": items.len(), "items": items }))
+}
+
+/// 源端取 blob：返回 base64。单次最多 200 个、默认 32MB 预算（可调到 64MB）。
+#[tauri::command]
+pub fn sync_assets_pull(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    shas: Vec<String>,
+    max_bytes: Option<u64>,
+) -> Result<Value, String> {
+    let root = ensure_assets_dir(&app)?;
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(sync_assets_pull_impl(&conn, &root, shas, max_bytes)?)
+}
+
+pub(crate) fn sync_assets_pull_impl(
+    conn: &Connection,
+    root: &Path,
+    shas: Vec<String>,
+    max_bytes: Option<u64>,
+) -> Result<Value, String> {
+    if shas.len() > 200 {
+        return Err("一次最多拉取 200 个资源".into());
+    }
+    let budget = max_bytes.unwrap_or(32 * 1024 * 1024).min(64 * 1024 * 1024) as usize;
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+    let mut skipped = Vec::new();
+    let mut total = 0usize;
+    for sha in shas {
+        if !seen.insert(sha.clone()) {
+            continue;
+        }
+        if !is_asset_sha(&sha) {
+            skipped.push(json!({ "sha": sha, "reason": "bad-sha" }));
+            continue;
+        }
+        let Some((mime, size)) = asset_registry_get(conn, &sha)? else {
+            skipped.push(json!({ "sha": sha, "reason": "not-registered" }));
+            continue;
+        };
+        let Some(ext) = asset_mime_ext(&mime) else {
+            skipped.push(json!({ "sha": sha, "reason": "bad-mime" }));
+            continue;
+        };
+        let path = asset_path_for(root, &sha, ext)?;
+        if !path.exists() {
+            skipped.push(json!({ "sha": sha, "reason": "file-missing" }));
+            continue;
+        }
+        if total + size as usize > budget {
+            skipped.push(json!({ "sha": sha, "reason": "budget-exceeded" }));
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|e| format!("read asset failed: {e}"))?;
+        if sha256_hex(&bytes) != sha {
+            skipped.push(json!({ "sha": sha, "reason": "sha-mismatch" }));
+            continue;
+        }
+        // 登记 size 可能与实际文件不一致：以实际字节复核预算
+        if total + bytes.len() > budget {
+            skipped.push(json!({ "sha": sha, "reason": "budget-exceeded" }));
+            continue;
+        }
+        total += bytes.len();
+        items.push(json!({
+            "sha": sha,
+            "mime": mime,
+            "size": bytes.len() as i64,
+            "data_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+        }));
+    }
+    Ok(json!({ "items": items, "skipped": skipped, "total_bytes": total }))
+}
+
+/// 接收端落 blob：校验声明 sha 与内容一致后走内容寻址入库，重复即跳过。
+#[tauri::command]
+pub fn sync_assets_push(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    items: Vec<AssetBlobItem>,
+) -> Result<Value, String> {
+    let root = ensure_assets_dir(&app)?;
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(sync_assets_push_impl(&conn, &root, &items)?)
+}
+
+pub(crate) fn sync_assets_push_impl(
+    conn: &Connection,
+    root: &Path,
+    items: &[AssetBlobItem],
+) -> Result<Value, String> {
+    if items.len() > 200 {
+        return Err("一次最多推送 200 个资源".into());
+    }
+    let mut imported = 0i64;
+    let mut skipped = 0i64;
+    let mut errors = Vec::new();
+    let max_total = 64 * 1024 * 1024usize;
+    let mut total = 0usize;
+    for it in items {
+        if !is_asset_sha(&it.sha) {
+            errors.push(json!({ "sha": &it.sha, "reason": "bad-sha" }));
+            continue;
+        }
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(it.data_b64.trim()) {
+            Ok(b) => b,
+            Err(_) => {
+                errors.push(json!({ "sha": &it.sha, "reason": "bad-base64" }));
+                continue;
+            }
+        };
+        if bytes.len() > ASSET_MAX_BYTES {
+            errors.push(json!({ "sha": &it.sha, "reason": "too-large" }));
+            continue;
+        }
+        if total + bytes.len() > max_total {
+            errors.push(json!({ "sha": &it.sha, "reason": "budget-exceeded" }));
+            continue;
+        }
+        if sha256_hex(&bytes) != it.sha {
+            errors.push(json!({ "sha": &it.sha, "reason": "sha-mismatch" }));
+            continue;
+        }
+        match assets_put_bytes_impl(conn, root, &bytes, &it.mime, it.width, it.height) {
+            Ok((_, _, existed)) => {
+                total += bytes.len();
+                if existed {
+                    skipped += 1;
+                } else {
+                    imported += 1;
+                }
+            }
+            Err(e) => errors.push(json!({ "sha": &it.sha, "reason": e })),
+        }
+    }
+    Ok(json!({ "imported": imported, "skipped": skipped, "errors": errors }))
 }
 
 #[cfg(test)]
@@ -1488,6 +1794,326 @@ mod tests {
         );
         // 非法直接 Err
         assert!(clamp_business_time(Some("nope"), "updated_at").is_err());
+    }
+
+    // ================= 缺陷修复回归（数据丢失三类） =================
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("qbank-sync-test-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn export_after_clock_rollback_includes_new_row() {
+        // 回归：墙钟曾走到未来（游标已在 F），随后回拨。
+        // 旧实现新行 synced_at=now < F → 永远被游标跳过；新实现取单调时钟 F+1ms。
+        let conn = test_conn();
+        let f = fmt_iso(Utc::now() + Duration::hours(1));
+        conn.execute(
+            "UPDATE db_meta SET value = ?1 WHERE key = 'sync_clock'",
+            params![f],
+        )
+        .unwrap();
+        let mut q = sample_question();
+        q["id"] = json!("q_roll");
+        questions_create_impl(&conn, q).unwrap();
+        let stored: String = conn
+            .query_row("SELECT synced_at FROM questions WHERE id = 'q_roll'", [], |r| r.get(0))
+            .unwrap();
+        assert!(stored > f, "回拨后新行必须取单调戳: {stored} vs {f}");
+
+        let (bundle, server_time) = export_delta(&conn, Some(&f)).unwrap();
+        assert!(server_time > f);
+        let ids: Vec<&str> = bundle["questions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"q_roll"), "回拨后写入的行必须能被增量拉到");
+    }
+
+    #[test]
+    fn leaf_apply_advances_receive_clock() {
+        // 叶子落中心快照后，中心时间戳可能领先本机；本地新写必须排在其后
+        let mut conn = test_conn();
+        let future = fmt_iso(Utc::now() + Duration::hours(2));
+        let mut q = sync_q("q_leaf_future", "bank_default", "2026-09-10T00:00:00.000Z");
+        q["synced_at"] = json!(future);
+        let mut b = bundle("hub");
+        b["questions"] = json!([q]);
+        apply_bundle(&mut conn, &b, SyncRole::Leaf).unwrap();
+        let mut n = sample_question();
+        n["id"] = json!("q_local_after");
+        questions_create_impl(&conn, n).unwrap();
+        let stored: String = conn
+            .query_row("SELECT synced_at FROM questions WHERE id = 'q_local_after'", [], |r| r.get(0))
+            .unwrap();
+        assert!(stored > future, "叶子本地新写必须排中心时间戳之后: {stored} vs {future}");
+    }
+
+    #[test]
+    fn pull_requires_full_resync_for_stale_or_future_cursor() {
+        let conn = test_conn();
+        // 伪造老库（>90 天）→ 墓碑地平线生效
+        conn.execute(
+            "UPDATE db_meta SET value = '2026-01-01T00:00:00.000Z' WHERE key = 'created_at'",
+            [],
+        )
+        .unwrap();
+        assert!(tombstone_floor(&conn).unwrap().is_some());
+
+        // 1) 早于地平线：已 GC 的删除学不到 → 必须全量
+        let stale = sync_pull_impl(&conn, Some("2025-01-01T00:00:00.000Z".to_string())).unwrap();
+        assert_eq!(stale["full_resync_required"], json!(true));
+        assert!(stale["bundle"].is_null());
+        assert!(stale["tombstone_floor"].is_string());
+
+        // 2) 未来游标：后面的写入会被跳过 → 必须全量
+        let future = sync_pull_impl(&conn, Some("2999-01-01T00:00:00.000Z".to_string())).unwrap();
+        assert_eq!(future["full_resync_required"], json!(true));
+
+        // 3) 正常增量 / 全量
+        let now = fmt_iso(Utc::now());
+        let inc = sync_pull_impl(&conn, Some(now)).unwrap();
+        assert_eq!(inc["full_resync_required"], json!(false));
+        assert!(inc["bundle"].is_object());
+        let full = sync_pull_impl(&conn, None).unwrap();
+        assert_eq!(full["full_resync_required"], json!(false));
+        assert!(full["bundle"].is_object());
+
+        // 4) 中心不再落全局游标（游标由调用方持有，多设备互不覆盖）
+        assert!(db_meta_value(&conn, "sync_cursor_server_time").unwrap().is_none());
+    }
+
+    #[test]
+    fn center_leaf_roundtrip_cursor_edit_and_delete() {
+        // 双库端到端：全量 → 增量编辑 → 增量墓碑，游标始终由调用方持有
+        let mut center = test_conn();
+        let mut leaf = test_conn();
+        let b = banks_create_impl(&center, "同步库", None).unwrap();
+        let bid = b["id"].as_str().unwrap().to_string();
+        let mut q = sample_question();
+        q["id"] = json!("q_e2e");
+        q["bank_id"] = json!(bid);
+        questions_create_impl(&center, q).unwrap();
+
+        // 首次全量
+        let full = sync_pull_impl(&center, None).unwrap();
+        assert_eq!(full["full_resync_required"], json!(false));
+        apply_bundle(&mut leaf, &full["bundle"].clone(), SyncRole::Leaf).unwrap();
+        let cursor1 = full["server_time"].as_str().unwrap().to_string();
+        assert!(fetch_question(&leaf, "q_e2e").unwrap().is_some());
+
+        // 中心编辑 → 增量可见
+        let mut edit = sample_question();
+        edit["id"] = json!("q_e2e");
+        edit["bank_id"] = json!(bid);
+        edit["difficulty"] = json!(5);
+        questions_update_impl(&center, "q_e2e", edit).unwrap();
+        let inc1 = sync_pull_impl(&center, Some(cursor1)).unwrap();
+        assert_eq!(inc1["full_resync_required"], json!(false));
+        apply_bundle(&mut leaf, &inc1["bundle"].clone(), SyncRole::Leaf).unwrap();
+        let row = fetch_question(&leaf, "q_e2e").unwrap().unwrap();
+        assert_eq!(row["difficulty"], json!(5));
+        let cursor2 = inc1["server_time"].as_str().unwrap().to_string();
+
+        // 中心删除（墓碑）→ 增量可见，叶子跟着删
+        let tx = center.transaction().unwrap();
+        write_tombstone(
+            &tx,
+            "question",
+            "q_e2e",
+            Some(&bid),
+            &fmt_iso(Utc::now() + Duration::seconds(1)),
+            Some("test"),
+        )
+        .unwrap();
+        tx.execute("DELETE FROM questions WHERE id = 'q_e2e'", []).unwrap();
+        tx.commit().unwrap();
+        let inc2 = sync_pull_impl(&center, Some(cursor2)).unwrap();
+        assert_eq!(inc2["full_resync_required"], json!(false));
+        let tombs = inc2["bundle"]["tombstones"].as_array().unwrap();
+        assert!(tombs.iter().any(|t| t["entity_id"] == json!("q_e2e")));
+        apply_bundle(&mut leaf, &inc2["bundle"].clone(), SyncRole::Leaf).unwrap();
+        assert!(fetch_question(&leaf, "q_e2e").unwrap().is_none());
+    }
+
+    #[test]
+    fn snapshot_flag_marks_full_vs_incremental() {
+        let conn = test_conn();
+        let (full, _) = export_delta(&conn, None).unwrap();
+        assert_eq!(full["full"], json!(true));
+        let (inc, _) = export_delta(&conn, Some("2026-01-01T00:00:00.000Z")).unwrap();
+        assert_eq!(inc["full"], json!(false));
+    }
+
+    #[test]
+    fn replace_snapshot_requires_full_bundle_and_banks() {
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_guard");
+        questions_create_impl(&conn, q).unwrap();
+
+        // 增量 bundle（full=false）拒绝
+        let (inc, _) = export_delta(&conn, Some("2026-01-01T00:00:00.000Z")).unwrap();
+        assert!(replace_snapshot(&mut conn, &inc).is_err());
+        assert!(fetch_question(&conn, "q_guard").unwrap().is_some());
+
+        // full=true 但 banks 为空 → 拒绝清库
+        let mut empty = inc.clone();
+        empty["full"] = json!(true);
+        empty["banks"] = json!([]);
+        assert!(replace_snapshot(&mut conn, &empty).is_err());
+        assert!(fetch_question(&conn, "q_guard").unwrap().is_some());
+    }
+
+    #[test]
+    fn replace_snapshot_drops_local_only_rows() {
+        let mut center = test_conn();
+        let mut leaf = test_conn();
+
+        // 中心：保留题 + 一条墓碑 + 一条设置
+        let mut qk = sample_question();
+        qk["id"] = json!("q_keep");
+        qk["bank_id"] = json!("bank_default");
+        qk["difficulty"] = json!(3);
+        questions_create_impl(&center, qk).unwrap();
+        {
+            let tx = center.transaction().unwrap();
+            write_tombstone(
+                &tx,
+                "question",
+                "q_ghost",
+                Some("bank_default"),
+                &fmt_iso(Utc::now()),
+                Some("test"),
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        settings_set_impl(
+            &mut center,
+            &[SettingItem {
+                key: "fsrs.requestRetention".to_string(),
+                value_json: "0.85".to_string(),
+            }],
+        )
+        .unwrap();
+
+        // 叶子：本地独有题库/题/流水/复习态/移出标记/设置
+        let b = banks_create_impl(&leaf, "本地独有库", None).unwrap();
+        let bid = b["id"].as_str().unwrap().to_string();
+        let mut ql = sample_question();
+        ql["id"] = json!("q_local");
+        ql["bank_id"] = json!(bid);
+        questions_create_impl(&leaf, ql).unwrap();
+        leaf.execute_batch(
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at)
+               VALUES ('rec_local', 'q_local', 'practice', 'good', 1, '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z');
+             INSERT INTO review_state (question_id, due_at, updated_at)
+               VALUES ('q_local', '2026-09-20T00:00:00.000Z', '2026-09-10T12:00:00.000Z');
+             INSERT INTO wrong_dismiss (question_id, is_dismissed, updated_at, synced_at)
+               VALUES ('q_local', 1, '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z');
+             INSERT INTO app_settings (key, value_json, updated_at)
+               VALUES ('local.only', '1', '2026-09-10T12:00:00.000Z');",
+        )
+        .unwrap();
+
+        let full = sync_pull_impl(&center, None).unwrap();
+        assert_eq!(full["bundle"]["full"], json!(true));
+        replace_snapshot(&mut leaf, &full["bundle"]).unwrap();
+
+        // 中心数据在，本地独有（含级联）全部清掉
+        assert_eq!(fetch_question(&leaf, "q_keep").unwrap().unwrap()["difficulty"], json!(3));
+        assert!(fetch_question(&leaf, "q_local").unwrap().is_none());
+        assert!(fetch_bank(&leaf, &bid).unwrap().is_none());
+        for (table, col) in [
+            ("practice_records", "question_id"),
+            ("review_state", "question_id"),
+            ("wrong_dismiss", "question_id"),
+        ] {
+            let n: i64 = leaf
+                .query_row(&format!("SELECT COUNT(*) FROM {table} WHERE {col} = 'q_local'"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} 未随替换清空");
+        }
+        // 设置整表替换（本地键被清，快照键在）
+        let local_setting: Option<String> = leaf
+            .query_row("SELECT value_json FROM app_settings WHERE key = 'local.only'", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert!(local_setting.is_none());
+        let center_setting: String = leaf
+            .query_row("SELECT value_json FROM app_settings WHERE key = 'fsrs.requestRetention'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(center_setting, "0.85");
+        // 中心墓碑重放，默认库保留
+        let tombs: i64 = leaf
+            .query_row("SELECT COUNT(*) FROM delete_log WHERE entity_id = 'q_ghost'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tombs, 1);
+        assert!(fetch_bank(&leaf, "bank_default").unwrap().is_some());
+    }
+
+    #[test]
+    fn asset_channel_roundtrip_and_missing_report() {
+        const TEST_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let src = test_conn();
+        let dst = test_conn();
+        let src_root = temp_root("assets-src");
+        let dst_root = temp_root("assets-dst");
+        let (sha, path) = assets_put_impl(&src, &src_root, TEST_PNG_B64, "image/png", Some(1), Some(1)).unwrap();
+
+        let mut q = sample_question();
+        q["id"] = json!("q_asset");
+        q["bank_id"] = json!("bank_default");
+        q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+        insert_question(&src, &q).unwrap();
+        insert_question(&dst, &q).unwrap();
+
+        // 目标端只有题、没有图 → 缺图清单命中
+        let missing = sync_assets_missing_impl(&dst, &dst_root).unwrap();
+        assert_eq!(missing["total"], json!(1));
+        assert_eq!(missing["items"][0]["sha"], json!(sha));
+        assert_eq!(missing["items"][0]["question_ids"][0], json!("q_asset"));
+
+        // 源端取 blob → 目标端落库
+        let pulled = sync_assets_pull_impl(&src, &src_root, vec![sha.clone()], None).unwrap();
+        assert_eq!(pulled["items"].as_array().unwrap().len(), 1);
+        let items: Vec<AssetBlobItem> = serde_json::from_value(pulled["items"].clone()).unwrap();
+        let pushed = sync_assets_push_impl(&dst, &dst_root, &items).unwrap();
+        assert_eq!(pushed["imported"], json!(1));
+        let landed = dst_root.join(&sha[..2]).join(format!("{}.png", &sha[2..]));
+        assert!(landed.exists());
+
+        // 幂等：重复推 → skipped；缺图清单清空
+        let again = sync_assets_push_impl(&dst, &dst_root, &items).unwrap();
+        assert_eq!(again["skipped"], json!(1));
+        assert_eq!(sync_assets_missing_impl(&dst, &dst_root).unwrap()["total"], json!(0));
+
+        // 同内容换 mime 重推：以既有登记为准，不落第二份文件
+        let mut wrong_mime = items.clone();
+        wrong_mime[0].mime = "image/jpeg".to_string();
+        let again2 = sync_assets_push_impl(&dst, &dst_root, &wrong_mime).unwrap();
+        assert_eq!(again2["skipped"], json!(1));
+        let stored_mime: String = dst
+            .query_row("SELECT mime FROM assets WHERE sha = ?1", params![sha], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored_mime, "image/png");
+        assert!(!dst_root.join(&sha[..2]).join(format!("{}.jpg", &sha[2..])).exists());
+
+        // 声明 sha 与内容不符 → 拒收
+        let mut bad = items.clone();
+        bad[0].sha = "0".repeat(64);
+        let rejected = sync_assets_push_impl(&dst, &dst_root, &bad).unwrap();
+        assert_eq!(rejected["errors"][0]["reason"], json!("sha-mismatch"));
+
+        assert!(path.exists());
+        let _ = fs::remove_dir_all(&src_root);
+        let _ = fs::remove_dir_all(&dst_root);
     }
 
 }

@@ -24,7 +24,7 @@
  *     ⑬ delete_log UPSERT（重删不打爆唯一索引）
  *     ⑭ 种子 epoch + 条件种子（bank_default 墓碑存在时跳过播种）
  *     ⑮ review_state.updated_at / practice_records.synced_at 非空约束生效
- *     ⑯ db_meta 三行（db_uuid/schema_version='3'/created_at）
+ *     ⑯ db_meta 四行（db_uuid/schema_version='3'/created_at/sync_clock）
  * 全部通过打印 "SMOKE PASS"（exit 0）；任一失败打印细节并 exit 1。
  *
  * 最小合法题的 Blocks JSON 结构对齐
@@ -150,7 +150,7 @@ export const SEED_EPOCH = '1970-01-01T00:00:00.000Z';
  * PLAN.md §3.2 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
  *   S1 条件种子默认库 —— delete_log 有 bank_default 墓碑则跳过（防复活）；
  *        业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）；
- *   S2 db_meta —— db_uuid / schema_version='3' / created_at（INSERT OR IGNORE）。
+ *   S2 db_meta —— db_uuid / schema_version='3' / created_at / sync_clock（INSERT OR IGNORE）。
  */
 export function seedV3(db) {
   const tomb = db.prepare("SELECT 1 AS t FROM delete_log WHERE entity_type = 'bank' AND entity_id = 'bank_default'").get();
@@ -162,6 +162,8 @@ export function seedV3(db) {
   db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('db_uuid', ?)").run(uuid);
   db.prepare("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('schema_version', '3')").run();
   db.prepare('INSERT OR IGNORE INTO db_meta (key, value) VALUES (?, ?)').run('created_at', now);
+  // 单调接收时钟：应用侧 next_sync_stamp 从该值继续；墙钟回拨不会让新行落到游标之前。
+  db.prepare('INSERT OR IGNORE INTO db_meta (key, value) VALUES (?, ?)').run('sync_clock', now);
 }
 const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const opt = (id, text) => ({ id, content: doc(text) });
@@ -399,11 +401,12 @@ function main() {
     } catch { notNullOk = true; }
     check('review_state.updated_at 非空约束生效', notNullOk, '缺列插入竟成功');
 
-    // ⑯ db_meta 三行
+    // ⑯ db_meta 四行（sync_clock 供应用侧单调接收时钟续用）
     const metaVer = db.prepare("SELECT value FROM db_meta WHERE key = 'schema_version'").get()?.value;
     const metaUuid = db.prepare("SELECT value FROM db_meta WHERE key = 'db_uuid'").get()?.value;
     const metaCreated = db.prepare("SELECT value FROM db_meta WHERE key = 'created_at'").get()?.value;
-    check("db_meta 三行（schema_version='3'）", metaVer === '3' && !!metaUuid && !!metaCreated, JSON.stringify({ metaVer, metaUuid, metaCreated }));
+    const metaClock = db.prepare("SELECT value FROM db_meta WHERE key = 'sync_clock'").get()?.value;
+    check("db_meta 四行（schema_version='3' + sync_clock）", metaVer === '3' && !!metaUuid && !!metaCreated && !!metaClock, JSON.stringify({ metaVer, metaUuid, metaCreated, metaClock }));
   } catch (e) {
     failures.push(`异常: ${e.stack || e.message}`);
   } finally {

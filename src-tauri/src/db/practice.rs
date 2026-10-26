@@ -1,7 +1,7 @@
 //! 刷题与复习领域：作答流水（离线幂等）/ FSRS-6 卡片状态 / 错题本（软状态）/ 统计。
 use super::questions::{attach_fsrs_states, fetch_question, parse_json_opt, query_questions, row_to_question, SELECT_FIELDS, SELECT_FIELDS_Q};
 use super::sync::question_alive;
-use super::{clamp_business_time, fmt_iso, generate_id, now_iso, ok, to_str, today_bounds, AppState};
+use super::{clamp_business_time, fmt_iso, generate_id, next_sync_stamp, now_iso, ok, to_str, today_bounds, AppState};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -225,6 +225,8 @@ pub fn record_answer(
 
 pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) -> Result<Value, String> {
     let tx = conn.transaction().map_err(to_str)?;
+    // 本批流水共用一个单调接收戳：严格大于库内既有行即可，无需逐行递增。
+    let sync_stamp = next_sync_stamp(&tx)?;
     let mut inserted: i64 = 0;
     let mut skipped: i64 = 0;
 
@@ -303,7 +305,7 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
                 item.elapsed_ms,
                 detail_opt,
                 fsrs_log_opt,
-                now_iso()
+                &sync_stamp
             ],
         )
         .map_err(to_str)?;
@@ -314,7 +316,7 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
         // 答错 → 解除手动移出（重回错题本），发生时间驱动软状态。
         // 模考错题不影响错题本（wrong_list CTE 已排除 exam，这里同样不触发重回）
         if correct == 0 && item.mode != "exam" {
-            undismiss_wrong(&tx, &item.question_id, &answered)?;
+            undismiss_wrong(&tx, &item.question_id, &answered, &sync_stamp)?;
         }
         // FSRS：仅当本项实际插入才推进；gated 比较防补录倒退（并列保留现有）
         if let Some(card) = &item.card {
@@ -461,13 +463,14 @@ pub(crate) fn dismiss_wrong(conn: &Connection, question_id: &str) -> Result<(), 
         return Ok(());
     }
     let now = now_iso();
+    let stamp = next_sync_stamp(conn)?;
     conn.execute(
         "INSERT INTO wrong_dismiss (question_id, is_dismissed, updated_at, dismissed_at, synced_at)
-         VALUES (?1, 1, ?2, ?2, ?2)
+         VALUES (?1, 1, ?2, ?2, ?3)
          ON CONFLICT(question_id) DO UPDATE SET
            is_dismissed = 1, updated_at = excluded.updated_at,
            dismissed_at = excluded.dismissed_at, synced_at = excluded.synced_at",
-        params![question_id, now],
+        params![question_id, now, stamp],
     )
     .map_err(to_str)?;
     Ok(())
@@ -476,11 +479,16 @@ pub(crate) fn dismiss_wrong(conn: &Connection, question_id: &str) -> Result<(), 
 /// 答错时解除手动移出（重回错题本）：软状态翻转，仅已存在的行才更新
 /// （不存在不建行，防每次答错膨胀表）。updated_at 取作答发生时间，
 /// synced_at 取落库时间（双时钟分离）。
-pub(crate) fn undismiss_wrong(conn: &Connection, question_id: &str, occurred_at: &str) -> Result<(), String> {
+pub(crate) fn undismiss_wrong(
+    conn: &Connection,
+    question_id: &str,
+    occurred_at: &str,
+    synced_at: &str,
+) -> Result<(), String> {
     conn.execute(
         "UPDATE wrong_dismiss SET is_dismissed = 0, updated_at = ?2, synced_at = ?3
          WHERE question_id = ?1",
-        params![question_id, occurred_at, now_iso()],
+        params![question_id, occurred_at, synced_at],
     )
     .map_err(to_str)?;
     Ok(())
@@ -1027,7 +1035,7 @@ mod tests {
             .unwrap();
         assert_eq!(recs, 1);
         // 再答错 → 解除移出，重回错题本
-        undismiss_wrong(&conn, "q_w_d", "2026-09-10T12:00:00.000Z").unwrap();
+        undismiss_wrong(&conn, "q_w_d", "2026-09-10T12:00:00.000Z", "2026-09-10T12:00:00.100Z").unwrap();
         assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 1);
         // 删题经 FK 级联清掉移出记录
         conn.execute("DELETE FROM questions WHERE id='q_w_d'", []).unwrap();

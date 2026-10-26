@@ -60,6 +60,17 @@ pub(crate) fn asset_registry_get(conn: &Connection, sha: &str) -> Result<Option<
     .map_err(to_str)
 }
 
+/// 登记行存在且文件在盘 → true。同步缺图判定与 resolve 共用同一口径。
+pub(crate) fn asset_file_present(conn: &Connection, root: &Path, sha: &str) -> Result<bool, String> {
+    match asset_registry_get(conn, sha)? {
+        Some((mime, _)) => Ok(asset_mime_ext(&mime)
+            .and_then(|ext| asset_path_for(root, sha, ext).ok())
+            .map(|p| p.exists())
+            .unwrap_or(false)),
+        None => Ok(false),
+    }
+}
+
 #[tauri::command]
 pub fn assets_put(
     app: AppHandle,
@@ -84,29 +95,53 @@ pub(crate) fn assets_put_impl(
     height: Option<i64>,
 ) -> Result<(String, PathBuf), String> {
     use base64::Engine as _;
-    let ext = asset_mime_ext(mime)
-        .ok_or_else(|| "不支持的图片格式（仅 webp/png/jpeg/gif）".to_string())?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data_b64.trim())
         .map_err(|_| "图片数据损坏（base64 非法）".to_string())?;
+    let (sha, path, _) = assets_put_bytes_impl(conn, root, &bytes, mime, width, height)?;
+    Ok((sha, path))
+}
+
+/// 字节版入库（同步通道复用）：返回 (sha, path, 该内容此前是否已存在)。
+pub(crate) fn assets_put_bytes_impl(
+    conn: &Connection,
+    root: &Path,
+    bytes: &[u8],
+    mime: &str,
+    width: Option<i64>,
+    height: Option<i64>,
+) -> Result<(String, PathBuf, bool), String> {
     if bytes.is_empty() || bytes.len() > ASSET_MAX_BYTES {
         return Err("图片大小非法（空或超过 20MB）".to_string());
     }
-    let sha = sha256_hex(&bytes);
+    // 先验证传入 mime（非法格式即使内容已存在也必须拒绝，保住上传入口的校验语义）
+    let incoming_mime = mime.trim();
+    let incoming_ext = asset_mime_ext(incoming_mime)
+        .ok_or_else(|| "不支持的图片格式（仅 webp/png/jpeg/gif）".to_string())?;
+    let sha = sha256_hex(bytes);
+    // 内容寻址：同一 sha 已有登记时以既有 mime 为准（防同一内容因扩展名不同落两份文件）。
+    let (effective_mime, ext) = match asset_registry_get(conn, &sha)? {
+        Some((registered, _)) => match asset_mime_ext(&registered) {
+            Some(ext) => (registered, ext),
+            None => (incoming_mime.to_string(), incoming_ext),
+        },
+        None => (incoming_mime.to_string(), incoming_ext),
+    };
     let path = asset_path_for(root, &sha, ext)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create asset dir failed: {e}"))?;
     }
     // 内容寻址：同名即同内容，跳过写入（并发重复上传也安全，不覆盖）。
-    if !path.exists() {
-        fs::write(&path, &bytes).map_err(|e| format!("write asset failed: {e}"))?;
+    let existed = path.exists();
+    if !existed {
+        fs::write(&path, bytes).map_err(|e| format!("write asset failed: {e}"))?;
     }
     conn.execute(
         "INSERT OR IGNORE INTO assets (sha, mime, size, width, height, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![sha, mime.trim(), bytes.len() as i64, width, height, now_iso()],
+        params![sha, effective_mime, bytes.len() as i64, width, height, now_iso()],
     )
     .map_err(to_str)?;
-    Ok((sha, path))
+    Ok((sha, path, existed))
 }
 
 #[tauri::command]
@@ -158,6 +193,32 @@ pub(crate) fn collect_asset_refs(v: &Value, out: &mut HashSet<String>) {
     }
 }
 
+/// 全库题面 JSON 里扫描 `asset:<sha>` 引用，返回 (question_id, sha)。
+/// 保留重复项（同一题多次引用同一图），调用方按需去重。
+pub(crate) fn scan_question_asset_refs(conn: &Connection) -> Result<Vec<(String, String)>, String> {
+    let mut used: Vec<(String, String)> = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT id, stem_json, options_json, answer_json, analysis_json, children_json FROM questions")
+        .map_err(to_str)?;
+    let mut rows = stmt.query([]).map_err(to_str)?;
+    while let Some(row) = rows.next().map_err(to_str)? {
+        let qid: String = row.get(0).map_err(to_str)?;
+        let mut set = HashSet::new();
+        for i in 1..6 {
+            let raw: Option<String> = row.get(i).map_err(to_str)?;
+            if let Some(s) = raw
+                && s.contains("asset:")
+                    && let Ok(v) = serde_json::from_str::<Value>(&s) {
+                        collect_asset_refs(&v, &mut set);
+                    }
+        }
+        for sha in set {
+            used.push((qid.clone(), sha));
+        }
+    }
+    Ok(used)
+}
+
 #[tauri::command]
 pub fn assets_gc(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let root = ensure_assets_dir(&app)?;
@@ -175,30 +236,11 @@ pub(crate) fn assets_gc_impl(conn: &Connection, root: &Path) -> Result<Value, St
             .map(|r| r.map_err(to_str))
             .collect::<Result<_, _>>()?
     };
-    let mut used: Vec<(String, String)> = Vec::new();
-    let mut scanned = 0i64;
-    {
-        let mut stmt = conn
-            .prepare("SELECT id, stem_json, options_json, answer_json, analysis_json, children_json FROM questions")
-            .map_err(to_str)?;
-        let mut rows = stmt.query([]).map_err(to_str)?;
-        while let Some(row) = rows.next().map_err(to_str)? {
-            scanned += 1;
-            let qid: String = row.get(0).map_err(to_str)?;
-            let mut set = HashSet::new();
-            for i in 1..6 {
-                let raw: Option<String> = row.get(i).map_err(to_str)?;
-                if let Some(s) = raw
-                    && s.contains("asset:")
-                        && let Ok(v) = serde_json::from_str::<Value>(&s) {
-                            collect_asset_refs(&v, &mut set);
-                        }
-            }
-            for sha in set {
-                used.push((qid.clone(), sha));
-            }
-        }
-    }
+    let mut used: Vec<(String, String)> = scan_question_asset_refs(conn)?;
+    let scanned: i64 = conn
+        .query_row("SELECT COUNT(*) FROM questions", [], |r| r.get(0))
+        .map_err(to_str)?;
+    used.sort();
     let used_set: HashSet<&String> = used.iter().map(|(_, s)| s).collect();
     let reg_map: HashMap<&String, &String> = {
         let mut m = HashMap::new();

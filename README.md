@@ -10,7 +10,7 @@
 |---|---|
 | 外壳 | Tauri 2（WebView2，系统内置无 Chromium 打包） |
 | 前端 | Vue 3 + Vite 5 + Vue Router（hash 路由）+ Tiptap 3 + KaTeX + ts-fsrs |
-| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），31 个命令 |
+| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），36 个命令 |
 | 存储 | SQLite3（WAL + 外键级联），默认 `%APPDATA%\com.qike.qbank\qbank.db`，`QKEBANK_DB` 环境变量可覆盖 |
 
 ## 功能
@@ -113,7 +113,7 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 │   ├── stores/             # bank.js（题库） settings.js（FSRS 参数等） ui.js（弹层服务）
 │   ├── utils/              # fsrs.js render.js validate.js normalize.js parsePureText.js image.js
 │   └── views/              # Home / Banks / List / Form / Practice / Review / Wrong
-├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（31 个 command + FSRS 写入校验 + 统计 + 同步地基）
+├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（36 个 command + FSRS 写入校验 + 统计 + 同步地基/资产通道）
 │   └── src/db/             # 9 表 Schema / 迁移 / 单测（mod schema banks questions practice assets backup settings sync）
 └── tools/                  # migrate-dbjson.mjs / smoke-test.mjs / make-portable.mjs
 ```

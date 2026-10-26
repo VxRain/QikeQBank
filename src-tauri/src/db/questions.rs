@@ -2,7 +2,7 @@
 use super::assets::normalize_asset_srcs;
 use super::sync::write_tombstone;
 use super::banks::resolve_default_bank;
-use super::{generate_id, ok, now_iso, to_str, AppState};
+use super::{generate_id, next_sync_stamp, ok, now_iso, to_str, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -523,6 +523,8 @@ pub(crate) fn questions_create_impl(conn: &Connection, mut q: Value) -> Result<V
     normalize_asset_srcs(conn, &mut q)?;
     q["plain_text"] = json!(aggregated_plain_text(&q));
     ensure_child_ids(&mut q, &id);
+    // 接收时钟由后端统一发放，不接受调用方传入（防时钟回拨导致漏行）
+    q["synced_at"] = json!(next_sync_stamp(conn)?);
 
     let exists: bool = conn
         .query_row(
@@ -593,6 +595,8 @@ pub(crate) fn questions_update_impl(conn: &Connection, id: &str, data: Value) ->
     normalize_asset_srcs(conn, &mut merged)?;
     merged["plain_text"] = json!(aggregated_plain_text(&merged));
     ensure_child_ids(&mut merged, id);
+    // 本地编辑：刷新 updated_at（业务时间）与 synced_at（单调接收时钟）
+    merged["synced_at"] = json!(next_sync_stamp(conn)?);
 
     upsert_question(conn, &merged)?;
     let stored = fetch_question(conn, id)?.ok_or("stored question missing")?;

@@ -28,3 +28,27 @@ export async function syncApplySnapshot(bundle) {
   const res = await cmd('sync_apply_snapshot', { bundle })
   return res?.data
 }
+
+// 全量重建：仅当 syncPull 返回 full_resync_required 时使用，bundle 必须来自 since 为空的全量拉取。
+export async function syncReplaceSnapshot(bundle) {
+  const res = await cmd('sync_replace_snapshot', { bundle })
+  return res?.data
+}
+
+// 资产通道（内容寻址，不参与 LWW）：缺图清单 → 源端取 blob → 目标端落盘。
+export async function syncAssetsMissing() {
+  const res = await cmd('sync_assets_missing')
+  return res?.data
+}
+
+export async function syncAssetsPull(shas, maxBytes) {
+  const args = { shas }
+  if (maxBytes) args.maxBytes = maxBytes
+  const res = await cmd('sync_assets_pull', args)
+  return res?.data
+}
+
+export async function syncAssetsPush(items) {
+  const res = await cmd('sync_assets_push', { items })
+  return res?.data
+}

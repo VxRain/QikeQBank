@@ -1,6 +1,6 @@
 //! 题库领域：CRUD + "至少保留一个题库"守卫 + 删除级联（同事务写墓碑）。
-use super::sync::write_tombstone;
-use super::{ok, now_iso, to_str, AppState};
+use super::sync::write_tombstone_tx;
+use super::{next_sync_stamp, now_iso, ok, to_str, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use tauri::State;
@@ -121,9 +121,10 @@ pub(crate) fn banks_create_impl(conn: &Connection, name: &str, description: Opti
     }
     let id = generate_bank_id();
     let now = now_iso();
+    let stamp = next_sync_stamp(conn)?;
     conn.execute(
         "INSERT INTO banks (id, name, description, created_at, updated_at, synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, name, description, now, now, now],
+        params![id, name, description, now, now, stamp],
     )
     .map_err(to_str)?;
     fetch_bank(conn, &id)?.ok_or_else(|| "stored bank missing".into())
@@ -164,23 +165,24 @@ pub(crate) fn banks_update_impl(
             return Err("题库名称不能为空".into());
         }
     let now = now_iso();
+    let stamp = next_sync_stamp(conn)?;
     match (name, description) {
         (Some(n), Some(d)) => conn
             .execute(
-                "UPDATE banks SET name = ?1, description = ?2, updated_at = ?3, synced_at = ?3 WHERE id = ?4",
-                params![n.trim(), d, now, id],
+                "UPDATE banks SET name = ?1, description = ?2, updated_at = ?3, synced_at = ?4 WHERE id = ?5",
+                params![n.trim(), d, now, stamp, id],
             )
             .map_err(to_str)?,
         (Some(n), None) => conn
             .execute(
-                "UPDATE banks SET name = ?1, updated_at = ?2, synced_at = ?2 WHERE id = ?3",
-                params![n.trim(), now, id],
+                "UPDATE banks SET name = ?1, updated_at = ?2, synced_at = ?3 WHERE id = ?4",
+                params![n.trim(), now, stamp, id],
             )
             .map_err(to_str)?,
         (None, Some(d)) => conn
             .execute(
-                "UPDATE banks SET description = ?1, updated_at = ?2, synced_at = ?2 WHERE id = ?3",
-                params![d, now, id],
+                "UPDATE banks SET description = ?1, updated_at = ?2, synced_at = ?3 WHERE id = ?4",
+                params![d, now, stamp, id],
             )
             .map_err(to_str)?,
         (None, None) => 0,
@@ -218,6 +220,8 @@ pub(crate) fn banks_remove_impl(conn: &mut Connection, id: &str, actor: Option<&
     }
     let tx = conn.transaction().map_err(to_str)?;
     let now = now_iso();
+    // 一次删库的整批墓碑共用同一接收时间戳（严格大于库内既有行即可）。
+    let stamp = next_sync_stamp(&tx)?;
     let qids: Vec<String> = tx
         .prepare("SELECT id FROM questions WHERE bank_id = ?1")
         .map_err(to_str)?
@@ -226,9 +230,9 @@ pub(crate) fn banks_remove_impl(conn: &mut Connection, id: &str, actor: Option<&
         .collect::<Result<_, _>>()
         .map_err(to_str)?;
     for qid in &qids {
-        write_tombstone(&tx, "question", qid, Some(id), &now, actor)?;
+        write_tombstone_tx(&tx, "question", qid, Some(id), &now, actor, &stamp)?;
     }
-    write_tombstone(&tx, "bank", id, Some(id), &now, actor)?;
+    write_tombstone_tx(&tx, "bank", id, Some(id), &now, actor, &stamp)?;
     tx.execute("DELETE FROM banks WHERE id = ?1", params![id])
         .map_err(to_str)?;
     tx.commit().map_err(to_str)?;
