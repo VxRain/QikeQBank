@@ -2,7 +2,7 @@
 
 本地优先、无需联网的桌面题库应用：多题库管理、富文本录题（公式/图片/填空）、刷题判分、错题本、基于 **FSRS-6** 算法的间隔复习。数据落在本地 SQLite（库文件 + 图片目录）。
 
-> **数据保全方案尚未定案**：当前没有自动备份，也没有落地的多端同步；JSON 导出只是权宜手段，**不等于备份方案**。详见下方「导入导出」。
+> **数据保全**：JSON 导出导入 + **S3 云同步**（手动触发，增量日志 + 全量基线，兼容 MinIO / R2 / B2 等 S3 协议端点）。**仍无自动备份与自动同步定时**。详见下方「云同步（S3）」。
 
 ## 技术栈
 
@@ -23,12 +23,35 @@
 - **图片管线**：截图直接 `Ctrl+V` 粘贴入库；自动压缩（WebP q85/长边 1920，GIF 保留动画）；内容寻址存储（`asset:<sha>` 引用，重复图片只存一份）；一键清理无用图片并报告释放空间
 - **列表效率**：跨库全局搜索、题型筛选、分页、批量勾选删除/移动、行内预览展开
 
-### 导入导出
+### 云同步（S3）
+
+设置弹窗 →「云同步（S3）」。对象存储本身就是同步中心，**不需要任何服务器**。
+
+```text
+<前缀>/v1/
+  log/<设备ID>/<8位序号>.ndjson.gz     # 增量日志：每设备一条序号链，只增不改
+  base/<时间戳>-<设备ID>.ndjson.gz     # 全量基线：新设备首同步 / 断链恢复
+  assets/<sha前2位>/<sha后62位>        # 图片二进制，mime 由 Content-Type 承载
+```
+
+- **日常同步只传增量**：典型一天（200 条答题流水 + 5 题编辑）约 **107 KB 未压缩 / 8 KB gzip**；只有首次同步或断链恢复才下载全量基线。
+- **冲突规则与本地合并核一致**：行级「更新时间更晚者胜出」；删除以墓碑时间戳对决（`deleted_at >= updated_at` 删除赢，否则编辑赢并淘汰墓碑）。
+- **图片不进 JSON**：题面只存 `asset:<sha256>` 引用，图片按内容寻址单独存放，天然幂等、可去重。
+- **手动触发**（无自动定时）。首次在某台设备下载会用云端快照建立起点；若本地已有内容，会先把本地改动推上去再重建，不会丢数据。
+- **密钥只在本机**：Access Key / Secret Key 存本地数据库的 `db_meta` 表，**不进同步包、不回传前端**，因此不会随同步上传到桶里。
+- **兼容性**：AWS S3、MinIO、Cloudflare R2、Backblaze B2 等 S3 协议端点。自建端点、IP、带端口地址请开启「路径风格（path-style）」。
+- **安全提示**：桶内是**明文数据**（题面、答案、答题流水），请使用**私有桶**并给独立前缀，不要与他人共用桶。
+
+> 局限（已知）：无自动同步定时、无冲突可视化界面、桶内历史日志不会自动清理（长期使用请自行配置生命周期规则）。
+>
+> 实现细节（用户无需关心）：「上传」时会自动维护一份完整快照（首次上传必留、检测到前缀被清空时自动补），用于新设备快速接入与断链恢复。
+
+## 导入导出
 
 - **模板导入**（txt/md）：严格模板解析 + 导入前预览，一票否决（有错块则不可入库），UTF-8/GBK 自动识别
 - **Word 导入**（docx）：公式/图片一并解析入库
 - **JSON 导出 / 导入**：导出 v4 JSON（含题库结构），旧版本文件兼容导入；按库查重、可重入；导入模板一键下载
-- **数据保全（未定案）**：JSON 导出只是**权宜之计**——用于题库内容交换、跨机一次性搬运与应急取数，**不是主推的备份 / 恢复手段**。当前无自动备份、无快照、无多端同步落地（`sync_*` 仅完成地基），正式方案（自动备份 / 版本化快照 / 同步服务）尚未确定；方案定案前，本机数据目录异常或误删没有自动兜底
+- **数据保全**：JSON 导出用于题库内容交换、跨机一次性搬运与应急取数；多端同步走下面的「云同步（S3）」。**目前没有自动备份**（无定时、无保留份数、无本地时间点快照），误删仍无自动兜底
 - **旧库升级**：存量数据库自动迁移（默认库种子、FSRS 状态表重建），幂等可重复执行
 
 ### 刷题
@@ -109,11 +132,11 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 ```
 ├── src/                    # Vue3 前端
 │   ├── api/                # bridge.js(invoke 封装) questions.js practice.js banks.js assets.js
-│   ├── components/         # QuestionEditor / QuestionForm / TiptapDocEditor / QuestionPreview / ImportFileBox / ui
+│   ├── components/         # QuestionEditor / QuestionForm / TiptapDocEditor / QuestionPreview / ImportFileBox / S3SyncPanel / ui
 │   ├── stores/             # bank.js（题库） settings.js（FSRS 参数等） ui.js（弹层服务）
 │   ├── utils/              # fsrs.js render.js validate.js normalize.js parsePureText.js image.js
 │   └── views/              # Home / Banks / List / Form / Practice / Review / Wrong
-├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（36 个 command + FSRS 写入校验 + 统计 + 同步地基/资产通道）
-│   └── src/db/             # 9 表 Schema / 迁移 / 单测（mod schema banks questions practice assets backup settings sync）
+├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（43 个 command + FSRS 写入校验 + 统计 + 同步合并核/资产通道/S3 通道）
+│   └── src/db/             # 9 表 Schema / 迁移 / 单测（mod schema banks questions practice assets backup settings sync s3）
 └── tools/                  # migrate-dbjson.mjs / smoke-test.mjs / make-portable.mjs
 ```

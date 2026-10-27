@@ -18,7 +18,7 @@ QikeQBank/
 │   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
-├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync）
+├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync/s3）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
 ├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
 └── tests/unit/  fsrs.test.js  parseDocx.test.js（node:test，零依赖）
@@ -213,6 +213,26 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `sync_assets_pull` | `shas: string[]`（≤200）, `max_bytes?` | 源端取 blob：默认 32MB、上限 64MB 预算；逐条复核 sha256。返回 `{items:[{sha,mime,size,data_b64}], skipped:[{sha,reason}], total_bytes}` |
 | `sync_assets_push` | `items:[{sha,mime,data_b64,width?,height?}]`（≤200） | 目标端落 blob：base64 解码 + sha256 校验（不符拒收）→ 内容寻址入库（同内容幂等跳过）。返回 `{imported, skipped, errors:[{sha,reason}]}` |
 
+**云同步（S3 / S3 兼容端点，v0.2 新增 7 个）**
+
+对象布局（`<prefix>/v1/`）：`log/<device>/<8位序号>.ndjson.gz`（增量，每设备一条稠密序号链）、`base/<ts>-<device>.ndjson.gz`（全量基线）、`assets/<sha[0..2]>/<sha[2..]>`（图片二进制，无扩展名，mime 走 Content-Type）。不含服务端进程，对象存储本身即中心。
+
+| command | 参数 | 返回 |
+|---|---|---|
+| `sync_s3_config_get` | — | 已保存配置的**脱敏**视图 `{configured, endpoint, region, bucket, prefix, path_style, access_key, has_secret}`；**永不回传 secret** |
+| `sync_s3_config_set` | `settings: {endpoint, region, bucket, prefix, path_style, access_key, secret_key, session_token?}` | 校验后写入 `db_meta.s3_config`（本机表，不进同步包）。`secret_key` 留空 = 沿用已保存的密钥 |
+| `sync_s3_test` | — | 连通性/权限自检（写 → 读 → 列举 → 删 `_probe/hello.txt`），返回 `{ok, writable, readable, listable, endpoint, checked_at}` |
+| `sync_s3_push` | — | `export_delta_at(watermark)` → 裁剪 `review_state`（仅本批 records∪questions 的题号）→ NDJSON+gzip → PUT 新序号对象。返回 `{skipped, seq, key, rows, bytes, assets_uploaded, asset_errors}`。**`s3_push_watermark` 只在 PUT 成功后推进** |
+| `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）。返回 `{applied_logs, applied, assets_pulled, asset_errors, warnings}`。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
+| `sync_s3_status` | — | `{device_id, push_seq, push_watermark, cursors, bootstrapped, last_push_at, last_pull_at}`（**UI 只展示 `last_*` 相对时间**，其余为排障用） |
+| `sync_s3_compact` | — | 用本机当前状态生成全量快照，`covered` 记各设备已覆盖序号；返回 `{base, rows, bytes}`。**UI 不暴露**：首次上传自动留锚点、检测到前缀被清空时自动补，均由后端调用 |
+
+> **本机元数据**（`db_meta`，非同步表）：`s3_config` / `s3_device_id` / `s3_push_seq` / `s3_push_watermark` / `s3_cursors` / `s3_bootstrapped` / `s3_applied_logs`。
+>
+> **三条不变量**：① 日志按设备分链、序号稠密（读到的首个对象序号必须 = 本机游标+1），断链可精确检出；② 拉取一律 `SyncRole::Leaf`——保留来源 `synced_at` 且在 commit 后校准本机时钟，因此不会被再次导出，天然无回声；③ 对象不可变，重试只产生新序号，不覆盖历史（同名序号已存在且内容相同 = 幂等成功；内容不同 = DB 被复制到另一台机器，自动换 `s3_device_id` 并提示重试）。
+>
+> **为什么不用"单个 state.json 全量覆盖"**：全量 PUT 需要 CAS 条件写（部分 S3 兼容端点不支持），且每次都是 O(全库) 上行（实测 5000 题/5 万流水未压缩 36.5 MB）。分链增量把日常开销压到几十 KB 且不依赖 CAS。
+
 **接收时钟（数据保全不变量）**：`synced_at` 不取墙钟，统一由 `next_sync_stamp`（`db_meta.sync_clock`）单调发放：`max(now_ms, last+1ms)`。旧库首次 `init_schema` 以各表 `MAX(synced_at)` 校准；叶子落快照、JSON 导入后同样校准。因此中心墙钟回拨/VM 快照恢复不会让新行落在客户端游标之前（旧实现会永久漏行）。
 
 **刷题/复习/统计（bank 可选过滤）**
@@ -292,9 +312,14 @@ syncReplaceSnapshot(bundle) → 全量重建（仅 full=true 且 banks 非空的
 syncAssetsMissing() → {total, items:[{sha, question_ids}]}
 syncAssetsPull(shas, maxBytes?) → {items:[{sha,mime,size,data_b64}], skipped, total_bytes}
 syncAssetsPush(items) → {imported, skipped, errors}
+s3ConfigGet() / s3ConfigSet(settings) → 脱敏配置视图
+s3Test() → 连通性/权限自检
+s3Push() / s3Pull() / s3Status()   // 用户可见动作只有「上传 / 下载」
 ```
 
 > 同步客户端循环：`pull → apply(若 full_resync_required 则用 since=null 重拉全量，再 syncReplaceSnapshot) → syncAssetsMissing → 对缺图 sha 调源端 syncAssetsPull → syncAssetsPush`。游标存调用方（`server_time`），不要复用其他设备的游标。apply / replace 成功后前端需重新 `loadBanks()` 与 `hydrateFromDb()`（stores 是缓存，DB 为准）。
+>
+> **S3 通道**（`components/S3SyncPanel.vue`，设置弹窗内）不跑上面的循环：`s3Push` / `s3Pull` 各自封装完整流程，图片随 `s3Pull` 由桶内直接下载。`s3Pull` 成功后同样必须 `loadBanks()` + `hydrateFromDb()`。
 
 ### stores/settings.js（v3：键分裂 + 注水守卫）
 进库同步：`fsrs.*`（6 键）+ `wrongLeaveAfterCorrect`；留本机：编辑偏好/自动下一题/筛选记忆。localStorage 只做写透缓存。`hydrateFromDb()` 启动调用一次、每次同步 pull-apply 后调用一次；注水期 watch 禁写（防脏时间戳）。
@@ -405,5 +430,5 @@ export function persistBankFilter(page, id)
 
 | 事项 | 现状（代码事实） | 卡点 / 需要决策的内容 |
 |---|---|---|
-| **数据保全**（备份 / 恢复） | 仅 `export_dbjson`（权宜手段，UI 无入口）+ `open_data_dir`（手工看目录）；无自动备份、无快照、无服务端 | 方案未定：自动备份（频率 / 保留份数 / 落盘位置 / 便携模式差异）与同步服务端落地（形态、账号、冲突可视化）谁先谁后；便携模式（数据落包内）与安装模式的策略是否分离 |
+| **数据保全**（备份 / 恢复） | JSON 导出导入 + S3 云同步（手动触发，含增量日志与全量基线）。**仍无自动备份**（无定时、无保留份数）、无本地时间点快照；云同步不含自动定时与冲突可视化 | 剩余决策：自动备份（频率 / 保留份数 / 落盘位置 / 便携模式差异）、自动同步触发时机（启动 / 编辑后 debounce / 定时）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
 | **模考（exam）** | `practice_records.mode` CHECK 已放行 `'exam'`（`schema.rs:53`、`practice.rs:232`、`sync.rs:813` 均兼容），题面已有 `score` 分值字段；但 UI 无入口、**全库无一处把分值聚合成总分** | 未立项；组卷形态（即时规则组卷 vs 持久化「试卷」实体）、判分口径（多选漏选 / 部分给分）、是否进 FSRS 复习、成绩单与场次历史是否入库同步——实现方案待规划后写入本文件 |

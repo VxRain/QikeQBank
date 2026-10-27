@@ -223,6 +223,9 @@
                 </span>
               </div>
             </div>
+            <div class="mt-2.5">
+              <S3SyncPanel />
+            </div>
             </div>
             <div class="border-t border-line mt-1 pt-3.5">
               <div class="flex items-center gap-1.5 text-[14px] font-600 text-text mb-2">
@@ -276,6 +279,7 @@ import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
+import S3SyncPanel from '@/components/S3SyncPanel.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 
 const route = useRoute()

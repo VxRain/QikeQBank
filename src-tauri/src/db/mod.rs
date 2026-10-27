@@ -9,6 +9,7 @@
 //! - `backup`   v4 导出导入 / 模板 / 数据目录
 //! - `settings` 应用设置（需同步的键）
 //! - `sync`     同步合并核（export_delta / apply_bundle / 墓碑 / SyncRole）
+//! - `s3`       S3/S3 兼容端点同步通道（SigV4 / 对象适配 / NDJSON 信封）
 //!
 //! 约定：command 一律 `pub fn` + `{success, data}` 信封；模块内共享助手
 //! `pub(crate)`；跨模块引用走 `super::xxx` 显式依赖，测试走 `crate::db::*`。
@@ -18,6 +19,7 @@ pub(crate) mod backup;
 pub(crate) mod banks;
 pub(crate) mod practice;
 pub(crate) mod questions;
+pub(crate) mod s3;
 pub(crate) mod schema;
 pub(crate) mod settings;
 pub(crate) mod sync;
@@ -165,7 +167,7 @@ pub(crate) fn db_meta_value(conn: &Connection, key: &str) -> Result<Option<Strin
 // “抬平”为 max(now, last + 1ms) 并持久化到 db_meta.sync_clock，保证同一库内
 // 所有接收时间戳严格递增；游标因此永远落在所有既有行之后。
 
-fn upsert_db_meta(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+pub(crate) fn upsert_db_meta(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     conn.execute(
         "INSERT INTO db_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
