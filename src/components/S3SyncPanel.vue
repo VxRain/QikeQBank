@@ -231,8 +231,12 @@ async function upload() {
     status.value = await s3Status()
     showWarnings(res)
     if (res.skipped) {
-      lastResult.value = '没有需要上传的改动'
-      toast('云端已是最新', 'info')
+      const n = Number(res.assets_uploaded || 0)
+      lastResult.value = n ? `已补传 ${n} 张图片` : '没有需要上传的改动'
+      toast(n ? '图片上传完成' : '云端已是最新', n ? 'success' : 'info')
+      if (Array.isArray(res.asset_errors) && res.asset_errors.length) {
+        lastResult.value += `\n有 ${res.asset_errors.length} 张图片未能上传，下次上传会自动重试`
+      }
     } else {
       const kb = (Number(res.bytes || 0) / 1024).toFixed(1)
       lastResult.value = `已上传 ${res.rows} 项改动 · ${kb} KB` + (res.assets_uploaded ? ` · 图片 ${res.assets_uploaded} 张` : '')

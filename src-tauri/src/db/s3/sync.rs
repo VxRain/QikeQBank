@@ -41,6 +41,8 @@ const NEED_BASE_KEY: &str = "s3_need_base";
 /// 本机数据**确实**缺历史（拉取时跳过了缺失日志）。与 NEED_BASE 的区别：
 /// 清空前缀重传只是"别人需要基线"，本机数据是完整的，不能因此拒绝生成基线。
 const LOCAL_INCOMPLETE_KEY: &str = "s3_local_incomplete";
+/// 上次成功推送/拉取后的设置指纹（设置没有 synced_at，全量导出会变成回声源）
+const SETTINGS_FP_KEY: &str = "s3_settings_fp";
 /// 上次上传/下载时间（用户可见的唯一同步状态，其余内部计数不暴露）
 const LAST_PUSH_KEY: &str = "s3_last_push_at";
 const LAST_PULL_KEY: &str = "s3_last_pull_at";
@@ -216,11 +218,79 @@ fn scope_review_state(bundle: &mut Value) {
     bundle["review_state"] = Value::Array(kept);
 }
 
+/// 设置没有 `synced_at`，`export_delta_at` 每次都全量导出；若直接按行数判断
+/// “有无改动”，只要存在任何设置，每次 push（包括 pull 内部的保护性 push）都会
+/// 写一条日志，形成永不停止的回声。用内容指纹（key/value/updated_at）判断
+/// 设置是否真的变过，并在推送成功或采用远端设置后标记为已同步。
+fn settings_fingerprint(conn: &Connection) -> Result<String, String> {
+    let mut stmt = conn
+        .prepare("SELECT key, value_json, updated_at FROM app_settings ORDER BY key")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut buf = String::new();
+    for r in rows {
+        let (k, v, u) = r.map_err(|e| e.to_string())?;
+        buf.push_str(&k);
+        buf.push('\u{1f}');
+        buf.push_str(&v);
+        buf.push('\u{1f}');
+        buf.push_str(&u);
+        buf.push('\n');
+    }
+    Ok(sha256_hex(buf.as_bytes()))
+}
+
+fn mark_settings_synced(conn: &Connection) -> Result<(), String> {
+    let fp = settings_fingerprint(conn)?;
+    upsert_db_meta(conn, SETTINGS_FP_KEY, &fp)
+}
+
 fn bundle_row_count(b: &Value) -> usize {
     wire::ARRAY_KEYS
         .iter()
         .map(|k| b.get(*k).and_then(Value::as_array).map_or(0, |a| a.len()))
         .sum()
+}
+
+/// 同批内容的语义指纹：忽略每次导出都会变化的 `exported_at`（否则重试永远被
+/// 判成「不同内容」，同序号幂等分支实际上不可达），并把数组行按序列化排序，
+/// 避免行序抖动造成假冲突。
+fn batch_fingerprint(raw: &[u8]) -> Option<Value> {
+    let (mut header, bundle) = wire::decode(raw).ok()?;
+    header.as_object_mut()?.remove("exported_at");
+    let mut fp = Map::new();
+    fp.insert("header".to_string(), header);
+    for k in wire::ARRAY_KEYS {
+        let mut rows: Vec<String> = bundle
+            .get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|r| r.to_string())
+            .collect();
+        rows.sort();
+        fp.insert(k.to_string(), json!(rows));
+    }
+    Some(Value::Object(fp))
+}
+
+/// 上次 PUT 成功但元数据未落库时，重试必须识别为同一批，而不是「设备冲突」。
+fn same_batch(existing_gz: &[u8], fresh_raw: &[u8]) -> bool {
+    let Ok(existing_raw) = wire::gzip_decode(existing_gz) else {
+        return false;
+    };
+    match (batch_fingerprint(&existing_raw), batch_fingerprint(fresh_raw)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// 推送一批本地增量。返回 `{skipped, seq, rows, assets_uploaded, asset_errors}`。
@@ -238,6 +308,17 @@ pub fn push(
     // 日志对象永远不是"全量快照"：只有 base/ 才是。
     bundle["full"] = json!(false);
     scope_review_state(&mut bundle);
+    let settings_fp = settings_fingerprint(conn)?;
+    let settings_rows = bundle
+        .get("settings")
+        .and_then(Value::as_array)
+        .map_or(0, |a| a.len());
+    // 指纹缺失时：只有确实存在设置才认为“需要推一次”，避免空库/升级后
+    // 第一次无改动上传凭空写一个空日志。
+    let settings_changed = match db_meta_value(conn, SETTINGS_FP_KEY)?.as_deref() {
+        Some(stored) => stored != settings_fp.as_str(),
+        None => settings_rows > 0,
+    };
 
     // 自检：上一批对象若已不在桶里，说明桶被清空过（用户手动清前缀是最常见的）。
     // 序号**故意不重置**：重置会让已经同步过的设备以为"没新东西"而永远停在旧状态。
@@ -256,16 +337,20 @@ pub fn push(
     let mut warnings: Vec<Value> = Vec::new();
 
     let rows = bundle_row_count(&bundle);
-    if rows == 0 {
+    let data_rows = rows.saturating_sub(settings_rows);
+    if data_rows == 0 && !settings_changed {
         upsert_db_meta(conn, WATERMARK_KEY, &server_time)?;
         // 没有新改动，但桶被清空过：仍然要修（否则"清空后点上传"什么都不会发生）。
         if prev_missing {
             heal_prefix_loss(conn, store, cfg, device, had_known_gap, &mut warnings)?;
         }
+        // 无新行不代表没有待办：上次图片上传失败的重试必须在这里继续，
+        // 否则用户再点一次「上传」只会得到 skipped，缺图永远补不上。
+        let assets = upload_assets(conn, store, assets_root, cfg, &bundle)?;
         upsert_db_meta(conn, LAST_PUSH_KEY, &now_iso())?;
         return Ok(json!({
             "skipped": true, "seq": seq, "rows": 0,
-            "assets_uploaded": 0, "asset_errors": [], "warnings": warnings,
+            "assets_uploaded": assets.0, "asset_errors": assets.1, "warnings": warnings,
         }));
     }
 
@@ -287,9 +372,10 @@ pub fn push(
     // 要么是另一份 DB 副本共用同一 device_id（内容不同 → 换 id 重来，避免覆盖）。
     if store.head(&key)? {
         let existing = store.get(&key)?.map(|o| o.body).unwrap_or_default();
-        if existing == gz {
+        if same_batch(&existing, &raw) {
             upsert_db_meta(conn, SEQ_KEY, &next.to_string())?;
             upsert_db_meta(conn, WATERMARK_KEY, &server_time)?;
+            mark_settings_synced(conn)?;
             mark_own_cursor(conn, device, next)?;
             return Ok(json!({
                 "skipped": true, "seq": next, "rows": rows,
@@ -308,6 +394,7 @@ pub fn push(
     store.put(&key, &gz, "application/gzip")?;
     upsert_db_meta(conn, SEQ_KEY, &next.to_string())?;
     upsert_db_meta(conn, WATERMARK_KEY, &server_time)?;
+    mark_settings_synced(conn)?;
     // 自己的链不必再重放：推送成功即视为本机已消费到该序号。
     mark_own_cursor(conn, device, next)?;
 
@@ -561,6 +648,8 @@ fn bootstrap(
     upsert_db_meta(conn, BOOTSTRAPPED_KEY, "1")?;
     upsert_db_meta(conn, NEED_BASE_KEY, "0")?;
     upsert_db_meta(conn, LOCAL_INCOMPLETE_KEY, "0")?;
+    // 基线里的设置已经在桶里，标记为已同步，避免下一次 push 把它们当成本地改动回传
+    mark_settings_synced(conn)?;
     // 回声防线：基线里的行带着来源 `synced_at`，若水位仍停在旧值，
     // 下一次 push 会把整个基线当成"本地新改动"重新上传一遍。
     // 重建后所有行都来自基线或日志，把水位抬到库内最大戳之后即可。
@@ -733,6 +822,9 @@ fn pull_pass(
         }
     }
 
+    // 远端设置已经落库，且其来源日志就在桶里：标记为已同步，防止下轮 pull 的
+    // 保护性 push 把它们当成本地改动再写一条日志（回声）。
+    mark_settings_synced(conn)?;
     let assets = pull_assets(conn, store, assets_root, cfg)?;
     upsert_db_meta(conn, LAST_PULL_KEY, &now_iso())?;
     Ok(json!({
