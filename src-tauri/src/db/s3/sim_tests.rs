@@ -282,6 +282,13 @@ fn assert_converged(a: &Dev, b: &Dev) {
     }
 }
 
+fn difficulty(d: &Dev, id: &str) -> Option<i64> {
+    crate::db::fetch_question(&d.conn, id)
+        .ok()
+        .flatten()
+        .and_then(|q| q["difficulty"].as_i64())
+}
+
 fn count_objects(sim: &Sim, needle: &str) -> usize {
     sim.store
         .keys()
@@ -945,4 +952,230 @@ fn late_joiner_with_local_data_uses_remote_base_when_logs_pruned() {
         "整库对齐不得丢本地已推送的数据（应从自己的日志补回）"
     );
     assert_converged(&a, &b);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 17：三设备同时改同一题 / 删除与编辑并发
+// 断言：LWW 与设备名、推拉顺序无关，三方最终看到完全相同的数据
+// ---------------------------------------------------------------------------
+#[test]
+fn three_devices_conflict_on_same_question_converges() {
+    let sim = Sim::new("conf3");
+    let mut a = sim.dev("A");
+    let mut b = sim.dev("B");
+    let mut c = sim.dev("C");
+    let bank = a.add_bank("共享");
+    a.add_question(&bank, "q_edit");
+    a.add_question(&bank, "q_del");
+    a.push(&sim);
+    b.pull(&sim);
+    c.pull(&sim);
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+
+    // 同一题三方并发编辑：updated_at 最晚的赢（C = 5）
+    a.edit_question("q_edit", 3);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    b.edit_question("q_edit", 4);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    c.edit_question("q_edit", 5);
+
+    // 另一题：A 删除，B 稍后编辑（编辑更晚 → 题目复活）
+    a.delete_question("q_del");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    b.edit_question("q_del", 4);
+
+    for d in [&mut a, &mut b, &mut c] {
+        let p = d.push(&sim);
+        assert_eq!(p["skipped"], json!(false));
+    }
+    // 轮换顺序多轮拉取：结果不能依赖谁先拉
+    for _ in 0..2 {
+        for d in [&mut b, &mut c, &mut a] {
+            let r = d.pull(&sim);
+            assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+        }
+    }
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+    for d in [&a, &b, &c] {
+        assert_eq!(difficulty(d, "q_edit"), Some(5), "{} 的并发编辑未收敛", d.name);
+        assert_eq!(
+            difficulty(d, "q_del"),
+            Some(4),
+            "{} 的删除/编辑并发未收敛",
+            d.name
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 场景 18：三设备下的删库 + 离线编辑（题目复活并重归默认库）
+// C 以不同顺序看到「删库墓碑」和「更晚的题目编辑」，结果必须与 A/B 一致
+// ---------------------------------------------------------------------------
+#[test]
+fn three_devices_bank_delete_with_offline_edit_converges() {
+    let sim = Sim::new("bankdel3");
+    let mut a = sim.dev("A");
+    let mut b = sim.dev("B");
+    let mut c = sim.dev("C");
+    let bank = a.add_bank("临时库");
+    a.add_question(&bank, "q_inside");
+    a.push(&sim);
+    b.pull(&sim);
+    c.pull(&sim);
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+
+    crate::db::banks_remove_impl(&mut a.conn, &bank, Some("sim")).expect("删库");
+    a.push(&sim);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    // B 离线修改库内题目（更晚），C 只做旁观者
+    b.edit_question("q_inside", 5);
+    b.push(&sim);
+
+    for _ in 0..3 {
+        for d in [&mut c, &mut a, &mut b] {
+            let r = d.pull(&sim);
+            assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+        }
+    }
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+    for d in [&a, &b, &c] {
+        assert!(
+            crate::db::fetch_bank(&d.conn, &bank).unwrap().is_none(),
+            "{} 的库删除未传播",
+            d.name
+        );
+        let row = crate::db::fetch_question(&d.conn, "q_inside")
+            .unwrap()
+            .unwrap_or_else(|| panic!("{} 的题目应被更晚的编辑复活", d.name));
+        assert_eq!(row["bank_id"], json!("bank_default"), "{} 应重归默认库", d.name);
+        assert_eq!(row["difficulty"], json!(5));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 场景 19：基线覆盖两条设备链后，第三台设备接入
+// 断言：covered 记下 A/B 各自序号，C 只补放基线之后的增量；B 首推不再加锚点
+// ---------------------------------------------------------------------------
+#[test]
+fn new_device_bootstraps_base_and_replays_two_chains() {
+    let sim = Sim::new("base3");
+    let mut a = sim.dev("A");
+    let mut b = sim.dev("B");
+    let bank = a.add_bank("共享");
+    for i in 1..=3 {
+        a.add_question(&bank, &format!("q{i}"));
+    }
+    a.push(&sim); // 空桶首推：留锚点 base#1
+    b.pull(&sim);
+    b.add_question(&bank, "q4");
+    b.push(&sim); // 已有基线：不应再写锚点
+    a.pull(&sim);
+
+    a.edit_question("q1", 4);
+    a.push(&sim);
+    b.edit_question("q2", 5);
+    b.push(&sim);
+    a.pull(&sim); // A 的 covered 应包含 B 的两条
+    a.compact(&sim);
+    assert_eq!(count_objects(&sim, "/base/"), 2, "基线应只有 A 的两份");
+
+    // 基线与两条链都稳定后，各自再推一批
+    a.edit_question("q3", 3);
+    a.push(&sim);
+    b.edit_question("q4", 4);
+    b.push(&sim);
+
+    // C 全新接入：从基线起步，只补放 A/3 与 B/3
+    let mut c = sim.dev("C");
+    let r = c.pull(&sim);
+    assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["applied_logs"], json!(2), "只应补放基线后的两条增量: {r}");
+    for (qid, want) in [("q1", 4), ("q2", 5), ("q3", 3), ("q4", 4)] {
+        assert_eq!(
+            difficulty(&c, qid),
+            Some(want),
+            "C 从基线+增量应拿到 {qid}={want}: {r}"
+        );
+    }
+    // C 已经拿到全部；A/B 各自补拉对方最后一批后，三方应完全一致
+    a.pull(&sim);
+    b.pull(&sim);
+    assert_converged(&a, &c);
+    assert_converged(&b, &c);
+
+    // C 回传自己的数据，三方收敛
+    c.add_question(&bank, "q5");
+    c.push(&sim);
+    a.pull(&sim);
+    b.pull(&sim);
+    assert_converged(&a, &c);
+    assert_converged(&b, &c);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 20：三设备连续多轮「各改一题 → 推 → 轮换顺序拉」
+// 断言：每推一条链只长一个对象（无回声），桶体积不膨胀，末端三方一致
+// ---------------------------------------------------------------------------
+#[test]
+fn three_devices_many_rounds_stay_echo_free() {
+    let sim = Sim::new("echo3");
+    let mut a = sim.dev("A");
+    let mut b = sim.dev("B");
+    let mut c = sim.dev("C");
+    let bank = a.add_bank("共享");
+    for i in 0..3 {
+        a.add_question(&bank, &format!("q{i}"));
+    }
+    a.push(&sim);
+    b.pull(&sim);
+    c.pull(&sim);
+    let base_bytes = sim.store.total_bytes();
+    let rounds = 8u32;
+
+    for round in 1..=rounds {
+        a.edit_question("q0", i64::from(round) + 1);
+        b.edit_question("q1", i64::from(round) + 11);
+        c.edit_question("q2", i64::from(round) + 21);
+        for d in [&mut a, &mut b, &mut c] {
+            let p = d.push(&sim);
+            assert_eq!(p["skipped"], json!(false), "第 {round} 轮 {}", d.name);
+            assert!(
+                p["rows"].as_u64().unwrap() <= 2,
+                "第 {round} 轮 {} 只改一题却推了 {} 行",
+                d.name,
+                p["rows"]
+            );
+        }
+        // 轮换拉取顺序，排除“固定顺序才收敛”
+        for d in [&mut b, &mut c, &mut a] {
+            let r = d.pull(&sim);
+            assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+        }
+    }
+
+    // 最后再补齐一轮，确保没有任何设备停在旧游标
+    for d in [&mut a, &mut b, &mut c] {
+        d.pull(&sim);
+    }
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+    for d in [&a, &b, &c] {
+        assert_eq!(difficulty(d, "q0"), Some(i64::from(rounds) + 1));
+        assert_eq!(difficulty(d, "q1"), Some(i64::from(rounds) + 11));
+        assert_eq!(difficulty(d, "q2"), Some(i64::from(rounds) + 21));
+    }
+    assert_eq!(
+        count_objects(&sim, "/log/"),
+        1 + rounds as usize * 3,
+        "回声会表现为日志对象翻倍"
+    );
+    let grown = sim.store.total_bytes() - base_bytes;
+    assert!(
+        grown < 40_000,
+        "{rounds} 轮三设备上传把桶撑到 {grown} 字节，疑似重复上传"
+    );
 }
