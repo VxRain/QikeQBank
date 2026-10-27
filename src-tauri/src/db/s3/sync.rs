@@ -317,6 +317,12 @@ pub fn push(
         heal_prefix_loss(conn, store, cfg, device, had_known_gap, &mut warnings)?;
     } else if seq == 0
         && db_meta_value(conn, LOCAL_INCOMPLETE_KEY)?.as_deref() != Some("1")
+        // 桶里已有基线就不再补锚点：锚点的作用是「至少有一份完整快照」，已有即达成。
+        // 更要紧的是：pull 会在 bootstrap 前先推一次本地改动，若此时 seq==0，这份
+        // 「只含本机数据」的锚点会成为 base/ 里最新的对象，bootstrap 按对象名取最新
+        // 就会选中它，把远端完整基线静默丢在一边（晚加入设备自带内容 + 远端日志已
+        // 被清理时必然丢数据）。只在空桶首推时留锚点即可。
+        && store.first_key(&cfg.full_key("base/"))?.is_none()
     {
         // 首次上传顺手留一份完整快照：桶里从此永远有一个锚点。
         // 之后即使早期增量被清理/误删，新设备也能直接对齐，不必从头回放。

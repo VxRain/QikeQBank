@@ -858,3 +858,91 @@ fn compact_then_new_device_bootstraps() {
     let p = b.push(&sim);
     assert_eq!(p["skipped"], json!(true), "基线后无改动不应回传全库");
 }
+
+// ---------------------------------------------------------------------------
+// 场景 16：晚加入设备自带本地内容 + 远端只剩基线（日志被生命周期清理）
+// 回归：首推不得再写「只含自己」的锚点基线 —— 否则 bootstrap 按对象名取最新
+// 会选中它，远端完整历史被静默丢弃（pull 报成功、零告警、零应用）。
+// ---------------------------------------------------------------------------
+#[test]
+fn late_joiner_with_local_data_uses_remote_base_when_logs_pruned() {
+    let sim = Sim::new("late");
+    let mut a = sim.dev("A");
+    let bank = a.add_bank("A 库");
+    for i in 0..5 {
+        a.add_question(&bank, &format!("a{i}"));
+    }
+    a.push(&sim);
+    assert_eq!(count_objects(&sim, "/base/"), 1, "空桶首推仍应留锚点");
+    a.edit_question("a0", 5);
+    a.push(&sim);
+    a.compact(&sim);
+    assert_eq!(count_objects(&sim, "/base/"), 2);
+
+    // 模拟生命周期/手动清理：只删 log/，base/ 保留（数据仍可取回）
+    for k in sim.store.keys() {
+        if k.contains("/log/") {
+            sim.store.delete(&k).unwrap();
+        }
+    }
+    assert_eq!(count_objects(&sim, "/log/"), 0);
+    assert_eq!(count_objects(&sim, "/base/"), 2);
+
+    let mut b = sim.dev("B");
+    let bb = b.add_bank("B 库");
+    b.add_question(&bb, "b0");
+
+    let r = b.pull(&sim);
+    assert!(
+        r["warnings"].as_array().unwrap().is_empty(),
+        "有基线可用，不应告警: {r}"
+    );
+    for i in 0..5 {
+        assert!(
+            crate::db::fetch_question(&b.conn, &format!("a{i}"))
+                .unwrap()
+                .is_some(),
+            "B 必须从远端基线拿到 a{i}: {r}"
+        );
+    }
+    assert_eq!(
+        crate::db::fetch_question(&b.conn, "a0").unwrap().unwrap()["difficulty"],
+        json!(5),
+        "基线应是最新那份（a0 已改成 5）"
+    );
+    assert!(
+        crate::db::fetch_question(&b.conn, "b0").unwrap().is_some(),
+        "B 的本地数据不能被基线覆盖掉"
+    );
+    assert_eq!(
+        count_objects(&sim, "/base/"),
+        2,
+        "已有基线时首推不应再加锚点"
+    );
+
+    // A 拉取 B 的增量后两端收敛
+    a.pull(&sim);
+    assert_converged(&a, &b);
+    assert!(
+        crate::db::fetch_question(&a.conn, "b0").unwrap().is_some(),
+        "B 的数据必须传回 A"
+    );
+
+    // 日志被清理后，B 再拉一次会整库对齐一次（现有设计：链消失且有基线 → 采用基线）。
+    // 这里只断言「不告警、不丢数据」，不断言零应用——日志被外部删除时重对齐是预期行为。
+    let r2 = b.pull(&sim);
+    assert!(r2["warnings"].as_array().unwrap().is_empty(), "{r2}");
+    for i in 0..5 {
+        assert!(
+            crate::db::fetch_question(&b.conn, &format!("a{i}"))
+                .unwrap()
+                .is_some(),
+            "重对齐后仍应保留远端题目 a{i}"
+        );
+    }
+    assert!(
+        crate::db::fetch_question(&b.conn, "b0").unwrap().is_some(),
+        "整库对齐不得丢本地已推送的数据（应从自己的日志补回）"
+    );
+    assert_converged(&a, &b);
+}
