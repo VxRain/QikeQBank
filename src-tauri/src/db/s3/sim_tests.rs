@@ -6,7 +6,7 @@
 //! 覆盖不到"两台独立 DB 各自的 push_seq / 游标 / 设备 ID 如何交互"。
 //! 真实使用中几乎必现的问题恰恰藏在这里。
 
-use super::store::{MemoryStore, ObjectStore};
+use super::store::{ListResult, MemoryStore, Object, ObjectStore};
 use super::sync;
 use super::S3Config;
 use crate::db::practice::{record_answer_impl, FsrsCard, RecordItem};
@@ -15,6 +15,7 @@ use crate::db::{banks_create_impl, init_schema, questions_create_impl, questions
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -295,6 +296,127 @@ fn count_objects(sim: &Sim, needle: &str) -> usize {
         .into_iter()
         .filter(|k| k.contains(needle))
         .count()
+}
+
+/// 可注入故障的对象存储包装：只拦指定 key 的 put / get，其余全部透传。
+/// 用来验证「PUT 失败不推进水位」「拉取中途失败可从游标续传」这类不变量。
+struct FaultyStore<'a> {
+    inner: &'a MemoryStore,
+    put_fail: RefCell<Option<(String, usize)>>,
+    get_fail: RefCell<Option<(String, usize)>>,
+}
+
+impl<'a> FaultyStore<'a> {
+    fn new(inner: &'a MemoryStore) -> Self {
+        Self {
+            inner,
+            put_fail: RefCell::new(None),
+            get_fail: RefCell::new(None),
+        }
+    }
+
+    fn fail_put_containing(&self, needle: &str) {
+        *self.put_fail.borrow_mut() = Some((needle.to_string(), 1));
+    }
+
+    fn fail_get_key(&self, key: &str) {
+        *self.get_fail.borrow_mut() = Some((key.to_string(), 1));
+    }
+
+    fn clear(&self) {
+        *self.put_fail.borrow_mut() = None;
+        *self.get_fail.borrow_mut() = None;
+    }
+}
+
+impl ObjectStore for FaultyStore<'_> {
+    fn put(&self, key: &str, body: &[u8], content_type: &str) -> Result<(), String> {
+        {
+            let mut f = self.put_fail.borrow_mut();
+            if let Some((needle, left)) = f.as_mut()
+                && *left > 0
+                && key.contains(needle.as_str())
+            {
+                *left -= 1;
+                return Err("injected put failure".into());
+            }
+        }
+        self.inner.put(key, body, content_type)
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Object>, String> {
+        {
+            let mut f = self.get_fail.borrow_mut();
+            if let Some((target, left)) = f.as_mut()
+                && *left > 0
+                && key == target
+            {
+                *left -= 1;
+                return Err("injected get failure".into());
+            }
+        }
+        self.inner.get(key)
+    }
+
+    fn head(&self, key: &str) -> Result<bool, String> {
+        self.inner.head(key)
+    }
+
+    fn list(
+        &self,
+        prefix: &str,
+        start_after: Option<&str>,
+        delimiter: Option<&str>,
+    ) -> Result<ListResult, String> {
+        self.inner.list(prefix, start_after, delimiter)
+    }
+
+    fn first_key(&self, prefix: &str) -> Result<Option<String>, String> {
+        self.inner.first_key(prefix)
+    }
+
+    fn delete(&self, key: &str) -> Result<(), String> {
+        self.inner.delete(key)
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+}
+
+fn cursor_of(conn: &Connection, device: &str) -> u64 {
+    let raw: Option<String> = conn
+        .query_row("SELECT value FROM db_meta WHERE key = 's3_cursors'", [], |r| r.get(0))
+        .ok();
+    let map: std::collections::BTreeMap<String, u64> = raw
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    map.get(device).copied().unwrap_or(0)
+}
+
+fn live_ids(d: &Dev) -> Vec<String> {
+    let mut stmt = d.conn.prepare("SELECT id FROM questions ORDER BY id").expect("查题目");
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .expect("遍历题目")
+        .map(|r| r.expect("读题目 id"))
+        .collect()
+}
+
+/// 固定种子 LCG：让随机用例可复现，失败时能按同一条路径排查。
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 11
+    }
+
+    fn pick(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,4 +1300,434 @@ fn three_devices_many_rounds_stay_echo_free() {
         grown < 40_000,
         "{rounds} 轮三设备上传把桶撑到 {grown} 字节，疑似重复上传"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 场景 21：PUT 成功但元数据没落库（崩溃/断电）后重试
+// 断言：同序号同内容必须幂等成功，不得误判为「数据库被复制」并换设备 ID
+// ---------------------------------------------------------------------------
+#[test]
+fn retry_after_put_without_metadata_is_idempotent() {
+    let sim = Sim::new("idem");
+    let a = sim.dev("A");
+    let bank = a.add_bank("库");
+    a.add_question(&bank, "q1");
+    let p1 = a.push(&sim);
+    assert_eq!(p1["skipped"], json!(false));
+    let log1 = p1["key"].as_str().expect("首推 key").to_string();
+    let dev_before = a.device();
+
+    // 模拟：对象已 PUT 成功，但 seq / 水位没来得及落库
+    a.conn
+        .execute("UPDATE db_meta SET value = '0' WHERE key = 's3_push_seq'", [])
+        .expect("回滚 seq");
+    a.conn
+        .execute("UPDATE db_meta SET value = '' WHERE key = 's3_push_watermark'", [])
+        .expect("回滚水位");
+
+    let p2 = a.push(&sim);
+    assert_eq!(p2["skipped"], json!(true), "同批重试必须幂等: {p2}");
+    assert_eq!(p2["seq"], json!(1), "应补齐为已存在的序号 1");
+    assert_eq!(a.device(), dev_before, "不得误换设备 ID");
+    assert!(sim.store.head(&log1).unwrap(), "原对象必须保留");
+    assert_eq!(count_objects(&sim, "/log/"), 1, "不得写出重复对象");
+
+    // 之后恢复正常推进
+    a.edit_question("q1", 4);
+    let p3 = a.push(&sim);
+    assert_eq!(p3["skipped"], json!(false));
+    assert_eq!(p3["seq"], json!(2));
+    assert_eq!(count_objects(&sim, "/log/"), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 22：同一份数据库被复制到另一台机器（device_id 相同）
+// 断言：同名序号不同内容 → 拒绝覆盖、自动换 ID 并报错；重试后两条链都可用
+// ---------------------------------------------------------------------------
+#[test]
+fn copied_database_with_same_device_id_is_reidentified() {
+    let sim = Sim::new("dupdev");
+    let mut a = sim.dev("A");
+    let bank_a = a.add_bank("A 库");
+    a.add_question(&bank_a, "a1");
+    a.push(&sim);
+    let dev_a = a.device();
+
+    let mut b = sim.dev("B");
+    // 等价于把 A 的数据目录整体拷到 B：db_meta 里的 device_id 一起被复制
+    b.conn
+        .execute(
+            "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('s3_device_id', ?1)",
+            params![&dev_a],
+        )
+        .expect("复制设备 ID");
+    let bank_b = b.add_bank("B 库");
+    b.add_question(&bank_b, "b1");
+
+    let err = sync::push(&b.conn, &sim.store, &b.assets, &sim.cfg, &dev_a)
+        .expect_err("同名序号不同内容必须拒绝");
+    assert!(err.contains("设备序号冲突"), "{err}");
+    assert_ne!(b.device(), dev_a, "必须自动分配新设备 ID");
+    assert_eq!(b.seq(), 0, "换 ID 后序号归零");
+
+    // 重试走新链；原链不受影响
+    let p = b.push(&sim);
+    assert_eq!(p["skipped"], json!(false));
+    assert_eq!(p["seq"], json!(1));
+    assert_eq!(count_objects(&sim, "/log/"), 2, "两条链各一个对象");
+
+    // 第三台设备能同时拿到两条链的数据；A/B 也互相收敛
+    let mut c = sim.dev("C");
+    let r = c.pull(&sim);
+    assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+    a.pull(&sim);
+    b.pull(&sim);
+    for d in [&a, &b, &c] {
+        assert!(
+            crate::db::fetch_question(&d.conn, "a1").unwrap().is_some(),
+            "{} 缺 a1",
+            d.name
+        );
+        assert!(
+            crate::db::fetch_question(&d.conn, "b1").unwrap().is_some(),
+            "{} 缺 b1",
+            d.name
+        );
+    }
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 23：PUT 失败（网络/权限）
+// 断言：序号与水位不推进，重试导出同一批行；第二批失败同样不跳号
+// ---------------------------------------------------------------------------
+#[test]
+fn failed_put_does_not_advance_seq_or_watermark() {
+    let sim = Sim::new("putfail");
+    let a = sim.dev("A");
+    let bank = a.add_bank("库");
+    a.add_question(&bank, "q1");
+
+    let store = FaultyStore::new(&sim.store);
+    let dev = a.device();
+    store.fail_put_containing("/log/");
+    let err = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev)
+        .expect_err("PUT 失败必须报错");
+    assert!(err.contains("injected put failure"), "{err}");
+    assert_eq!(a.seq(), 0, "失败不得推进序号");
+    assert_eq!(count_objects(&sim, "/log/"), 0, "失败不得留下对象");
+    let wm: String = a
+        .conn
+        .query_row(
+            "SELECT value FROM db_meta WHERE key = 's3_push_watermark'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
+    assert!(wm.is_empty(), "失败不得推进水位: {wm}");
+
+    // 重试：同一批 3 行（默认库 + 新库 + 1 题）完整导出
+    store.clear();
+    let p1 = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev).expect("重试应成功");
+    assert_eq!(p1["seq"], json!(1));
+    assert_eq!(p1["rows"], json!(3));
+
+    // 第二批失败：序号必须停在 1，重试仍为 2
+    a.edit_question("q1", 4);
+    store.fail_put_containing("/log/");
+    let err2 = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev)
+        .expect_err("第二批失败必须报错");
+    assert!(err2.contains("injected put failure"), "{err2}");
+    assert_eq!(a.seq(), 1, "失败批次不得占用序号");
+    store.clear();
+    let p2 = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev).expect("重试应成功");
+    assert_eq!(p2["seq"], json!(2));
+    assert_eq!(count_objects(&sim, "/log/"), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 24：拉取途中单个日志对象读取失败
+// 断言：已应用对象的游标已持久化，失败对象不推进；重试从断点续传不重复
+// ---------------------------------------------------------------------------
+#[test]
+fn pull_resumes_from_cursor_after_object_read_failure() {
+    let sim = Sim::new("getfail");
+    let a = sim.dev("A");
+    let bank = a.add_bank("库");
+    for i in 0..3 {
+        a.add_question(&bank, &format!("q{i}"));
+    }
+    a.push(&sim);
+    a.edit_question("q0", 4);
+    let p2 = a.push(&sim);
+    let key2 = p2["key"].as_str().expect("第二批 key").to_string();
+    a.edit_question("q1", 5);
+    a.push(&sim);
+    assert_eq!(a.seq(), 3);
+
+    let mut b = sim.dev("B");
+    let dev_b = b.device();
+    let store = FaultyStore::new(&sim.store);
+    store.fail_get_key(&key2);
+    let err = sync::pull(&mut b.conn, &store, &b.assets, &sim.cfg, &dev_b)
+        .expect_err("坏对象必须中止本次拉取");
+    assert!(err.contains("injected get failure"), "错误应原样冒泡: {err}");
+    assert_eq!(cursor_of(&b.conn, &a.device()), 1, "游标只应停在已应用处");
+    assert_eq!(difficulty(&b, "q0"), Some(2), "失败对象不得提前落库");
+
+    // 清除故障后从游标 1 继续：只补放 2、3
+    store.clear();
+    let r = b.pull(&sim);
+    assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["applied_logs"], json!(2), "应从断点续传: {r}");
+    assert_eq!(difficulty(&b, "q0"), Some(4));
+    assert_eq!(difficulty(&b, "q1"), Some(5));
+    assert_converged(&a, &b);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 25：图片上传失败后重试
+// 断言：失败项进 pending；即使没有新行，下一次「上传」也要补传；成功后不重复
+// ---------------------------------------------------------------------------
+#[test]
+fn failed_asset_upload_retries_even_without_new_rows() {
+    const PNG_B64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let sim = Sim::new("assetfail");
+    let a = sim.dev("A");
+    let bank = a.add_bank("带图库");
+    let (sha, _) = crate::db::assets_put_impl(
+        &a.conn,
+        &a.assets,
+        PNG_B64,
+        "image/png",
+        Some(1),
+        Some(1),
+    )
+    .expect("落图");
+    let mut q = crate::db::test_support::sample_question();
+    q["id"] = json!("q_img");
+    q["bank_id"] = json!(bank);
+    q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+    crate::db::questions_create_impl(&a.conn, q).expect("建带图题");
+
+    let store = FaultyStore::new(&sim.store);
+    let dev = a.device();
+    store.fail_put_containing("/assets/");
+    let p1 = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev).expect("数据行应成功");
+    assert_eq!(p1["assets_uploaded"], json!(0));
+    assert_eq!(p1["asset_errors"].as_array().unwrap().len(), 1);
+    assert_eq!(count_objects(&sim, "/assets/"), 0, "图片不应存在");
+    let pending: String = a
+        .conn
+        .query_row(
+            "SELECT value FROM db_meta WHERE key = 's3_asset_pending'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("失败项应进 pending");
+    assert!(pending.contains(&sha), "pending 应记录 sha: {pending}");
+
+    // 无新改动再点「上传」：日志跳过，但图片必须补传
+    store.clear();
+    let p2 = a.push(&sim);
+    assert_eq!(p2["skipped"], json!(true));
+    assert_eq!(p2["rows"], json!(0));
+    assert_eq!(p2["assets_uploaded"], json!(1), "skipped 也要补传图片: {p2}");
+    assert_eq!(count_objects(&sim, "/assets/"), 1);
+
+    // 再点一次不重复上传
+    let p3 = a.push(&sim);
+    assert_eq!(p3["assets_uploaded"], json!(0));
+
+    // B 能拿到图片与题目
+    let mut b = sim.dev("B");
+    let r = b.pull(&sim);
+    assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+    assert!(
+        crate::db::asset_file_present(&b.conn, &b.assets, &sha).expect("探测图片"),
+        "图片必须随题目落到 B"
+    );
+    assert_converged(&a, &b);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 26：固定种子随机会话（3 设备、增删改答设、随机推拉顺序）
+// 断言：静默后三方完全一致；拉取不产生回声日志；日志数 = 成功推送次数
+// ---------------------------------------------------------------------------
+#[test]
+fn randomized_three_device_session_converges() {
+    let sim = Sim::new("fuzz");
+    let mut a = sim.dev("A");
+    let mut b = sim.dev("B");
+    let mut c = sim.dev("C");
+    let bank = a.add_bank("随机库");
+    for i in 0..3 {
+        a.add_question(&bank, &format!("seed{i}"));
+    }
+    a.push(&sim);
+    b.pull(&sim);
+    c.pull(&sim);
+    let mut pushes = 1usize;
+    let mut rng = Lcg(0x5EED_1234_ABCD_0001u64);
+    let mut clock = 0u32;
+
+    for step in 0..48u32 {
+        let dev = rng.pick(3);
+        let op = rng.pick(100);
+        // 业务时间严格递增，避免 LWW 并列导致“收敛到谁”不确定
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let actor = match dev {
+            0 => &mut a,
+            1 => &mut b,
+            _ => &mut c,
+        };
+        let ids = live_ids(actor);
+        match op {
+            0..=39 => {
+                let q = ids[rng.pick(ids.len())].clone();
+                let diff = 1 + rng.pick(9) as i64;
+                actor.edit_question(&q, diff);
+            }
+            40..=54 if ids.len() > 2 => {
+                let q = ids[rng.pick(ids.len())].clone();
+                actor.delete_question(&q);
+            }
+            40..=54 => {
+                let q = ids[rng.pick(ids.len())].clone();
+                let diff = 1 + rng.pick(9) as i64;
+                actor.edit_question(&q, diff);
+            }
+            55..=69 => {
+                actor.add_question(&bank, &format!("new{step}"));
+            }
+            70..=89 => {
+                let q = ids[rng.pick(ids.len())].clone();
+                clock += 1;
+                let answered = format!("2026-10-01T00:00:{:02}.000Z", clock);
+                let due = format!("2026-10-15T00:00:{:02}.000Z", clock);
+                actor.answer(&q, &answered, &due);
+            }
+            _ => {
+                let v = format!("0.{}", 70 + rng.pick(25));
+                crate::db::settings_set_impl(
+                    &mut actor.conn,
+                    &[crate::db::SettingItem {
+                        key: "fsrs.requestRetention".to_string(),
+                        value_json: v,
+                    }],
+                )
+                .expect("写设置");
+            }
+        }
+
+        let p = actor.push(&sim);
+        if p["skipped"] == json!(false) {
+            pushes += 1;
+        }
+        // 推完后随机让某台设备拉取：拉取本身不得写出日志（无回声）
+        if rng.pick(100) < 60 {
+            let target = rng.pick(3);
+            let before = count_objects(&sim, "/log/");
+            let r = match target {
+                0 => a.pull(&sim),
+                1 => b.pull(&sim),
+                _ => c.pull(&sim),
+            };
+            assert!(r["warnings"].as_array().unwrap().is_empty(), "step {step}: {r}");
+            assert_eq!(
+                count_objects(&sim, "/log/"),
+                before,
+                "step {step}: 拉取产生了回声日志"
+            );
+        }
+    }
+
+    // 收尾：各推一次 + 轮换拉取两轮
+    for d in [&mut a, &mut b, &mut c] {
+        let p = d.push(&sim);
+        if p["skipped"] == json!(false) {
+            pushes += 1;
+        }
+    }
+    for _ in 0..2 {
+        for d in [&mut b, &mut c, &mut a] {
+            let r = d.pull(&sim);
+            assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+        }
+    }
+    assert_converged(&a, &b);
+    assert_converged(&a, &c);
+    assert_eq!(
+        count_objects(&sim, "/log/"),
+        pushes,
+        "日志对象数必须等于成功推送次数"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 场景 27：存在设置时的幂等与无回声
+// 回归：设置没有 synced_at，曾被每次全量导出 → 每次 push 都非 skipped，
+// pull 内部的保护性 push 会无限写日志（设置一改就永远在自增长）。
+// ---------------------------------------------------------------------------
+#[test]
+fn settings_are_pushed_once_then_skipped() {
+    let sim = Sim::new("setecho");
+    let mut a = sim.dev("A");
+    let bank = a.add_bank("库");
+    a.add_question(&bank, "q1");
+    a.push(&sim);
+
+    crate::db::settings_set_impl(
+        &mut a.conn,
+        &[crate::db::SettingItem {
+            key: "fsrs.requestRetention".to_string(),
+            value_json: "0.85".to_string(),
+        }],
+    )
+    .expect("写设置");
+
+    // 设置变更必须推一次（即使没有任何数据行变化也照样写日志）
+    let p2 = a.push(&sim);
+    assert_eq!(p2["skipped"], json!(false), "{p2}");
+    assert_eq!(p2["seq"], json!(2));
+
+    // 再推：设置没变 → 必须 skipped，且不再产生对象
+    let p3 = a.push(&sim);
+    assert_eq!(p3["skipped"], json!(true), "设置未变必须 skipped: {p3}");
+    assert_eq!(p3["seq"], json!(2));
+    assert_eq!(count_objects(&sim, "/log/"), 2);
+
+    // 另一台设备拿到设置后，它自己的 push 也不能把设置当成本地改动回传
+    let mut b = sim.dev("B");
+    b.pull(&sim);
+    let p4 = b.push(&sim);
+    assert_eq!(p4["skipped"], json!(true), "拉取后不得回声: {p4}");
+    assert_eq!(count_objects(&sim, "/log/"), 2);
+
+    // B 改设置（没有数据行变化）也要能推上去，A 拉到
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    crate::db::settings_set_impl(
+        &mut b.conn,
+        &[crate::db::SettingItem {
+            key: "fsrs.requestRetention".to_string(),
+            value_json: "0.9".to_string(),
+        }],
+    )
+    .expect("B 写设置");
+    let p5 = b.push(&sim);
+    assert_eq!(p5["skipped"], json!(false), "仅设置变更也必须推: {p5}");
+    a.pull(&sim);
+    let v: String = a
+        .conn
+        .query_row(
+            "SELECT value_json FROM app_settings WHERE key = 'fsrs.requestRetention'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("读设置");
+    assert_eq!(v, "0.9");
+    assert_converged(&a, &b);
+    assert_eq!(count_objects(&sim, "/log/"), 3);
 }
