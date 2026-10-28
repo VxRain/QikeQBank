@@ -195,6 +195,10 @@ pub(crate) fn collect_asset_refs(v: &Value, out: &mut HashSet<String>) {
 
 /// 全库题面 JSON 里扫描 `asset:<sha>` 引用，返回 (question_id, sha)。
 /// 保留重复项（同一题多次引用同一图），调用方按需去重。
+///
+/// **性能注意**：这是 O(全库) 扫描（逐题 5 个 JSON 列）。仅用于缺图检查 /
+/// GC / 诊断；默认上传路径禁止调用 —— 全库补图走 `s3::repair_assets`
+/// （本地登记表 + 分页 LIST，不解析题目 JSON）。
 pub(crate) fn scan_question_asset_refs(conn: &Connection) -> Result<Vec<(String, String)>, String> {
     let mut used: Vec<(String, String)> = Vec::new();
     let mut stmt = conn

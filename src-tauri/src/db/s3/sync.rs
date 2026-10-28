@@ -14,7 +14,7 @@ use super::store::ObjectStore;
 use super::{asset_key, base_key, is_safe_device_id, log_key, wire, Credentials, S3Config};
 use crate::db::assets::{
     asset_mime_ext, asset_path_for, asset_registry_get, assets_put_bytes_impl, collect_asset_refs,
-    is_asset_sha, scan_question_asset_refs,
+    is_asset_sha,
 };
 use crate::db::{
     apply_bundle, db_meta_value, export_delta_at, generate_id, next_sync_stamp, now_iso,
@@ -294,26 +294,16 @@ fn same_batch(existing_gz: &[u8], fresh_raw: &[u8]) -> bool {
 }
 
 /// 推送一批本地增量。返回 `{skipped, seq, rows, assets_uploaded, asset_errors}`。
+///
+/// **性能保护**：默认上传只处理本批增量题目 + 上次失败的 `s3_asset_pending`，
+/// 不得扫描全库题目/图片。全库补图是显式动作 `repair_assets`（本地登记表 +
+/// 分页 LIST），题库到 10 万+ 时任何 O(全库) 操作都不能放在日常上传路径里。
 pub fn push(
     conn: &Connection,
     store: &dyn ObjectStore,
     assets_root: &Path,
     cfg: &S3Config,
     device: &str,
-) -> Result<Value, String> {
-    // 用户手动点「上传」：顺便巡检全库引用的图片，把云端缺失的补回去。
-    push_with(conn, store, assets_root, cfg, device, true)
-}
-
-/// `scan_all_assets=false` 仅用于 pull 内部的保护性 push：只补本批与待办，
-/// 避免每次下载都遍历全库题目。
-fn push_with(
-    conn: &Connection,
-    store: &dyn ObjectStore,
-    assets_root: &Path,
-    cfg: &S3Config,
-    device: &str,
-    scan_all_assets: bool,
 ) -> Result<Value, String> {
     let watermark = db_meta_value(conn, WATERMARK_KEY)?.unwrap_or_default();
     let seq = meta_u64(conn, SEQ_KEY)?;
@@ -356,11 +346,11 @@ fn push_with(
         upsert_db_meta(conn, WATERMARK_KEY, &server_time)?;
         // 没有新改动，但桶被清空过：仍然要修（否则"清空后点上传"什么都不会发生）。
         if prev_missing {
-            heal_prefix_loss(conn, store, assets_root, cfg, device, had_known_gap, &mut warnings)?;
+            heal_prefix_loss(conn, store, cfg, device, had_known_gap, &mut warnings)?;
         }
         // 无新行不代表没有待办：上次图片上传失败的重试必须在这里继续，
         // 否则用户再点一次「上传」只会得到 skipped，缺图永远补不上。
-        let assets = upload_assets(conn, store, assets_root, cfg, &bundle, scan_all_assets)?;
+        let assets = upload_assets(conn, store, assets_root, cfg, &bundle)?;
         upsert_db_meta(conn, LAST_PUSH_KEY, &now_iso())?;
         return Ok(json!({
             "skipped": true, "seq": seq, "rows": 0,
@@ -412,10 +402,10 @@ fn push_with(
     // 自己的链不必再重放：推送成功即视为本机已消费到该序号。
     mark_own_cursor(conn, device, next)?;
 
-    let assets = upload_assets(conn, store, assets_root, cfg, &bundle, scan_all_assets)?;
+    let assets = upload_assets(conn, store, assets_root, cfg, &bundle)?;
 
     if prev_missing {
-        heal_prefix_loss(conn, store, assets_root, cfg, device, had_known_gap, &mut warnings)?;
+        heal_prefix_loss(conn, store, cfg, device, had_known_gap, &mut warnings)?;
     } else if seq == 0
         && db_meta_value(conn, LOCAL_INCOMPLETE_KEY)?.as_deref() != Some("1")
         // 桶里已有基线就不再补锚点：锚点的作用是「至少有一份完整快照」，已有即达成。
@@ -427,7 +417,7 @@ fn push_with(
     {
         // 首次上传顺手留一份完整快照：桶里从此永远有一个锚点。
         // 之后即使早期增量被清理/误删，新设备也能直接对齐，不必从头回放。
-        if let Err(e) = compact(conn, store, assets_root, cfg, device) {
+        if let Err(e) = compact(conn, store, cfg, device) {
             warnings.push(json!({
                 "kind": "anchor-failed",
                 "message": format!("完整数据备份未能上传：{e}"),
@@ -481,25 +471,51 @@ fn save_pending_assets(conn: &Connection, set: &HashSet<String>) -> Result<(), S
     upsert_db_meta(conn, PENDING_ASSETS_KEY, &raw)
 }
 
-/// 上传题目引用的图片。`scan_all_assets=true` 时巡检全库（用户手动上传 /
-/// 生成完整基线），把云端缺失的图片补回去 —— 这是「云端只剩题目没有图」
-/// 的唯一自愈路径；false 时只看本批与待办，避免每次下载都遍历全库。
+/// 单张图片读取失败：区分「这张图不可用」与「数据库/路径异常」。
+/// 前者记入 asset_errors 后继续处理其它图片，后者必须中止整个操作
+/// （与引入本助手前的 `?` 语义一致，避免把 DB 故障降级成一条脏数据）。
+enum LocalAssetError {
+    Fatal(String),
+    Asset(&'static str),
+}
+
+/// 读取本地图片并复核 sha；Asset 错误串直接作为 `asset_errors.reason`。
+fn local_asset_bytes(
+    conn: &Connection,
+    assets_root: &Path,
+    sha: &str,
+) -> Result<(Vec<u8>, String), LocalAssetError> {
+    let Some((mime, _)) = asset_registry_get(conn, sha).map_err(LocalAssetError::Fatal)? else {
+        return Err(LocalAssetError::Asset("not-registered"));
+    };
+    let Some(ext) = asset_mime_ext(&mime) else {
+        return Err(LocalAssetError::Asset("bad-mime"));
+    };
+    let path = asset_path_for(assets_root, sha, ext).map_err(LocalAssetError::Fatal)?;
+    let bytes = match fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return Err(LocalAssetError::Asset("file-missing")),
+    };
+    if sha256_hex(&bytes) != sha {
+        return Err(LocalAssetError::Asset("sha-mismatch"));
+    }
+    Ok((bytes, mime))
+}
+
+/// 只上传「本批增量题目 + 上次失败待办」引用的图片。
+///
+/// **性能保护**：禁止在这里扫描全库。默认上传必须是 O(增量)；
+/// 全库补图走显式动作 `repair_assets`。
 fn upload_assets(
     conn: &Connection,
     store: &dyn ObjectStore,
     assets_root: &Path,
     cfg: &S3Config,
     bundle: &Value,
-    scan_all_assets: bool,
 ) -> Result<(u64, Vec<Value>), String> {
     let mut refs: HashSet<String> = HashSet::new();
     // 上一轮失败的图片并入本批重试（内容寻址 → 幂等）
     refs.extend(load_pending_assets(conn)?);
-    if scan_all_assets {
-        for (_qid, sha) in scan_question_asset_refs(conn)? {
-            refs.insert(sha);
-        }
-    }
     for q in bundle
         .get("questions")
         .and_then(Value::as_array)
@@ -519,26 +535,14 @@ fn upload_assets(
         if store.head(&key)? {
             continue;
         }
-        let Some((mime, _)) = asset_registry_get(conn, &sha)? else {
-            errors.push(json!({"sha": sha, "reason": "not-registered"}));
-            continue;
-        };
-        let Some(ext) = asset_mime_ext(&mime) else {
-            errors.push(json!({"sha": sha, "reason": "bad-mime"}));
-            continue;
-        };
-        let path = asset_path_for(assets_root, &sha, ext)?;
-        let bytes = match fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => {
-                errors.push(json!({"sha": sha, "reason": "file-missing"}));
+        let (bytes, mime) = match local_asset_bytes(conn, assets_root, &sha) {
+            Ok(v) => v,
+            Err(LocalAssetError::Asset(reason)) => {
+                errors.push(json!({"sha": sha, "reason": reason}));
                 continue;
             }
+            Err(LocalAssetError::Fatal(e)) => return Err(e),
         };
-        if sha256_hex(&bytes) != sha {
-            errors.push(json!({"sha": sha, "reason": "sha-mismatch"}));
-            continue;
-        }
         match store.put(&key, &bytes, &mime) {
             Ok(()) => uploaded += 1,
             Err(e) => errors.push(json!({"sha": sha, "reason": e})),
@@ -557,6 +561,101 @@ fn upload_assets(
         .collect();
     save_pending_assets(conn, &pending)?;
     Ok((uploaded, errors))
+}
+
+// ---------------------------------------------------------------------------
+// 显式补图（缺图修复）
+// ---------------------------------------------------------------------------
+
+/// 从对象 key 还原 sha：`.../assets/<sha[0..2]>/<sha[2..]>`。
+fn asset_sha_from_key(key: &str) -> Option<String> {
+    let mut parts = key.rsplitn(3, '/');
+    let tail = parts.next()?;
+    let head = parts.next()?;
+    if head.len() != 2 || tail.len() != 62 {
+        return None;
+    }
+    let sha = format!("{head}{tail}");
+    is_asset_sha(&sha).then_some(sha)
+}
+
+/// 一次分页 LIST 得到桶内已有图片的 sha 集合（1000/页）。
+/// 10 万张图约 100 次请求，远优于逐图 HEAD。
+fn list_bucket_assets(
+    store: &dyn ObjectStore,
+    cfg: &S3Config,
+) -> Result<HashSet<String>, String> {
+    let prefix = cfg.full_key("assets/");
+    let mut out = HashSet::new();
+    let mut start: Option<String> = None;
+    loop {
+        let page = store.list(&prefix, start.as_deref(), None)?;
+        for key in &page.keys {
+            if let Some(sha) = asset_sha_from_key(key) {
+                out.insert(sha);
+            }
+        }
+        let Some(last) = page.keys.last() else { break };
+        // start-after 没有推进说明后端分页语义异常，直接收尾，避免死循环
+        if !page.truncated || start.as_deref() == Some(last.as_str()) {
+            break;
+        }
+        start = Some(last.clone());
+    }
+    Ok(out)
+}
+
+/// 显式补图：本地 `assets` 登记表 − 桶内已有 = 缺失，只上传缺失项。
+///
+/// 不解析题目 JSON、不逐图 HEAD；这是「云端只剩题目、assets/ 被清空」时
+/// 唯一恢复图片的入口。日常 `push` 不调用它。
+pub fn repair_assets(
+    conn: &Connection,
+    store: &dyn ObjectStore,
+    assets_root: &Path,
+    cfg: &S3Config,
+) -> Result<Value, String> {
+    let bucket = list_bucket_assets(store, cfg)?;
+    let mut stmt = conn
+        .prepare("SELECT sha FROM assets ORDER BY sha")
+        .map_err(|e| e.to_string())?;
+    let registered: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut missing = 0u64;
+    let mut uploaded = 0u64;
+    let mut errors = Vec::new();
+    for sha in &registered {
+        if bucket.contains(sha) {
+            continue;
+        }
+        missing += 1;
+        let Some(rel) = asset_key(sha) else {
+            errors.push(json!({"sha": sha, "reason": "bad-sha"}));
+            continue;
+        };
+        let key = cfg.full_key(&rel);
+        match local_asset_bytes(conn, assets_root, sha) {
+            Ok((bytes, mime)) => match store.put(&key, &bytes, &mime) {
+                Ok(()) => uploaded += 1,
+                Err(e) => errors.push(json!({"sha": sha, "reason": e})),
+            },
+            Err(LocalAssetError::Asset(reason)) => {
+                errors.push(json!({"sha": sha, "reason": reason}))
+            }
+            Err(LocalAssetError::Fatal(e)) => return Err(e),
+        }
+    }
+    Ok(json!({
+        "bucket_assets": bucket.len(),
+        "registered": registered.len(),
+        "missing": missing,
+        "uploaded": uploaded,
+        "asset_errors": errors,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +722,7 @@ pub fn pull(
                 }
                 // 断链恢复：先把本地未同步的改动推上去（避免 replace_snapshot 清掉），
                 // 再用最新基线重建，最后重新从基线 covered 继续重放。
-                push_with(conn, store, assets_root, cfg, device, false)?;
+                push(conn, store, assets_root, cfg, device)?;
                 bootstrap(conn, store, cfg)?;
                 rebased = true;
             }
@@ -692,7 +791,7 @@ fn pull_pass(
     // "把推送水位抬到已观测到的最大戳"不会误伤本地未推的改动。
     // 全新库没有需要保护的内容，跳过以免把种子默认库当成一条增量推出去。
     if has_local_content(conn)? {
-        push_with(conn, store, assets_root, cfg, device, false)?;
+        push(conn, store, assets_root, cfg, device)?;
     }
     if !bootstrapped {
         bootstrap(conn, store, cfg)?;
@@ -914,7 +1013,6 @@ fn ensure_referenced_banks(conn: &Connection, bundle: &Value) -> Result<(), Stri
 fn heal_prefix_loss(
     conn: &Connection,
     store: &dyn ObjectStore,
-    assets_root: &Path,
     cfg: &S3Config,
     device: &str,
     had_known_gap: bool,
@@ -925,11 +1023,22 @@ fn heal_prefix_loss(
         "kind": "chain-gap",
         "message": "检测到云端存储被清空过，正在自动上传一份完整数据，其他设备点「下载」即可对齐。",
     }));
+    // 图片不随数据基线重传：明确告知用户走显式补图，避免误以为已经完整。
+    let has_assets = conn
+        .query_row("SELECT 1 FROM assets LIMIT 1", [], |_| Ok(true))
+        .ok()
+        .unwrap_or(false);
+    if has_assets {
+        warnings.push(json!({
+            "kind": "assets-repair-hint",
+            "message": "图片需要单独补传：请在有原图的设备点「修复云端图片」。",
+        }));
+    }
     if had_known_gap {
         // 本机自己也缺历史，生成的基线会是不完整的：只提示，不自动生成。
         return Ok(());
     }
-    match compact(conn, store, assets_root, cfg, device) {
+    match compact(conn, store, cfg, device) {
         Ok(_) => warnings.push(json!({
             "kind": "auto-base",
             "message": "完整数据已上传，其他设备点「下载」即可对齐。",
@@ -1052,7 +1161,6 @@ fn pull_assets(
 pub fn compact(
     conn: &Connection,
     store: &dyn ObjectStore,
-    assets_root: &Path,
     cfg: &S3Config,
     device: &str,
 ) -> Result<Value, String> {
@@ -1086,14 +1194,7 @@ pub fn compact(
     let raw = wire::encode(&header, &bundle)?;
     let gz = wire::gzip_encode(&raw)?;
     store.put(&key, &gz, "application/gzip")?;
-    // 完整快照必须连同图片一起可用：云端只剩题目、assets/ 被清空时，
-    // 基线重传是唯一能补回图片的时机。
-    let (assets_uploaded, asset_errors) =
-        upload_assets(conn, store, assets_root, cfg, &bundle, true)?;
-    Ok(json!({
-        "base": key, "rows": rows, "bytes": gz.len(),
-        "assets_uploaded": assets_uploaded, "asset_errors": asset_errors,
-    }))
+    Ok(json!({ "base": key, "rows": rows, "bytes": gz.len() }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1301,7 +1402,7 @@ mod tests {
         assert_eq!(meta_u64(&a, SEQ_KEY).unwrap(), 3);
 
         // 生成基线（covered 覆盖 A 的 3 条），再模拟外部删除最老的两条日志
-        compact(&a, &store, &ra, &c, &dev_a).unwrap();
+        compact(&a, &store, &c, &dev_a).unwrap();
         store.delete(&c.full_key(&log_key(&dev_a, 1))).unwrap();
         store.delete(&c.full_key(&log_key(&dev_a, 2))).unwrap();
 
@@ -1413,7 +1514,7 @@ mod tests {
         );
 
         // 主设备生成基线
-        compact(&a, &store, &ra, &c, &dev_a).unwrap();
+        compact(&a, &store, &c, &dev_a).unwrap();
 
         // 第二次拉取：主动对齐到基线，标记清除
         let r2 = pull(&mut b, &store, &rb, &c, &dev_b).unwrap();
@@ -1477,7 +1578,7 @@ mod tests {
 
         seed(&a, "q_echo");
         push(&a, &store, &ra, &c, &dev_a).unwrap();
-        compact(&a, &store, &ra, &c, &dev_a).unwrap();
+        compact(&a, &store, &c, &dev_a).unwrap();
         // B 全新设备：从基线重建
         pull(&mut b, &store, &rb, &c, &dev_b).unwrap();
         assert!(crate::db::fetch_question(&b, "q_echo").unwrap().is_some());
@@ -1648,7 +1749,7 @@ mod tests {
         }
 
         eprintln!("[4] compact");
-        match compact(&a, &st, &ra, &cfg, &dev_a) {
+        match compact(&a, &st, &cfg, &dev_a) {
             Ok(v) => eprintln!("    {v}"),
             Err(e) => {
                 eprintln!("[FAIL] compact: {e}");
@@ -1725,6 +1826,19 @@ mod tests {
         }
         let refs = crate::db::assets::scan_question_asset_refs(&conn).unwrap_or_default();
         eprintln!("[local-refs] {}", refs.len());
+    }
+
+    #[test]
+    fn list_bucket_assets_paginates_past_one_thousand() {
+        let store = MemoryStore::new();
+        let c = cfg();
+        for i in 0..1005u32 {
+            let sha = format!("{i:064x}");
+            let rel = crate::db::s3::asset_key(&sha).expect("合法 sha");
+            store.put(&c.full_key(&rel), b"x", "image/png").unwrap();
+        }
+        let got = list_bucket_assets(&store, &c).expect("分页列举");
+        assert_eq!(got.len(), 1005, "必须翻页取全，不能停在第一页");
     }
 
 }

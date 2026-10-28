@@ -3,7 +3,7 @@ import { cmd } from './bridge.js'
 // S3（及 S3 兼容端点）同步通道。
 // 约定：顶层参数 camelCase（Tauri 命令参数），S3Settings 结构体字段保持 snake_case。
 // 密钥只落本机 db_meta（不进同步包），读取接口永不回传 secret。
-// 用户可见动作只有「上传 / 下载」；完整快照由后端在上传时自动维护。
+// 用户可见动作：「上传 / 下载」+ 缺图时的「修复云端图片」；完整快照由后端自动维护。
 
 export async function s3ConfigGet() {
   const res = await cmd('sync_s3_config_get')
@@ -34,6 +34,12 @@ export async function s3Pull() {
 
 export async function s3Status() {
   const res = await cmd('sync_s3_status')
+  return res?.data
+}
+
+// 显式补图：本地登记表 − 桶内已有，只上传缺失项；不扫描题库、不逐图 HEAD。
+export async function s3RepairAssets() {
+  const res = await cmd('sync_s3_repair_assets')
   return res?.data
 }
 

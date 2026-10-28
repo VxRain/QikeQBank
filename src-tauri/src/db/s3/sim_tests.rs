@@ -106,7 +106,7 @@ impl Dev {
     }
 
     fn compact(&self, sim: &Sim) -> Value {
-        sync::compact(&self.conn, &sim.store, &self.assets, &sim.cfg, &self.device())
+        sync::compact(&self.conn, &sim.store, &sim.cfg, &self.device())
             .unwrap_or_else(|e| panic!("[{}] compact 失败: {e}", self.name))
     }
 
@@ -1518,8 +1518,8 @@ fn failed_asset_upload_retries_even_without_new_rows() {
 
     let store = FaultyStore::new(&sim.store);
     let dev = a.device();
-    // 首推会先上传增量图片，再自动补锚点（compact 也会巡检图片）：两次都失败
-    store.fail_put_containing_times("/assets/", 2);
+    // 首推的增量上传失败；pending 会留待下一次上传重试
+    store.fail_put_containing_times("/assets/", 1);
     let p1 = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev).expect("数据行应成功");
     assert_eq!(p1["assets_uploaded"], json!(0));
     assert_eq!(p1["asset_errors"].as_array().unwrap().len(), 1);
@@ -1739,10 +1739,10 @@ fn settings_are_pushed_once_then_skipped() {
 
 // ---------------------------------------------------------------------------
 // 场景 28：云端图片对象丢失（题目/基线还在）—— 仅重试下载无法恢复
-// 期望：在有原图的设备点一次「上传」即巡检全库补回；下载方随后即可取图
+// 期望：默认上传不做全库扫描（保护），显式「修复云端图片」补回；下载方随后可取图
 // ---------------------------------------------------------------------------
 #[test]
-fn missing_bucket_asset_is_healed_by_manual_upload() {
+fn missing_bucket_asset_is_healed_by_repair() {
     const PNG_B64: &str =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     let sim = Sim::new("healasset");
@@ -1762,6 +1762,7 @@ fn missing_bucket_asset_is_healed_by_manual_upload() {
     q["bank_id"] = json!(bank);
     q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
     crate::db::questions_create_impl(&a.conn, q).expect("建带图题");
+    a.add_question(&bank, "q_plain");
     let p = a.push(&sim);
     assert_eq!(p["assets_uploaded"], json!(1));
     assert_eq!(count_objects(&sim, "/assets/"), 1);
@@ -1790,11 +1791,29 @@ fn missing_bucket_asset_is_healed_by_manual_upload() {
     let r2 = b.pull(&sim);
     assert_eq!(r2["asset_errors"][0]["reason"], json!("not-in-bucket"));
 
-    // 在有原图的 A 上点「上传」：即使没有任何数据改动，也要巡检全库补图
+    // 保护 1：正常增量上传只处理本批题目，不得补未变更题目的图
+    a.edit_question("q_plain", 4);
     let p2 = a.push(&sim);
-    assert_eq!(p2["skipped"], json!(true), "{p2}");
-    assert_eq!(p2["assets_uploaded"], json!(1), "无改动上传必须补传缺图: {p2}");
+    assert_eq!(p2["skipped"], json!(false), "{p2}");
+    assert_eq!(p2["assets_uploaded"], json!(0), "增量上传不得全库巡检: {p2}");
+    assert_eq!(count_objects(&sim, "/assets/"), 0);
+
+    // 保护 2：无改动上传（skipped）同样只重试 pending，不得扫全库
+    let p3 = a.push(&sim);
+    assert_eq!(p3["skipped"], json!(true), "{p3}");
+    assert_eq!(p3["assets_uploaded"], json!(0), "skipped 上传不得全库巡检: {p3}");
+    assert_eq!(count_objects(&sim, "/assets/"), 0);
+
+    // 显式修复：本地登记表 − 桶内已有，只补缺失项
+    let rep = sync::repair_assets(&a.conn, &sim.store, &a.assets, &sim.cfg).expect("修复图片");
+    assert_eq!(rep["registered"], json!(1), "{rep}");
+    assert_eq!(rep["missing"], json!(1), "{rep}");
+    assert_eq!(rep["uploaded"], json!(1), "{rep}");
+    assert!(rep["asset_errors"].as_array().unwrap().is_empty(), "{rep}");
     assert_eq!(count_objects(&sim, "/assets/"), 1);
+    let rep2 = sync::repair_assets(&a.conn, &sim.store, &a.assets, &sim.cfg).expect("再次修复");
+    assert_eq!(rep2["missing"], json!(0), "{rep2}");
+    assert_eq!(rep2["uploaded"], json!(0), "{rep2}");
 
     // B 再次下载：图片到位
     let r3 = b.pull(&sim);
@@ -1804,15 +1823,16 @@ fn missing_bucket_asset_is_healed_by_manual_upload() {
         crate::db::asset_file_present(&b.conn, &b.assets, &sha).unwrap(),
         "补传后 B 应拿到图片"
     );
+    assert_eq!(difficulty(&b, "q_plain"), Some(4), "增量数据应正常到达");
     assert_converged(&a, &b);
 }
 
 // ---------------------------------------------------------------------------
 // 场景 29：整个前缀被清空（日志/基线/图片全没）后重新上传
-// 期望：自动补基线时连带把题目引用的图片一起传回去，新设备下载不报缺图
+// 期望：上传只补数据基线并提示；显式修复补回图片，新设备下载不报缺图
 // ---------------------------------------------------------------------------
 #[test]
-fn wipe_all_objects_then_upload_restores_assets() {
+fn wipe_all_objects_then_repair_restores_assets() {
     const PNG_B64: &str =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     let sim = Sim::new("wipeasset");
@@ -1841,7 +1861,7 @@ fn wipe_all_objects_then_upload_restores_assets() {
     }
     assert_eq!(count_objects(&sim, "/"), 0);
 
-    // 无数据改动再上传：自动补基线（compact）必须连图片一起补
+    // 无数据改动再上传：只补数据基线（compact），不扫描/上传全库图片
     let p = a.push(&sim);
     assert_eq!(p["skipped"], json!(true), "{p}");
     let kinds: Vec<&str> = p["warnings"]
@@ -1851,8 +1871,14 @@ fn wipe_all_objects_then_upload_restores_assets() {
         .filter_map(|w| w["kind"].as_str())
         .collect();
     assert!(kinds.contains(&"auto-base"), "{p}");
+    assert!(kinds.contains(&"assets-repair-hint"), "应提示去修复图片: {p}");
     assert_eq!(count_objects(&sim, "/base/"), 1, "{p}");
-    assert_eq!(count_objects(&sim, "/assets/"), 1, "基线重传必须带图片: {p}");
+    assert_eq!(count_objects(&sim, "/assets/"), 0, "默认上传不得补图: {p}");
+
+    // 显式修复后才把图片补回
+    let rep = sync::repair_assets(&a.conn, &sim.store, &a.assets, &sim.cfg).expect("修复图片");
+    assert_eq!(rep["uploaded"], json!(1), "{rep}");
+    assert_eq!(count_objects(&sim, "/assets/"), 1);
 
     // 全新设备下载：题目与图片都完整，无缺图告警
     let mut c = sim.dev("C");

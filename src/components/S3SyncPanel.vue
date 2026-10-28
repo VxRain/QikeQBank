@@ -19,7 +19,7 @@
     </button>
 
     <div v-if="open" class="px-3.5 pb-3.5 flex flex-col gap-3">
-      <!-- 日常动作：只有上传 / 下载 -->
+      <!-- 日常动作：上传 / 下载；云端缺图时用「修复云端图片」 -->
       <div class="flex flex-col gap-2.5">
         <div class="flex flex-wrap items-center gap-2">
           <button type="button" class="btn btn-small btn-primary" :disabled="!!busy || !configured" @click="upload">
@@ -27,6 +27,15 @@
           </button>
           <button type="button" class="btn btn-small" :disabled="!!busy || !configured" @click="download">
             <i class="i-lucide-cloud-download" />{{ busy === 'download' ? '下载中…' : '下载' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-small"
+            :disabled="!!busy || !configured"
+            title="只补传云端缺失的图片，不扫描题库"
+            @click="repairAssets"
+          >
+            <i class="i-lucide-images" />{{ busy === 'repair' ? '修复中…' : '修复云端图片' }}
           </button>
         </div>
         <div v-if="busy === 'download'" class="text-[12px] text-muted">
@@ -113,7 +122,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { s3ConfigGet, s3ConfigSet, s3Test, s3Push, s3Pull, s3Status } from '@/api/sync.js'
+import { s3ConfigGet, s3ConfigSet, s3Test, s3Push, s3Pull, s3Status, s3RepairAssets } from '@/api/sync.js'
 import { loadBanks } from '@/stores/bank.js'
 import { hydrateFromDb } from '@/stores/settings.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
@@ -154,7 +163,6 @@ function showWarnings(res, duration = 9000) {
   return msgs.join('\n')
 }
 
-/** 相对时间：让用户看到"上次同步是什么时候"，而不是批次号/游标。 */
 /** 把后端 asset_errors 的 reason 翻译成用户能照做的提示。 */
 function assetErrorText(errors) {
   const map = {
@@ -167,6 +175,7 @@ function assetErrorText(errors) {
   return [...new Set(errors.map((e) => map[e?.reason] || e?.reason || '未知原因'))].join('、')
 }
 
+/** 相对时间：让用户看到"上次同步是什么时候"，而不是批次号/游标。 */
 function relTime(iso) {
   if (!iso) return '从未'
   const t = Date.parse(iso)
@@ -252,7 +261,7 @@ async function upload() {
         const terminal = errs.some((e) => ['file-missing', 'not-registered', 'bad-mime'].includes(e.reason))
         lastResult.value += `\n有 ${errs.length} 张图片未能上传（${reasons}）`
         lastResult.value += terminal
-          ? '。本机缺少图片文件，换一台有原图的设备点「上传」'
+          ? '。本机缺少图片文件，换一台有原图的设备点「修复云端图片」'
           : '，下次上传会自动重试'
         console.warn('[s3] asset_errors', errs)
       }
@@ -266,10 +275,41 @@ async function upload() {
         const terminal = errs.some((e) => ['file-missing', 'not-registered', 'bad-mime'].includes(e.reason))
         lastResult.value += `\n有 ${errs.length} 张图片未能上传（${reasons}）`
         lastResult.value += terminal
-          ? '。本机缺少图片文件，换一台有原图的设备点「上传」'
+          ? '。本机缺少图片文件，换一台有原图的设备点「修复云端图片」'
           : '，下次上传会自动重试'
         console.warn('[s3] asset_errors', errs)
       }
+    }
+  } catch (e) {
+    toast(errText(e), 'error', 8000)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function repairAssets() {
+  busy.value = 'repair'
+  try {
+    const res = await s3RepairAssets()
+    status.value = await s3Status()
+    const reg = Number(res.registered || 0)
+    const missing = Number(res.missing || 0)
+    const uploaded = Number(res.uploaded || 0)
+    const bucket = Number(res.bucket_assets || 0)
+    if (reg === 0) {
+      lastResult.value = '本机没有图片登记，无法补传；请到创建过图片的设备上执行'
+    } else {
+      lastResult.value = `云端已有 ${bucket} 张 · 本地登记 ${reg} 张 · 补传前缺失 ${missing} 张 · 本次补传 ${uploaded} 张`
+    }
+    const errs = Array.isArray(res.asset_errors) ? res.asset_errors : []
+    if (errs.length) {
+      lastResult.value += `\n有 ${errs.length} 张未能补传（${assetErrorText(errs)}）`
+      console.warn('[s3] repair asset_errors', errs)
+      toast(uploaded ? `已补传 ${uploaded} 张，${errs.length} 张失败` : `${errs.length} 张图片未能补传`, 'error', 8000)
+    } else if (uploaded) {
+      toast(`已补传 ${uploaded} 张图片`, 'success')
+    } else {
+      toast('没有需要补传的登记图片', 'info')
     }
   } catch (e) {
     toast(errText(e), 'error', 8000)
@@ -300,11 +340,16 @@ async function download() {
     const errs = Array.isArray(res.asset_errors) ? res.asset_errors : []
     if (errs.length) {
       const reasons = assetErrorText(errs)
-      const cloudMissing = errs.some((e) => ['not-in-bucket', 'sha-mismatch'].includes(e.reason))
+      const notInBucket = errs.some((e) => e.reason === 'not-in-bucket')
+      const corrupted = errs.some((e) => e.reason === 'sha-mismatch')
       lastResult.value += `\n有 ${errs.length} 张图片未能下载（${reasons}）`
-      lastResult.value += cloudMissing
-        ? '。请在有原图的设备上点一次「上传」补传，再回来点「下载」'
-        : '，下次下载会自动重试'
+      if (notInBucket) {
+        lastResult.value += '。请在有原图的设备上点「修复云端图片」，再回来点「下载」'
+      } else if (corrupted) {
+        lastResult.value += '。云端图片内容校验失败，请在有原图的设备上重新插入该图片后再上传'
+      } else {
+        lastResult.value += '，下次下载会自动重试'
+      }
       console.warn('[s3] asset_errors', errs)
     }
   } catch (e) {

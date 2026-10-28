@@ -216,11 +216,22 @@ pub fn sync_s3_status(state: State<'_, AppState>) -> Result<Value, String> {
 
 /// 生成全量基线（建议在成功拉取后执行；跨设备同步不依赖基线，仅加速首同步与断链恢复）
 #[tauri::command]
-pub fn sync_s3_compact(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+pub fn sync_s3_compact(state: State<'_, AppState>) -> Result<Value, String> {
     guarded("生成基线", || {
-        let root = ensure_assets_dir(&app)?;
         let conn = lock_conn(&state);
         let (st, cfg, dev) = store_for(&conn)?;
-        ok(sync::compact(&conn, &st, &root, &cfg, &dev)?)
+        ok(sync::compact(&conn, &st, &cfg, &dev)?)
+    })
+}
+
+/// 显式补图：本地登记表 − 桶内已有，只上传缺失项。
+/// 不扫描题库、不逐图 HEAD；缺图时在有原图的设备上执行一次即可。
+#[tauri::command]
+pub fn sync_s3_repair_assets(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    guarded("修复云端图片", || {
+        let root = ensure_assets_dir(&app)?;
+        let conn = lock_conn(&state);
+        let (st, cfg, _dev) = store_for(&conn)?;
+        ok(sync::repair_assets(&conn, &st, &root, &cfg)?)
     })
 }

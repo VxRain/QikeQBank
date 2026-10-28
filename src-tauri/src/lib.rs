@@ -92,6 +92,7 @@ pub fn run() {
             db::s3::sync_s3_pull,
             db::s3::sync_s3_status,
             db::s3::sync_s3_compact,
+            db::s3::sync_s3_repair_assets,
             db::is_portable_mode,
             db::assets_put,
             db::assets_resolve,

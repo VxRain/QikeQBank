@@ -1209,6 +1209,8 @@ pub fn sync_assets_missing(app: AppHandle, state: State<'_, AppState>) -> Result
     ok(sync_assets_missing_impl(&conn, &root)?)
 }
 
+/// **性能注意**：当前实现每次 pull 都会全表扫描题目 JSON（O(全库)）。
+/// 10 万+ 题库需要改为 `question_assets` 索引表；短期不动，避免改变同步语义。
 pub(crate) fn sync_assets_missing_impl(conn: &Connection, root: &Path) -> Result<Value, String> {
     let refs = scan_question_asset_refs(conn)?;
     let mut by_sha: BTreeMap<String, Vec<String>> = BTreeMap::new();
