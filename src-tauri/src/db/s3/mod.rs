@@ -23,6 +23,8 @@ pub mod sync;
 pub mod wire;
 #[cfg(test)]
 mod sim_tests;
+#[cfg(test)]
+mod bench_assets;
 
 pub use sign::Credentials;
 pub use store::{S3Config, S3Store};

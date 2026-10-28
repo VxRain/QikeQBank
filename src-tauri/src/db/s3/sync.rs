@@ -484,7 +484,7 @@ enum LocalAssetError {
 }
 
 /// 下载待办（sha 集合）：失败/中断后跨轮保留，避免只处理增量而漏掉旧缺图。
-fn load_download_pending(conn: &Connection) -> Result<HashSet<String>, String> {
+pub(super) fn load_download_pending(conn: &Connection) -> Result<HashSet<String>, String> {
     let Some(raw) = db_meta_value(conn, DOWNLOAD_PENDING_KEY)? else {
         return Ok(HashSet::new());
     };
@@ -509,7 +509,7 @@ fn save_download_pending(conn: &Connection, set: &HashSet<String>) -> Result<(),
     upsert_db_meta(conn, DOWNLOAD_PENDING_KEY, &raw)
 }
 
-fn merge_download_pending(conn: &Connection, refs: &HashSet<String>) -> Result<(), String> {
+pub(super) fn merge_download_pending(conn: &Connection, refs: &HashSet<String>) -> Result<(), String> {
     if refs.is_empty() {
         return Ok(());
     }
@@ -539,7 +539,7 @@ fn bundle_asset_refs(bundle: &Value) -> HashSet<String> {
 /// 日志 bundle 应用后，按**本地胜出的行**取 refs：被 LWW 拒绝的旧行 /
 /// 同包墓碑删掉的行不应把图片带进下载待办，否则会给云端不存在的旧图
 /// 留下永远无法成功的重试。
-fn applied_log_asset_refs(conn: &Connection, bundle: &Value) -> Result<HashSet<String>, String> {
+pub(super) fn applied_log_asset_refs(conn: &Connection, bundle: &Value) -> Result<HashSet<String>, String> {
     let mut refs = HashSet::new();
     for q in bundle
         .get("questions")
@@ -560,7 +560,7 @@ fn applied_log_asset_refs(conn: &Connection, bundle: &Value) -> Result<HashSet<S
 /// 升级后首次 pull 的迁移：全库扫一次历史缺图，写入下载待办。
 /// 之后普通 pull 只处理「本次应用的 bundle + 待办」，不再扫描全库。
 /// 这是唯一的 O(全库) 图片检查；未来由 `question_assets` 派生索引替代。
-fn seed_download_pending(conn: &Connection, assets_root: &Path) -> Result<(), String> {
+pub(super) fn seed_download_pending(conn: &Connection, assets_root: &Path) -> Result<(), String> {
     if db_meta_value(conn, DOWNLOAD_SEEDED_KEY)?.as_deref() == Some("1") {
         return Ok(());
     }
@@ -1231,7 +1231,7 @@ fn merge_stats(acc: &mut Value, res: &Value) {
 /// Content-Type，落库前复核 sha256（内容寻址的强校验）。
 /// 集合由 pull 的「本次应用 bundle refs + s3_asset_download_pending」提供，
 /// 不再全库扫描题目。
-fn pull_assets(
+pub(super) fn pull_assets(
     conn: &Connection,
     store: &dyn ObjectStore,
     assets_root: &Path,
