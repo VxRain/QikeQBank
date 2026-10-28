@@ -216,10 +216,11 @@ pub fn sync_s3_status(state: State<'_, AppState>) -> Result<Value, String> {
 
 /// 生成全量基线（建议在成功拉取后执行；跨设备同步不依赖基线，仅加速首同步与断链恢复）
 #[tauri::command]
-pub fn sync_s3_compact(state: State<'_, AppState>) -> Result<Value, String> {
+pub fn sync_s3_compact(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     guarded("生成基线", || {
+        let root = ensure_assets_dir(&app)?;
         let conn = lock_conn(&state);
         let (st, cfg, dev) = store_for(&conn)?;
-        ok(sync::compact(&conn, &st, &cfg, &dev)?)
+        ok(sync::compact(&conn, &st, &root, &cfg, &dev)?)
     })
 }

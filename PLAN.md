@@ -222,10 +222,10 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `sync_s3_config_get` | — | 已保存配置的**脱敏**视图 `{configured, endpoint, region, bucket, prefix, path_style, access_key, has_secret}`；**永不回传 secret** |
 | `sync_s3_config_set` | `settings: {endpoint, region, bucket, prefix, path_style, access_key, secret_key, session_token?}` | 校验后写入 `db_meta.s3_config`（本机表，不进同步包）。`secret_key` 留空 = 沿用已保存的密钥 |
 | `sync_s3_test` | — | 连通性/权限自检（写 → 读 → 列举 → 删 `_probe/hello.txt`），返回 `{ok, writable, readable, listable, endpoint, checked_at}` |
-| `sync_s3_push` | — | `export_delta_at(watermark)` → 裁剪 `review_state`（仅本批 records∪questions 的题号）→ NDJSON+gzip → PUT 新序号对象。设置无 `synced_at`，按内容指纹（key/value/updated_at）判重，未变化时不写对象；`skipped` 时仍补传 `s3_asset_pending` 中的图片。返回 `{skipped, seq, key, rows, bytes, assets_uploaded, asset_errors}`。**`s3_push_watermark` 只在 PUT 成功后推进** |
+| `sync_s3_push` | — | `export_delta_at(watermark)` → 裁剪 `review_state`（仅本批 records∪questions 的题号）→ NDJSON+gzip → PUT 新序号对象。设置无 `synced_at`，按内容指纹（key/value/updated_at）判重，未变化时不写对象；用户手动上传时巡检全库题目引用，补传云端缺失图片（`skipped` 也执行），失败项进 `s3_asset_pending`。返回 `{skipped, seq, key, rows, bytes, assets_uploaded, asset_errors}`。**`s3_push_watermark` 只在 PUT 成功后推进** |
 | `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）→ 标记设置已同步（防下轮保护性 push 回声）。返回 `{applied_logs, applied, assets_pulled, asset_errors, warnings}`。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
 | `sync_s3_status` | — | `{device_id, push_seq, push_watermark, cursors, bootstrapped, last_push_at, last_pull_at}`（**UI 只展示 `last_*` 相对时间**，其余为排障用） |
-| `sync_s3_compact` | — | 用本机当前状态生成全量快照，`covered` 记各设备已覆盖序号；返回 `{base, rows, bytes}`。**UI 不暴露**：首次上传自动留锚点、检测到前缀被清空时自动补，均由后端调用 |
+| `sync_s3_compact` | — | 用本机当前状态生成全量快照，`covered` 记各设备已覆盖序号；同时巡检并补传题目引用的图片（云端只剩题目、`assets/` 被清空时靠这一步恢复）；返回 `{base, rows, bytes, assets_uploaded, asset_errors}`。**UI 不暴露**：首次上传自动留锚点、检测到前缀被清空时自动补，均由后端调用 |
 
 > **本机元数据**（`db_meta`，非同步表）：`s3_config` / `s3_device_id` / `s3_push_seq` / `s3_push_watermark` / `s3_cursors` / `s3_bootstrapped` / `s3_applied_logs` / `s3_asset_pending` / `s3_need_base` / `s3_local_incomplete` / `s3_settings_fp` / `s3_last_push_at` / `s3_last_pull_at`。
 >

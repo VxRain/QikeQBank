@@ -155,6 +155,18 @@ function showWarnings(res, duration = 9000) {
 }
 
 /** 相对时间：让用户看到"上次同步是什么时候"，而不是批次号/游标。 */
+/** 把后端 asset_errors 的 reason 翻译成用户能照做的提示。 */
+function assetErrorText(errors) {
+  const map = {
+    'not-in-bucket': '云端缺少原图',
+    'sha-mismatch': '图片校验失败',
+    'file-missing': '本地缺少图片文件',
+    'not-registered': '本地缺少图片登记',
+    'bad-mime': '图片格式不支持',
+  }
+  return [...new Set(errors.map((e) => map[e?.reason] || e?.reason || '未知原因'))].join('、')
+}
+
 function relTime(iso) {
   if (!iso) return '从未'
   const t = Date.parse(iso)
@@ -234,15 +246,29 @@ async function upload() {
       const n = Number(res.assets_uploaded || 0)
       lastResult.value = n ? `已补传 ${n} 张图片` : '没有需要上传的改动'
       toast(n ? '图片上传完成' : '云端已是最新', n ? 'success' : 'info')
-      if (Array.isArray(res.asset_errors) && res.asset_errors.length) {
-        lastResult.value += `\n有 ${res.asset_errors.length} 张图片未能上传，下次上传会自动重试`
+      const errs = Array.isArray(res.asset_errors) ? res.asset_errors : []
+      if (errs.length) {
+        const reasons = assetErrorText(errs)
+        const terminal = errs.some((e) => ['file-missing', 'not-registered', 'bad-mime'].includes(e.reason))
+        lastResult.value += `\n有 ${errs.length} 张图片未能上传（${reasons}）`
+        lastResult.value += terminal
+          ? '。本机缺少图片文件，换一台有原图的设备点「上传」'
+          : '，下次上传会自动重试'
+        console.warn('[s3] asset_errors', errs)
       }
     } else {
       const kb = (Number(res.bytes || 0) / 1024).toFixed(1)
       lastResult.value = `已上传 ${res.rows} 项改动 · ${kb} KB` + (res.assets_uploaded ? ` · 图片 ${res.assets_uploaded} 张` : '')
       toast('上传完成', 'success')
-      if (Array.isArray(res.asset_errors) && res.asset_errors.length) {
-        lastResult.value += `\n有 ${res.asset_errors.length} 张图片未能上传，下次上传会自动重试`
+      const errs = Array.isArray(res.asset_errors) ? res.asset_errors : []
+      if (errs.length) {
+        const reasons = assetErrorText(errs)
+        const terminal = errs.some((e) => ['file-missing', 'not-registered', 'bad-mime'].includes(e.reason))
+        lastResult.value += `\n有 ${errs.length} 张图片未能上传（${reasons}）`
+        lastResult.value += terminal
+          ? '。本机缺少图片文件，换一台有原图的设备点「上传」'
+          : '，下次上传会自动重试'
+        console.warn('[s3] asset_errors', errs)
       }
     }
   } catch (e) {
@@ -271,8 +297,15 @@ async function download() {
     const head = rows > 0 ? `已合并 ${rows} 项改动` : '云端没有新的改动'
     lastResult.value = head + (res.assets_pulled ? ` · 图片 ${res.assets_pulled} 张` : '') + (warn ? `\n${warn}` : '')
     toast('下载完成', 'success')
-    if (Array.isArray(res.asset_errors) && res.asset_errors.length) {
-      lastResult.value += `\n有 ${res.asset_errors.length} 张图片未能下载，下次下载会自动重试`
+    const errs = Array.isArray(res.asset_errors) ? res.asset_errors : []
+    if (errs.length) {
+      const reasons = assetErrorText(errs)
+      const cloudMissing = errs.some((e) => ['not-in-bucket', 'sha-mismatch'].includes(e.reason))
+      lastResult.value += `\n有 ${errs.length} 张图片未能下载（${reasons}）`
+      lastResult.value += cloudMissing
+        ? '。请在有原图的设备上点一次「上传」补传，再回来点「下载」'
+        : '，下次下载会自动重试'
+      console.warn('[s3] asset_errors', errs)
     }
   } catch (e) {
     toast(errText(e), 'error', 10000)

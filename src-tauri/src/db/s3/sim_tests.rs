@@ -106,7 +106,7 @@ impl Dev {
     }
 
     fn compact(&self, sim: &Sim) -> Value {
-        sync::compact(&self.conn, &sim.store, &sim.cfg, &self.device())
+        sync::compact(&self.conn, &sim.store, &self.assets, &sim.cfg, &self.device())
             .unwrap_or_else(|e| panic!("[{}] compact 失败: {e}", self.name))
     }
 
@@ -316,7 +316,11 @@ impl<'a> FaultyStore<'a> {
     }
 
     fn fail_put_containing(&self, needle: &str) {
-        *self.put_fail.borrow_mut() = Some((needle.to_string(), 1));
+        self.fail_put_containing_times(needle, 1);
+    }
+
+    fn fail_put_containing_times(&self, needle: &str, times: usize) {
+        *self.put_fail.borrow_mut() = Some((needle.to_string(), times));
     }
 
     fn fail_get_key(&self, key: &str) {
@@ -1514,7 +1518,8 @@ fn failed_asset_upload_retries_even_without_new_rows() {
 
     let store = FaultyStore::new(&sim.store);
     let dev = a.device();
-    store.fail_put_containing("/assets/");
+    // 首推会先上传增量图片，再自动补锚点（compact 也会巡检图片）：两次都失败
+    store.fail_put_containing_times("/assets/", 2);
     let p1 = sync::push(&a.conn, &store, &a.assets, &sim.cfg, &dev).expect("数据行应成功");
     assert_eq!(p1["assets_uploaded"], json!(0));
     assert_eq!(p1["asset_errors"].as_array().unwrap().len(), 1);
@@ -1730,4 +1735,133 @@ fn settings_are_pushed_once_then_skipped() {
     assert_eq!(v, "0.9");
     assert_converged(&a, &b);
     assert_eq!(count_objects(&sim, "/log/"), 3);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 28：云端图片对象丢失（题目/基线还在）—— 仅重试下载无法恢复
+// 期望：在有原图的设备点一次「上传」即巡检全库补回；下载方随后即可取图
+// ---------------------------------------------------------------------------
+#[test]
+fn missing_bucket_asset_is_healed_by_manual_upload() {
+    const PNG_B64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let sim = Sim::new("healasset");
+    let a = sim.dev("A");
+    let bank = a.add_bank("带图库");
+    let (sha, _) = crate::db::assets_put_impl(
+        &a.conn,
+        &a.assets,
+        PNG_B64,
+        "image/png",
+        Some(1),
+        Some(1),
+    )
+    .expect("落图");
+    let mut q = crate::db::test_support::sample_question();
+    q["id"] = json!("q_img");
+    q["bank_id"] = json!(bank);
+    q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+    crate::db::questions_create_impl(&a.conn, q).expect("建带图题");
+    let p = a.push(&sim);
+    assert_eq!(p["assets_uploaded"], json!(1));
+    assert_eq!(count_objects(&sim, "/assets/"), 1);
+
+    // 模拟云端图片对象丢失：题目与基线都还在，只有 assets/ 没了
+    for k in sim.store.keys() {
+        if k.contains("/assets/") {
+            sim.store.delete(&k).unwrap();
+        }
+    }
+    assert_eq!(count_objects(&sim, "/assets/"), 0);
+
+    // B 本地清空后首次下载：题目到了，图片报 not-in-bucket
+    let mut b = sim.dev("B");
+    let r = b.pull(&sim);
+    assert_eq!(r["assets_pulled"], json!(0));
+    let errs = r["asset_errors"].as_array().unwrap();
+    assert_eq!(errs.len(), 1, "{r}");
+    assert_eq!(errs[0]["reason"], json!("not-in-bucket"));
+    assert!(
+        !crate::db::asset_file_present(&b.conn, &b.assets, &sha).unwrap(),
+        "缺图时不应凭空出现文件"
+    );
+
+    // 只重试下载没有意义：对象确实不在桶里
+    let r2 = b.pull(&sim);
+    assert_eq!(r2["asset_errors"][0]["reason"], json!("not-in-bucket"));
+
+    // 在有原图的 A 上点「上传」：即使没有任何数据改动，也要巡检全库补图
+    let p2 = a.push(&sim);
+    assert_eq!(p2["skipped"], json!(true), "{p2}");
+    assert_eq!(p2["assets_uploaded"], json!(1), "无改动上传必须补传缺图: {p2}");
+    assert_eq!(count_objects(&sim, "/assets/"), 1);
+
+    // B 再次下载：图片到位
+    let r3 = b.pull(&sim);
+    assert!(r3["asset_errors"].as_array().unwrap().is_empty(), "{r3}");
+    assert_eq!(r3["assets_pulled"], json!(1));
+    assert!(
+        crate::db::asset_file_present(&b.conn, &b.assets, &sha).unwrap(),
+        "补传后 B 应拿到图片"
+    );
+    assert_converged(&a, &b);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 29：整个前缀被清空（日志/基线/图片全没）后重新上传
+// 期望：自动补基线时连带把题目引用的图片一起传回去，新设备下载不报缺图
+// ---------------------------------------------------------------------------
+#[test]
+fn wipe_all_objects_then_upload_restores_assets() {
+    const PNG_B64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let sim = Sim::new("wipeasset");
+    let a = sim.dev("A");
+    let bank = a.add_bank("带图库");
+    let (sha, _) = crate::db::assets_put_impl(
+        &a.conn,
+        &a.assets,
+        PNG_B64,
+        "image/png",
+        Some(1),
+        Some(1),
+    )
+    .expect("落图");
+    let mut q = crate::db::test_support::sample_question();
+    q["id"] = json!("q_img");
+    q["bank_id"] = json!(bank);
+    q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+    crate::db::questions_create_impl(&a.conn, q).expect("建带图题");
+    a.push(&sim);
+    assert_eq!(count_objects(&sim, "/assets/"), 1);
+
+    // 用户手动清空前缀：所有对象一起消失
+    for k in sim.store.keys() {
+        sim.store.delete(&k).unwrap();
+    }
+    assert_eq!(count_objects(&sim, "/"), 0);
+
+    // 无数据改动再上传：自动补基线（compact）必须连图片一起补
+    let p = a.push(&sim);
+    assert_eq!(p["skipped"], json!(true), "{p}");
+    let kinds: Vec<&str> = p["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| w["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"auto-base"), "{p}");
+    assert_eq!(count_objects(&sim, "/base/"), 1, "{p}");
+    assert_eq!(count_objects(&sim, "/assets/"), 1, "基线重传必须带图片: {p}");
+
+    // 全新设备下载：题目与图片都完整，无缺图告警
+    let mut c = sim.dev("C");
+    let r = c.pull(&sim);
+    assert!(r["asset_errors"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["assets_pulled"], json!(1));
+    assert!(
+        crate::db::asset_file_present(&c.conn, &c.assets, &sha).unwrap(),
+        "新设备应拿到图片"
+    );
+    assert_converged(&a, &c);
 }
