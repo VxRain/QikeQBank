@@ -919,6 +919,9 @@ fn pull_pass(
     let mut applied_logs = 0u64;
     let mut applied_rows = Value::Object(Map::new());
     let mut warnings: Vec<Value> = Vec::new();
+    // 被 LWW 判负 / 脏行丢弃的条数：前端用来告诉用户「有 N 条以云端为准」，
+    // 不暴露具体行以免页面变成调试面板。
+    let mut conflict_count = 0u64;
 
     // 设备集合 = 本地已知游标 ∪ 桶里出现过的设备前缀。
     // 仅靠前缀会漏掉"链已被清空但本机游标还在"的设备，故取并集。
@@ -1042,6 +1045,10 @@ fn pull_pass(
                 let refs = applied_log_asset_refs(conn, &bundle)?;
                 merge_download_pending(conn, &refs)?;
                 merge_stats(&mut applied_rows, &res);
+                conflict_count += res
+                    .get("conflicts")
+                    .and_then(Value::as_array)
+                    .map_or(0, |a| a.len()) as u64;
                 seq = want;
                 cursors.insert(dev.clone(), seq);
                 // 每落一个对象就持久化游标：中断后可从断点续，不重复应用。
@@ -1072,6 +1079,7 @@ fn pull_pass(
     Ok(json!({
         "applied_logs": applied_logs,
         "applied": applied_rows,
+        "conflicts": conflict_count,
         "assets_pulled": assets.0,
         "asset_errors": assets.1,
         "warnings": warnings,

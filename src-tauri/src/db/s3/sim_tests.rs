@@ -604,9 +604,18 @@ fn edit_after_delete_wins_on_both_sides() {
 
     b.push(&sim);
     a.push(&sim);
-    a.pull(&sim);
+    let res_a = a.pull(&sim);
     b.pull(&sim);
     assert_converged(&a, &b);
+    // 接口契约：pull 必须带 conflicts 计数（前端用它提示「其中 N 条以云端为准」）
+    assert!(
+        res_a["conflicts"].as_u64().is_some(),
+        "pull 结果缺少 conflicts 计数: {res_a}"
+    );
+    assert!(
+        res_a["conflicts"].as_u64().unwrap() >= 1,
+        "编辑击退墓碑应记一条冲突: {res_a}"
+    );
     let row = crate::db::fetch_question(&a.conn, "q1").unwrap();
     assert!(row.is_some(), "更晚的编辑应复活这道题");
     assert_eq!(row.unwrap()["difficulty"], json!(4));

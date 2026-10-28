@@ -76,6 +76,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { loadBanks, bankStore } from '@/stores/bank.js'
+import { initAutoSync } from '@/stores/autoSync.js'
 import { toast } from '@/stores/ui.js'
 import { list as listQuestions } from '@/api/questions.js'
 import { stats as fetchStats } from '@/api/practice.js'
@@ -187,7 +188,12 @@ function maybeNotifyFsrsUpgrade() {
   } catch { /* 忽略持久化失败 */ }
 }
 
-onMounted(() => { loadBanks(); maybeNotifyFsrsUpgrade() })
+onMounted(() => {
+  loadBanks()
+  maybeNotifyFsrsUpgrade()
+  // 自动同步：按设置开关排期（首次延迟 60 秒，避开启动高峰）
+  initAutoSync()
+})
 </script>
 
 <style>

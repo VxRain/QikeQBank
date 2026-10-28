@@ -224,7 +224,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `sync_s3_config_set` | `settings: {endpoint, region, bucket, prefix, path_style, access_key, secret_key, session_token?}` | 校验后写入 `db_meta.s3_config`（本机表，不进同步包）。`secret_key` 留空 = 沿用已保存的密钥 |
 | `sync_s3_test` | — | 连通性/权限自检（写 → 读 → 列举 → 删 `_probe/hello.txt`），返回 `{ok, writable, readable, listable, endpoint, checked_at}` |
 | `sync_s3_push` | — | `export_delta_at(watermark)` → 裁剪 `review_state`（仅本批 records∪questions 的题号）→ NDJSON+gzip → PUT 新序号对象。设置无 `synced_at`，按内容指纹（key/value/updated_at）判重，未变化时不写对象。**只上传本批增量题目 + `s3_asset_pending` 引用的图片，禁止扫描全库**；失败项进 pending。返回 `{skipped, seq, key, rows, bytes, assets_uploaded, asset_errors}`。**`s3_push_watermark` 只在 PUT 成功后推进** |
-| `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）→ 标记设置已同步（防下轮保护性 push 回声）。图片只下载「本次应用的 base/log bundle refs + `s3_asset_download_pending`」，不再全库扫描题目；升级后首次 pull 做一次 seed（`s3_asset_download_seeded`）把历史缺图写入待办。返回 `{applied_logs, applied, assets_pulled, asset_errors, warnings}`。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
+| `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）→ 标记设置已同步（防下轮保护性 push 回声）。图片只下载「本次应用的 base/log bundle refs + `s3_asset_download_pending`」，不再全库扫描题目；升级后首次 pull 做一次 seed（`s3_asset_download_seeded`）把历史缺图写入待办。返回 `{applied_logs, applied, conflicts, assets_pulled, asset_errors, warnings}`。`conflicts` 是被 LWW 判负或按规则丢弃的行数（只给计数，不给行内容：前端用它提示「其中 N 条以云端为准」，避免把设置页做成调试面板）。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
 | `sync_s3_status` | — | `{device_id, push_seq, push_watermark, cursors, bootstrapped, last_push_at, last_pull_at}`（**UI 只展示 `last_*` 相对时间**，其余为排障用） |
 | `sync_s3_compact` | — | 用本机当前状态生成全量快照，`covered` 记各设备已覆盖序号；返回 `{base, rows, bytes}`。**不含图片**（图片走 repair）。**UI 不暴露**：首次上传自动留锚点、检测到前缀被清空时自动补，均由后端调用 |
 | `sync_s3_repair_assets` | — | **显式补图**：分页 LIST `assets/` 得到桶内 sha 集合 → 与本地 `assets` 登记表求差 → 只 PUT 缺失项。不扫描题目 JSON、不逐图 HEAD。返回 `{bucket_assets, registered, missing, uploaded, asset_errors}`。用于云端图片丢失/前缀清空后的恢复 |
@@ -316,15 +316,30 @@ syncAssetsPull(shas, maxBytes?) → {items:[{sha,mime,size,data_b64}], skipped, 
 syncAssetsPush(items) → {imported, skipped, errors}
 s3ConfigGet() / s3ConfigSet(settings) → 脱敏配置视图
 s3Test() → 连通性/权限自检
-s3Push() / s3Pull() / s3Status() / s3RepairAssets()   // 日常「上传 / 下载」；缺图时「修复云端图片」
+s3Push() / s3Pull() / s3Status() / s3RepairAssets()   // 「仅上传」/「立即同步」/ 状态 / 缺图修复：缺图时「修复云端图片」
 ```
 
 > 同步客户端循环：`pull → apply(若 full_resync_required 则用 since=null 重拉全量，再 syncReplaceSnapshot) → syncAssetsMissing → 对缺图 sha 调源端 syncAssetsPull → syncAssetsPush`。游标存调用方（`server_time`），不要复用其他设备的游标。apply / replace 成功后前端需重新 `loadBanks()` 与 `hydrateFromDb()`（stores 是缓存，DB 为准）。
 >
 > **S3 通道**（`components/S3SyncPanel.vue`，设置弹窗内）不跑上面的循环：`s3Push` / `s3Pull` 各自封装完整流程，图片随 `s3Pull` 由桶内直接下载。`s3Pull` 成功后同样必须 `loadBanks()` + `hydrateFromDb()`。
+>
+> **上传与下载合并为一个动作**：`s3Pull` 的 `pull_pass` 进来第一件事就是 `push`（先推本地增量、再拉云端增量），本身即双向同步。故 UI 只有「立即同步」（= `s3Pull`）与「仅上传」（= `s3Push`，单向、云端内容绝不覆盖本机），不再出现「下载」这种容易被误解为单向覆盖的动词。
+
+### stores/autoSync.js（自动同步运行时）
+```js
+autoSync = reactive({ running, lastAt, lastRows, lastConflicts, failures, lastError, nextAt })
+runSync({ reason: 'auto'|'manual' }) → {ok, res?, error?, skipped?: 'busy'|'exam'|'unconfigured'}
+initAutoSync()           // App.vue onMounted 调用一次，按开关排期
+resetAutoSyncClock()     // 手动同步成功后重排，避免紧接着又自动跑一次
+retryDelayMs(failures, intervalMin) / appliedRows(res)   // 纯函数，单测覆盖
+```
+- **触发**：启动后 60 秒首次，之后按 `settings.autoSyncIntervalMin`（10–240，默认 30）周期执行；失败按 5 分钟起指数退避，封顶为正常间隔；每次 `setTimeout` 递归排期（不做 `setInterval`，避免重叠）。
+- **互斥**：自动与手动共用 `autoSync.running`，面板按钮同步置灰；`runSync` 内先查 `s3ConfigGet()`，用户刚填完密钥无需重启即可生效。
+- **不打扰**：考试路由（`#/exam`）下跳过自动同步；后台失败不弹窗，连续失败 3 次才提示一次；成功只更新面板里的「上次同步 X 分钟前」。
+- **偏好留本机**：`autoSyncEnabled` / `autoSyncIntervalMin` 只进 localStorage，**不进 `SYNC_KEYS`**——自动同步是设备行为（台式常开、笔记本按需），不该被另一台设备改掉。
 
 ### stores/settings.js（v3：键分裂 + 注水守卫）
-进库同步：`fsrs.*`（6 键）+ `wrongLeaveAfterCorrect`；留本机：编辑偏好/自动下一题/筛选记忆。localStorage 只做写透缓存。`hydrateFromDb()` 启动调用一次、每次同步 pull-apply 后调用一次；注水期 watch 禁写（防脏时间戳）。
+进库同步：`fsrs.*`（6 键）+ `wrongLeaveAfterCorrect`；留本机：编辑偏好/自动下一题/筛选记忆/自动同步（`autoSyncEnabled`、`autoSyncIntervalMin`）。localStorage 只做写透缓存。`hydrateFromDb()` 启动调用一次、每次同步 pull-apply 后调用一次；注水期 watch 禁写（防脏时间戳）。
 
 ### api/banks.js（W2 新建）
 ```js
@@ -439,6 +454,6 @@ export function persistBankFilter(page, id)
 
 | 事项 | 现状（代码事实） | 卡点 / 需要决策的内容 |
 |---|---|---|
-| **数据保全**（备份 / 恢复） | JSON 导出导入 + S3 云同步（手动触发，含增量日志与全量基线）。**仍无自动备份**（无定时、无保留份数）、无本地时间点快照；云同步不含自动定时与冲突可视化 | 剩余决策：自动备份（频率 / 保留份数 / 落盘位置 / 便携模式差异）、自动同步触发时机（启动 / 编辑后 debounce / 定时）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
+| **数据保全**（备份 / 恢复） | JSON 导出导入 + S3 云同步（**支持自动定时同步**，开关 + 间隔 10–240 分钟，默认关；含增量日志与全量基线）。**仍无本地时间点快照**（无保留份数、无按时间点回滚）；云同步只有冲突计数提示，无逐行冲突可视化/逐行取舍 | 剩余决策：本地时间点快照（频率 / 保留份数 / 落盘位置 / 便携模式差异）、编辑后 debounce 触发（当前仅定时 + 启动后 60 秒）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
 | **模考（exam）** | `practice_records.mode` CHECK 已放行 `'exam'`（`schema.rs:53`、`practice.rs:232`、`sync.rs:813` 均兼容），题面已有 `score` 分值字段；但 UI 无入口、**全库无一处把分值聚合成总分** | 未立项；组卷形态（即时规则组卷 vs 持久化「试卷」实体）、判分口径（多选漏选 / 部分给分）、是否进 FSRS 复习、成绩单与场次历史是否入库同步——实现方案待规划后写入本文件 |
 | **图片同步（资源通道）** | 实测（`docs/asset_sync_bench.md`，100 万题 / 10 万图）：全库 JSON 扫描 8.0 s、升级 seed 10.6 s（每设备仅一次），而串行下载 10 万图 ≈100 min、逐图 autocommit ≈95 s、下载待办 JSON 46 ms/包（200 包 ≈1.23 GB 写放大）、1M base 逐题回读 57 s。故 **否决 `question_assets` 派生索引的增量维护版**（只省一次性 7.7 s；GC 依赖它会不可恢复删图） | v2 方案见 `docs/asset_sync_redesign.md`（图片定位为内容寻址缓存）。待拍板：① 是否接受「不默认全量下图」（首屏按需 + 窗口预热）② 待办表 `asset_jobs` 取代 `db_meta` JSON ③ 并发度策略 ④ base 分片按库还是按行。落地顺序见 §4（P0-1 待办落表 / P0-2 批量入库 / P0-3 header manifest / P1 并发 / P2 首屏按需 / P3 base 分片），P0 三项尚未开工 |

@@ -36,6 +36,13 @@ function normalizeDelay(v) {
   if (!Number.isFinite(n)) return 1200
   return Math.min(5000, Math.max(300, Math.round(n)))
 }
+// 自动同步间隔归一化：整数分钟，钳制 10–240，非法回退 30
+// 下限 10 分钟是有意的：间隔太短会把「两台设备同时改同一行」的 LWW 冲突窗口放大
+export function normalizeSyncInterval(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 30
+  return Math.min(240, Math.max(10, Math.round(n)))
+}
 
 // ── FSRS 间隔复习参数归一化 ──
 export const FSRS_LIMITS = {
@@ -91,6 +98,10 @@ export const settings = reactive({
   rememberBankFilter: saved.rememberBankFilter ?? false,
   // 错题本：连续答对多少次后自动移出，默认 1（进库同步）
   wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
+  // 自动同步：定时在后台与云端合并（设备本机行为，不进 SYNC_KEYS）
+  autoSyncEnabled: saved.autoSyncEnabled ?? false,
+  // 自动同步间隔（分钟），默认 30
+  autoSyncIntervalMin: normalizeSyncInterval(saved.autoSyncIntervalMin),
   // FSRS 间隔复习（缺键老设置自动走默认；数组缺省由 normalizeSteps 兜底）（进库同步）
   fsrs: {
     requestRetention: normalizeRetention(saved.fsrs?.requestRetention),
@@ -149,6 +160,8 @@ function persistLocalCache() {
         autoNextDelayMs: settings.autoNextDelayMs,
         rememberBankFilter: settings.rememberBankFilter,
         wrongLeaveAfterCorrect: settings.wrongLeaveAfterCorrect,
+        autoSyncEnabled: settings.autoSyncEnabled,
+        autoSyncIntervalMin: settings.autoSyncIntervalMin,
         fsrs: { ...settings.fsrs },
       })
     )

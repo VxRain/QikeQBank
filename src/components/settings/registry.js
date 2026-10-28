@@ -237,6 +237,38 @@ export const SETTINGS_SECTIONS = [
     desc: '同步到你自己的 S3 存储（兼容 MinIO、Cloudflare R2、Backblaze B2 等）',
     items: [
       {
+        key: 'autoSync',
+        title: '自动同步',
+        desc: '开启后每隔一段时间在后台与云端合并一次：本机改动先上传，再把云端的新改动拉回来合并，多台设备内容保持一致。只合并改动，不会清空本地题库。',
+        keywords: '自动 同步 备份 后台 定时 云端 多设备 自动上传 自动下载',
+        type: 'switch',
+        value: () => settings.autoSyncEnabled,
+        set: (v) => {
+          settings.autoSyncEnabled = v
+        }
+      },
+      {
+        key: 'autoSyncInterval',
+        title: '同步间隔',
+        desc: '间隔太短会放大「两台设备同时修改同一条」时后写覆盖先写的概率，建议 30 分钟以上。',
+        keywords: '间隔 频率 周期 分钟 定时',
+        type: 'number',
+        indent: true,
+        unit: '分钟',
+        min: 10,
+        max: 240,
+        decimals: 0,
+        integer: true,
+        width: 'w-[76px]',
+        invalidMsg: '同步间隔请输入 10～240 的整数（分钟）',
+        visible: () => settings.autoSyncEnabled,
+        dependsOn: '自动同步',
+        value: () => settings.autoSyncIntervalMin,
+        set: (v) => {
+          settings.autoSyncIntervalMin = Math.round(v)
+        }
+      },
+      {
         key: 's3',
         title: '云同步（S3）',
         type: 'custom',
