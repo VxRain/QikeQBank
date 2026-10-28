@@ -7,6 +7,10 @@
  * 要求：已安装 Rust 工具链 + Tauri CLI 依赖；目标机须自带 WebView2（Win10 1803+/Win11 预装）。
  * 用法：pnpm portable（全量：前端+release+组装+zip）
  *       node tools/make-portable.mjs --skip-build（复用已有构建，只组装+zip）
+ *
+ * 安全约束：成品目录 dist-portable/<产品>-portable-<版本>/ 下的 data/ 是用户真实数据
+ * （题库 qbank.db、图片、导出、WebView 缓存）。本脚本**只覆盖 exe 与说明文件**，
+ * 不清空目录、不把 data/ 打进 zip；zip 恒为空白新包，解压即用。
  */
 import { execSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -44,30 +48,53 @@ if (!fs.existsSync(exe)) {
   process.exit(1);
 }
 
-// 2) 组装 portable 目录
-const stage = path.join(root, 'dist-portable', `${product}-portable-${version}`);
-fs.rmSync(stage, { recursive: true, force: true });
-fs.mkdirSync(stage, { recursive: true });
-fs.copyFileSync(exe, path.join(stage, `${product}.exe`));
-// 预建 data/ 目录：存在即便携模式（VSCode 同款约定）
-fs.mkdirSync(path.join(stage, 'data'), { recursive: true });
-// 3) 打 zip（系统自带 Compress-Archive）
-fs.writeFileSync(
-  path.join(stage, '便携版说明.txt'),
-  [
-    `${product} ${version} 便携版（Windows）`,
-    '',
-    '用法：解压到任意目录（U 盘亦可），双击运行。',
-    '检测到本目录存在 data/ 文件夹即为便携模式，所有数据（题库 qbank.db、导出文件、浏览缓存）都存在里面。',
-    '注意：',
-    '  1. 需要系统自带 WebView2（Win10 1803+/Win11 一般预装）。',
-    '  2. 搬家时整个目录一起拷走即可；删除 data/ 则回到系统目录模式。',
-    '',
-  ].join('\r\n'),
-);
+// 2) 组装：先在临时目录拼一份「干净的包」（data/ 为空），再回填到成品目录。
+//    关键：成品目录里的 data/ 是用户的真实数据（题库/图片/导出），绝不能删更不能进 zip。
+const distDir = path.join(root, 'dist-portable');
+const finalDir = path.join(distDir, `${product}-portable-${version}`);
+const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'qbank-portable-'));
+const README = [
+  `${product} ${version} 便携版（Windows）`,
+  '',
+  '用法：解压到任意目录（U 盘亦可），双击运行。',
+  '检测到本目录存在 data/ 文件夹即为便携模式，所有数据（题库 qbank.db、导出文件、浏览缓存）都存在里面。',
+  '注意：',
+  '  1. 需要系统自带 WebView2（Win10 1803+/Win11 一般预装）。',
+  '  2. 搬家时整个目录一起拷走即可；删除 data/ 则回到系统目录模式。',
+  '',
+].join('\r\n');
 
-// 3) 打 zip（系统自带 Compress-Archive）
-const zip = path.join(root, 'dist-portable', `${product}-portable-${version}-win64.zip`);
-if (fs.existsSync(zip)) fs.rmSync(zip);
-run(`powershell -NoProfile -Command "Compress-Archive -Path '${stage}' -DestinationPath '${zip}'"`);
-console.log('PORTABLE OK →', zip);
+try {
+  const stageRoot = path.join(stage, `${product}-portable-${version}`);
+  fs.mkdirSync(stageRoot, { recursive: true });
+  fs.copyFileSync(exe, path.join(stageRoot, `${product}.exe`));
+  // 预建空 data/ 目录：存在即便携模式（VSCode 同款约定）
+  fs.mkdirSync(path.join(stageRoot, 'data'), { recursive: true });
+  fs.writeFileSync(path.join(stageRoot, '便携版说明.txt'), README);
+
+  // 3) 打 zip（系统自带 Compress-Archive，只含刚组装的干净目录）
+  fs.mkdirSync(distDir, { recursive: true });
+  const zip = path.join(distDir, `${product}-portable-${version}-win64.zip`);
+  if (fs.existsSync(zip)) fs.rmSync(zip);
+  run(`powershell -NoProfile -Command "Compress-Archive -Path '${stageRoot}' -DestinationPath '${zip}'"`);
+
+  // 4) 回填成品目录：只覆盖 exe 与说明，data/ 缺了才建，已有则原封不动
+  fs.mkdirSync(finalDir, { recursive: true });
+  const dataDir = path.join(finalDir, 'data');
+  const hadData = fs.existsSync(dataDir);
+  try {
+    fs.copyFileSync(path.join(stageRoot, `${product}.exe`), path.join(finalDir, `${product}.exe`));
+  } catch (e) {
+    if (e && (e.code === 'EBUSY' || e.code === 'EPERM')) {
+      console.error('写不进 exe：程序正在运行（或文件被占用）。请先关掉它再重跑打包。');
+    }
+    throw e;
+  }
+  fs.writeFileSync(path.join(finalDir, '便携版说明.txt'), README);
+  if (!hadData) fs.mkdirSync(dataDir, { recursive: true });
+
+  console.log('PORTABLE OK →', zip);
+  console.log('成品目录 →', finalDir, hadData ? '（已有 data/ 测试数据，已保留）' : '（新建空 data/）');
+} finally {
+  fs.rmSync(stage, { recursive: true, force: true });
+}
