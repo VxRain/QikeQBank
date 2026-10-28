@@ -81,15 +81,17 @@ Windows / SQLite 3.53.2（rusqlite 0.40.2 bundled）/ 16 线程 / 数据目录�
 
 ## 6. 由数据改写的优先级
 
+> 编号与执行顺序以 `docs/asset_sync_redesign.md` §4 为准（本文只记数据依据）。
+
 | 优先级 | 改动 | 数据依据 |
 |---|---|---|
-| P0 | `pull_assets` 入库批量事务化 | 省 ~95 s / 10 万图 |
-| P0 | 下载待办从 `db_meta` JSON 改为表（含 404 进终态） | 46 ms/包 + 1.23 GB 写放大；404 永久重试 |
-| P0 | bundle 带 `assets` manifest；`applied_log_asset_refs` 用内存值 | 省 57 s / 100 万题 base |
+| P0-1 | 下载待办从 `db_meta` JSON 改为表 `asset_jobs`（含 404 进终态） | 46 ms/包 + 1.23 GB 写放大；404 永久重试 |
+| P0-2 | `pull_assets` 入库批量事务化（拆“取任务 / 写文件 / 批量入库”） | 省 ~95 s / 10 万图 |
+| P0-3 | bundle 带 `assets` manifest；`applied_log_asset_refs` 用内存值 | 省 57 s / 100 万题 base；seed 扫描退出热路径 |
 | P1 | 下载并发 4–8 + 进度/取消 + 不全程持锁 | 100 min → 12.5 min，UI 不冻 |
-| P2 | 按需取图（首屏 prefetch 窗口） | 首屏从"按小时"到"毫秒" |
+| P2 | 按需取图（首屏 prefetch 窗口） | 首屏从“按小时”到“毫秒” |
 | P3 | base/compact 分片 | 单对象 GB 级，无断点 |
-| P4 | `question_assets` 派生索引（建议按需物化版） | 仅反向查询 UI 需要；seed 只省 7.7 s/设备 |
+| P4 | `question_assets` 派生索引（仅按需物化版） | 仅反向查询 UI 需要；seed 只省 7.7 s/设备 |
 
 ## 7. 本次基准对产品代码的改动
 
