@@ -9,3 +9,6 @@ src-tauri/gen/
 data/
 .DS_Store
 *.log
+
+# Playwright MCP 临时产物（截图快照/控制台日志）
+.playwright-mcp/

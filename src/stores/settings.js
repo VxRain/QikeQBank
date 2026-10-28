@@ -36,12 +36,11 @@ function normalizeDelay(v) {
   if (!Number.isFinite(n)) return 1200
   return Math.min(5000, Math.max(300, Math.round(n)))
 }
-// 自动同步间隔归一化：整数分钟，钳制 10–240，非法回退 30
-// 下限 10 分钟是有意的：间隔太短会把「两台设备同时改同一行」的 LWW 冲突窗口放大
+// 自动同步间隔归一化：整数分钟，钳制 10–60，非法回退 30
 export function normalizeSyncInterval(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 30
-  return Math.min(240, Math.max(10, Math.round(n)))
+  return Math.min(60, Math.max(10, Math.round(n)))
 }
 
 // ── FSRS 间隔复习参数归一化 ──

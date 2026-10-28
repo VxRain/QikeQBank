@@ -1,6 +1,6 @@
 /**
  * 自动同步运行时回归：
- *   ① 间隔归一化：钳制 10–240 分钟，非法输入不落到 0（否则会得到 1 分钟的超短周期）
+ *   ① 间隔归一化：钳制 10–60 分钟，非法输入不落到 0（否则会得到 1 分钟的超短周期）
  *   ② 失败退避：指数增长但永不超过正常间隔
  *   ③ applied 计数排除统计键（skipped/dropped_orphans/conflicts 不是合并行数）
  *   ④ 排期：到点真的会发起一次同步尝试；关掉开关后到点不再发起
@@ -21,7 +21,7 @@ test('同步间隔归一化', () => {
   assert.equal(normalizeSyncInterval(-5), 10, '负数钳到下限')
   assert.equal(normalizeSyncInterval(9.6), 10, '四舍五入后仍不低于下限')
   assert.equal(normalizeSyncInterval(45.4), 45, '四舍五入取整')
-  assert.equal(normalizeSyncInterval(9999), 240, '上限 240 分钟')
+  assert.equal(normalizeSyncInterval(9999), 60, '上限 60 分钟')
 })
 
 test('失败重试退避不超过正常间隔', () => {
