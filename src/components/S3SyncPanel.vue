@@ -102,9 +102,7 @@
               路径风格（path-style）
               <InfoTip text="MinIO、带端口的自建端点、Cloudflare R2 等需要开启；AWS 官方端点两种都支持。" />
             </span>
-            <span class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative" :class="form.path_style ? 'bg-primary' : 'bg-[var(--line-strong)]'">
-              <span class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150" :class="form.path_style ? 'left-[22px]' : 'left-[3px]'" />
-            </span>
+            <ToggleSwitch :model-value="form.path_style" />
           </button>
 
           <button type="button" class="btn btn-small self-start" :disabled="!!busy" @click="saveAndTest">
@@ -127,6 +125,7 @@ import { loadBanks } from '@/stores/bank.js'
 import { hydrateFromDb } from '@/stores/settings.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
 import InfoTip from '@/components/ui/InfoTip.vue'
+import ToggleSwitch from '@/components/ui/ToggleSwitch.vue'
 
 const open = ref(false)
 const showConfig = ref(false)

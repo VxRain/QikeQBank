@@ -68,218 +68,20 @@
     <DialogHost />
     <ToastHost />
 
-    <!-- 设置弹窗 -->
-    <Teleport to="body">
-      <Transition name="dg">
-        <div v-if="showSettings" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="showSettings = false">
-          <div class="dg-card w-[min(440px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" aria-label="设置">
-            <h3 class="m-0 mb-4 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2 shrink-0">
-              <i class="i-lucide-settings-2 text-primary" />设置
-            </h3>
-            <div class="overflow-y-auto min-h-0 pr-0.5">
-            <div class="flex flex-col gap-2.5">
-            <button
-              type="button"
-              role="switch"
-              :aria-checked="settings.keepContentOnTypeChange"
-              class="w-full flex items-start justify-between gap-3 p-3.5 border border-line rounded-[10px] bg-card cursor-pointer transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-bg-accent text-left"
-              @click="settings.keepContentOnTypeChange = !settings.keepContentOnTypeChange"
-            >
-              <span class="min-w-0">
-                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">切换题型时保留内容<InfoTip text="启用后，切换试题类型时选项 / 答案 / 解析尽量复用而不重置（如单选切多选保留选项与答案，问答参考答案转存为解析）" /></span>
-              </span>
-              <span
-                class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
-                :class="settings.keepContentOnTypeChange ? 'bg-primary' : 'bg-[var(--line-strong)]'"
-              >
-                <span
-                  class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
-                  :class="settings.keepContentOnTypeChange ? 'left-[22px]' : 'left-[3px]'"
-                />
-              </span>
-            </button>
-            <div class="border border-line rounded-[10px] bg-card transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-bg-accent">
-            <button
-              type="button"
-              role="switch"
-              :aria-checked="settings.autoNextOnCorrect"
-              class="w-full flex items-start justify-between gap-3 p-3.5 pb-3 cursor-pointer text-left bg-transparent border-0"
-              @click="settings.autoNextOnCorrect = !settings.autoNextOnCorrect"
-            >
-              <span class="min-w-0">
-                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">答对自动下一题<InfoTip text="仅刷题模式生效：答对后短暂停留展示结果再自动下一题，等待时点击结果条可取消；答错停留看解析；复习模式仍需手动自评" /></span>
-              </span>
-              <span
-                class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
-                :class="settings.autoNextOnCorrect ? 'bg-primary' : 'bg-[var(--line-strong)]'"
-              >
-                <span
-                  class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
-                  :class="settings.autoNextOnCorrect ? 'left-[22px]' : 'left-[3px]'"
-                />
-              </span>
-            </button>
-            <div v-if="settings.autoNextOnCorrect" class="px-3.5 pb-3.5">
-              <div class="border-t border-line pt-3 flex items-center gap-2">
-              <span class="text-[12px] text-muted font-600">停留时长</span>
-              <input
-                v-model="delayText"
-                class="input w-[76px] px-2.5 py-1.5 text-[13px] text-center"
-                type="text"
-                inputmode="decimal"
-                autocomplete="off"
-                @change="commitDelay"
-                @blur="commitDelay"
-                @keyup.enter="commitDelay"
-                @keyup.esc="delayText = (settings.autoNextDelayMs / 1000).toString()"
-              />
-              <span class="text-[12px] text-muted">秒</span>
-              </div>
-            </div>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              :aria-checked="settings.rememberBankFilter"
-              class="w-full flex items-start justify-between gap-3 p-3.5 border border-line rounded-[10px] bg-card cursor-pointer transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-bg-accent text-left"
-              @click="toggleRememberBankFilter"
-            >
-              <span class="min-w-0">
-                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">记住各页题库选择<InfoTip text="开启后，刷题 / 复习 / 错题本 / 试题列表 / 新建试题的题库下拉会记住上次选择；关闭则每次默认全部题库（新建时须手动选库）" /></span>
-              </span>
-              <span
-                class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative"
-                :class="settings.rememberBankFilter ? 'bg-primary' : 'bg-[var(--line-strong)]'"
-              >
-                <span
-                  class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150"
-                  :class="settings.rememberBankFilter ? 'left-[22px]' : 'left-[3px]'"
-                />
-              </span>
-            </button>
-            <div class="border border-line rounded-[10px] bg-card p-3.5 flex items-center justify-between gap-3">
-              <span class="min-w-0">
-                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text">连续答对自动移出错题<InfoTip text="错题连续答对该次数后自动移出错题本，中途答错重计；默认 1 次（答对即移出）" /></span>
-              </span>
-              <span class="flex items-center gap-1.5 shrink-0">
-                <input
-                  v-model="leaveText"
-                  class="input w-[56px] px-2 py-1.5 text-[13px] text-center"
-                  type="text"
-                  inputmode="numeric"
-                  autocomplete="off"
-                  @change="commitLeave"
-                  @blur="commitLeave"
-                  @keyup.enter="commitLeave"
-                  @keyup.esc="leaveText = String(settings.wrongLeaveAfterCorrect)"
-                />
-                <span class="text-[12px] text-muted">次</span>
-              </span>
-            </div>
-            <div class="border border-line rounded-[10px] bg-card p-3.5 flex flex-col gap-3">
-              <span class="min-w-0">
-                <span class="flex items-center gap-1.5 text-[14px] font-600 text-text"><i class="i-lucide-repeat text-primary" />间隔复习<InfoTip text="复习算法 FSRS：按记忆状态安排下次到期时间，修改立即对新作答生效；历史作答不受影响" /></span>
-              </span>
-              <div class="flex items-center justify-between gap-3">
-                <span class="inline-flex items-center gap-1 text-[13px] text-muted">目标记忆保持率<InfoTip text="到期时还记得的概率目标：设得越高复习越频繁、记得越牢，但每天要复习的题也越多；0.90 是兼顾效率与效果的常用值" /></span>
-                <select :value="settings.fsrs.requestRetention" class="select px-2 py-1.5 text-[13px]" @change="commitRetention">
-                  <option :value="0.75">0.75 · 宽松</option>
-                  <option :value="0.80">0.80</option>
-                  <option :value="0.85">0.85</option>
-                  <option :value="0.90">0.90 · 标准</option>
-                  <option :value="0.95">0.95 · 严格</option>
-                </select>
-              </div>
-              <div class="flex items-center justify-between gap-3">
-                <span class="inline-flex items-center gap-1 text-[13px] text-muted">学习步长<InfoTip text="新卡答对后当天内重复的间隔，如 1m,10m 表示 1 分钟、10 分钟后各回来一次，毕业后进入长期复习" /></span>
-                <span class="flex items-center gap-1.5 shrink-0">
-                  <input v-model="learnStepsText" class="input w-[110px] px-2 py-1.5 text-[13px] text-center" type="text" autocomplete="off" placeholder="1m,10m" @change="commitLearnSteps" @blur="commitLearnSteps" @keyup.enter="commitLearnSteps" @keyup.esc="learnStepsText = settings.fsrs.learningSteps.join(',')" />
-                </span>
-              </div>
-              <div class="flex items-center justify-between gap-3">
-                <span class="inline-flex items-center gap-1 text-[13px] text-muted">重学步长<InfoTip text="答错后当天内重复的间隔，如 10m 表示 10 分钟后回来" /></span>
-                <span class="flex items-center gap-1.5 shrink-0">
-                  <input v-model="relearnStepsText" class="input w-[110px] px-2 py-1.5 text-[13px] text-center" type="text" autocomplete="off" placeholder="10m" @change="commitRelearnSteps" @blur="commitRelearnSteps" @keyup.enter="commitRelearnSteps" @keyup.esc="relearnStepsText = settings.fsrs.relearningSteps.join(',')" />
-                </span>
-              </div>
-              <div class="flex items-center justify-between gap-3">
-                <span class="inline-flex items-center gap-1 text-[13px] text-muted">最大间隔<InfoTip text="单张卡两次复习之间最长隔多少天：到期再久也只隔这么久就回来，防长期不碰的卡彻底遗忘；默认 100 年即不限" /></span>
-                <span class="flex items-center gap-1.5 shrink-0">
-                  <input v-model="maxIntervalText" class="input w-[76px] px-2 py-1.5 text-[13px] text-center" type="text" inputmode="numeric" autocomplete="off" @change="commitMaxInterval" @blur="commitMaxInterval" @keyup.enter="commitMaxInterval" @keyup.esc="maxIntervalText = String(settings.fsrs.maximumInterval)" />
-                  <span class="text-[12px] text-muted">天</span>
-                </span>
-              </div>
-              <button type="button" role="switch" :aria-checked="settings.fsrs.enableFuzz" class="w-full flex items-center justify-between gap-3 cursor-pointer text-left bg-transparent border-0 p-0" @click="settings.fsrs.enableFuzz = !settings.fsrs.enableFuzz">
-                <span class="inline-flex items-center gap-1 text-[13px] text-muted">随机间隔抖动<InfoTip text="开启后到期时间加一点随机偏移，避免同批题总在同一天到期" /></span>
-                <span class="shrink-0 w-10 h-[22px] rounded-full mt-0.5 transition-colors duration-150 relative" :class="settings.fsrs.enableFuzz ? 'bg-primary' : 'bg-[var(--line-strong)]'">
-                  <span class="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all duration-150" :class="settings.fsrs.enableFuzz ? 'left-[22px]' : 'left-[3px]'" />
-                </span>
-              </button>
-              <div class="flex items-center justify-between gap-3">
-                <span class="inline-flex items-center gap-1 text-[13px] text-muted">练习入库范围<InfoTip text="全部试题：练习答对也进入复习（当天短时巩固后毕业）；仅错题：答对的只记流水不进复习，只有答错的才进" /></span>
-                <span class="inline-flex items-center border border-line rounded-[8px] overflow-hidden shrink-0">
-                  <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="settings.fsrs.practiceScope === 'all' ? '!bg-primary-bg !text-primary' : ''" title="全部试题进入复习" @click="settings.fsrs.practiceScope = 'all'">全部</button>
-                  <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="settings.fsrs.practiceScope === 'wrong-only' ? '!bg-primary-bg !text-primary' : ''" title="仅答错的进入复习" @click="settings.fsrs.practiceScope = 'wrong-only'">仅错题</button>
-                </span>
-              </div>
-            </div>
-            <div class="mt-2.5">
-              <S3SyncPanel />
-            </div>
-            </div>
-            <div class="border-t border-line mt-1 pt-3.5">
-              <div class="flex items-center gap-1.5 text-[14px] font-600 text-text mb-2">
-                <i class="i-lucide-info text-primary" />关于
-              </div>
-              <div class="text-[13px] text-muted flex flex-col gap-1.5">
-                <div>奇客题库 <b class="text-text">{{ about.version || '—' }}</b><span v-if="about.portable !== null"> · {{ about.portable ? '便携版' : '安装版' }}</span></div>
-                <div class="flex flex-wrap gap-2 pt-0.5">
-                  <button type="button" class="btn btn-small" @click="openDataDir">
-                    <i class="i-lucide-folder-open" />打开数据目录
-                  </button>
-                  <button type="button" class="btn btn-small" :disabled="gc.running" @click="runGc">
-                    <i class="i-lucide-trash-2" />{{ gc.running ? '清理中…' : '清理无用图片' }}
-                  </button>
-                  <button type="button" class="btn btn-small" :disabled="about.update === 'checking'" @click="checkUpdate">
-                    <i class="i-lucide-refresh-cw" />{{ about.update === 'checking' ? '检查中…' : '检查更新' }}
-                  </button>
-                  <button v-if="about.update === 'new'" type="button" class="btn btn-small btn-primary" @click="openReleases">
-                    <i class="i-lucide-download" />下载 {{ about.latest }}
-                  </button>
-                </div>
-                <div v-if="gc.result" class="text-[12px] text-success">{{ gc.result }}</div>
-                <div v-if="about.update === 'latest'" class="text-[12px] text-success">已是最新版本</div>
-                <div v-if="about.update === 'failed'" class="text-[12px] text-danger">检查失败（离线或网络受限），可直接前往下载页查看</div>
-                <button type="button" class="self-start text-[12px] text-muted-light hover:text-primary underline underline-offset-2" @click="openReleases">前往下载页查看所有版本</button>
-              </div>
-            </div>
-            </div>
-            <div class="flex justify-end gap-2.5 mt-4 shrink-0">
-              <button type="button" class="btn btn-primary" @click="showSettings = false">完成</button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <SettingsDialog v-model="showSettings" />
   </div>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getVersion } from '@tauri-apps/api/app'
-import { openUrl } from '@tauri-apps/plugin-opener'
-import { loadBanks, bankStore, clearBankFilters } from '@/stores/bank.js'
-import { settings, normalizeRetention, normalizeMaxInterval, normalizeSteps } from '@/stores/settings.js'
+import { loadBanks, bankStore } from '@/stores/bank.js'
 import { toast } from '@/stores/ui.js'
-import { cmd } from '@/api/bridge.js'
 import { list as listQuestions } from '@/api/questions.js'
-import { openDataDir as openDataDirApi, stats as fetchStats } from '@/api/practice.js'
-import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.js'
+import { stats as fetchStats } from '@/api/practice.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
-import InfoTip from '@/components/ui/InfoTip.vue'
-import S3SyncPanel from '@/components/S3SyncPanel.vue'
+import SettingsDialog from '@/components/settings/SettingsDialog.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 
 const route = useRoute()
@@ -362,142 +164,7 @@ function goEdit(id) {
 }
 watch(() => route.fullPath, closeSearch)
 
-// ── 关于 / 更新 ──
-const about = reactive({ version: '', portable: null, update: 'idle', latest: '' })
-const gc = reactive({ running: false, result: '' })
-async function ensureAbout() {
-  if (about.version) return
-  try {
-    about.version = await getVersion()
-  } catch {
-    about.version = ''
-  }
-  try {
-    const r = await cmd('is_portable_mode')
-    about.portable = !!r?.data?.portable
-  } catch {
-    about.portable = null
-  }
-}
-function cmpVer(a, b) {
-  const pa = String(a).split('.').map((x) => Number(x) || 0)
-  const pb = String(b).split('.').map((x) => Number(x) || 0)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0)
-    if (d !== 0) return d > 0 ? 1 : -1
-  }
-  return 0
-}
-async function checkUpdate() {
-  about.update = 'checking'
-  try {
-    if (!about.version) {
-      try {
-        about.version = await getVersion()
-      } catch { /* ignore */ }
-    }
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
-    if (!res.ok) throw new Error('http ' + res.status)
-    const j = await res.json()
-    const latest = String(j?.tag_name || '').replace(/^v/, '')
-    if (!latest) throw new Error('empty tag')
-    about.latest = latest
-    about.update = !about.version || cmpVer(latest, about.version) > 0 ? 'new' : 'latest'
-  } catch (e) {
-    console.error(e)
-    about.update = 'failed'
-  }
-}
-async function openReleases() {
-  try {
-    await openUrl(RELEASES_URL)
-  } catch (e) {
-    console.error(e)
-    toast('打开失败：' + (e?.message || e), 'error')
-  }
-}
-async function runGc() {
-  if (gc.running) return
-  gc.running = true
-  gc.result = ''
-  try {
-    const d = await gcAssets()
-    // 响应缺键说明前后端版本不一致（dev 热更只更了前端时会出现）：宁可报错，不编数字
-    if (!d || !('scanned' in d) || !('dangling' in d)) {
-      toast('后端版本过旧：Rust 未重编，请重启开发版后再试', 'error')
-      return
-    }
-    const removed = Number(d?.removed) || 0
-    const dangling = Array.isArray(d?.dangling) ? d.dangling.length : 0
-    const scanned = Number(d?.scanned) || 0
-    const parts = []
-    parts.push(removed > 0
-      ? `清理 ${removed} 张无用图片，释放 ${fmtBytes(d?.freed_bytes)}`
-      : `扫描 ${scanned} 道题：没有可清理的图片`)
-    if (dangling > 0) parts.push(`另有 ${dangling} 处图片引用缺失（题还在，文件/登记没了），请找到对应试题重新上传`)
-    gc.result = parts.join('；')
-    clearAssetCache()
-  } catch (e) {
-    console.error(e)
-    toast('清理失败：' + (e?.message || e), 'error')
-  } finally {
-    gc.running = false
-  }
-}
-async function openDataDir() {
-  try {
-    const d = await openDataDirApi()
-    toast('已打开数据目录' + (d?.path ? `：${d.path}` : ''), 'success')
-  } catch (e) {
-    console.error(e)
-    toast('打开失败：' + (e?.message || e), 'error')
-  }
-}
-
 const showSettings = ref(false)
-
-// 设置首次打开时懒加载版本/模式（纯前端 dev 下 invoke 失败就显示占位）
-watch(showSettings, (v) => {
-  if (v) ensureAbout()
-})
-
-// 关闭“记住题库选择”时顺手清掉各页记忆，下次全回默认全部题库
-function toggleRememberBankFilter() {
-  settings.rememberBankFilter = !settings.rememberBankFilter
-  if (!settings.rememberBankFilter) clearBankFilters()
-}
-
-// 停留时长输入框：文本态本地持有，change/blur/回车时校验落盘，非法回滚
-const delayText = ref((settings.autoNextDelayMs / 1000).toString())
-watch(() => settings.autoNextDelayMs, (v) => {
-  delayText.value = (v / 1000).toString()
-})
-function commitDelay() {
-  const v = parseFloat(delayText.value)
-  if (Number.isFinite(v) && v >= 0.3 && v <= 5) {
-    settings.autoNextDelayMs = Math.round(v * 1000)
-    delayText.value = (settings.autoNextDelayMs / 1000).toString()
-  } else {
-    delayText.value = (settings.autoNextDelayMs / 1000).toString()
-    toast('停留时长请输入 0.3～5 之间的数字（秒）', 'error')
-  }
-}
-
-// 错题移出阈值输入框：同上，整数 1–10
-const leaveText = ref(String(settings.wrongLeaveAfterCorrect))
-watch(() => settings.wrongLeaveAfterCorrect, (v) => {
-  leaveText.value = String(v)
-})
-function commitLeave() {
-  const v = Number(leaveText.value)
-  if (Number.isFinite(v) && Number.isInteger(v) && v >= 1 && v <= 10) {
-    settings.wrongLeaveAfterCorrect = v
-    leaveText.value = String(v)
-  } else {
-    leaveText.value = String(settings.wrongLeaveAfterCorrect)
-    toast('请输入 1～10 的整数（次）', 'error')
-  }
-}
 
 const navItems = [
   { to: '/', label: '首页', icon: 'i-lucide-home' },
@@ -507,38 +174,6 @@ const navItems = [
   { to: '/wrong', label: '错题本', icon: 'i-lucide-circle-x' },
   { to: '/review', label: '复习', icon: 'i-lucide-repeat' }
 ]
-
-// FSRS 文本输入框：本地持有，change/blur/回车时归一化落盘（非法回滚 + toast）
-const learnStepsText = ref(settings.fsrs.learningSteps.join(','))
-watch(() => settings.fsrs.learningSteps, (v) => { learnStepsText.value = v.join(',') })
-function commitLearnSteps() {
-  const v = normalizeSteps(learnStepsText.value, ['1m', '10m'])
-  settings.fsrs.learningSteps = v
-  learnStepsText.value = v.join(',')
-}
-const relearnStepsText = ref(settings.fsrs.relearningSteps.join(','))
-watch(() => settings.fsrs.relearningSteps, (v) => { relearnStepsText.value = v.join(',') })
-function commitRelearnSteps() {
-  const v = normalizeSteps(relearnStepsText.value, ['10m'])
-  settings.fsrs.relearningSteps = v
-  relearnStepsText.value = v.join(',')
-}
-const maxIntervalText = ref(String(settings.fsrs.maximumInterval))
-watch(() => settings.fsrs.maximumInterval, (v) => { maxIntervalText.value = String(v) })
-function commitMaxInterval() {
-  const raw = maxIntervalText.value.trim()
-  const v = Number(raw)
-  if (Number.isFinite(v) && Number.isInteger(v) && v >= 30 && v <= 36500) {
-    settings.fsrs.maximumInterval = v
-    maxIntervalText.value = String(v)
-  } else {
-    maxIntervalText.value = String(settings.fsrs.maximumInterval)
-    toast('最大间隔请输入 30～36500 的整数（天）', 'error')
-  }
-}
-function commitRetention(e) {
-  settings.fsrs.requestRetention = normalizeRetention(e.target.value)
-}
 
 // FSRS 升级一次性提示：有历史作答记录的老用户才提示，全新安装静默
 const FSRS_MIGRATED_KEY = 'qbank.fsrsMigrated.v1'
@@ -642,11 +277,7 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
   background: transparent;
 }
 
-/* App 内联设置弹窗入场（与 DialogHost 同语言；DialogHost 的是 scoped，App 用不了） */
-.dg-enter-active, .dg-leave-active { transition: opacity .18s ease; }
-.dg-enter-active .dg-card, .dg-leave-active .dg-card { transition: transform .18s ease; }
-.dg-enter-from, .dg-leave-to { opacity: 0; }
-.dg-enter-from .dg-card, .dg-leave-to .dg-card { transform: translateY(8px) scale(.97); }
+/* 设置弹窗入场动画已随组件迁入 components/settings/SettingsDialog.vue（scoped） */
 
 /* 补线体标题工具类（由 uno.config theme.fontFamily.serif 提供 font-serif 原子类） */
 </style>

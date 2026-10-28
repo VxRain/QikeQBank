@@ -17,6 +17,7 @@ QikeQBank/
 │   │           render.js validate.js normalize.js parsePureText.js stripMarkdown.js
 │   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
+│   │               settings/（SettingsDialog 弹窗外壳 + registry.js 设置项注册表 + SettingRow 通用行 + AboutPanel）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
 ├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync/s3）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
@@ -352,8 +353,15 @@ export function persistBankFilter(page, id)
 ### api/practice.js（W2 改）
 `practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
-### App.vue（W2 改）
-`onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏新增**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）；设置弹窗底部**关于**区（版本号 getVersion、便携/安装模式、打开数据目录、清理无用图片（`assets_gc` + 显示释放字节）、检查更新→GitHub Releases，opener allow-open-url 仅放行本仓库）。
+### App.vue（W2 改；设置弹窗已抽出）
+`onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏保留**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）。
+
+### components/settings/（设置页重构）
+- **`SettingsDialog.vue`**：设置弹窗外壳 = 顶部搜索 + 左侧分类栏 + 右侧内容区；Esc 关闭、Ctrl/⌘+F 聚焦搜索、Tab 焦点圈在弹窗内、打开时锁 body 滚动；分类记忆只留会话（不落盘）。
+- **`registry.js`**：**设置项唯一数据源**。`SETTINGS_SECTIONS` 内每项声明 `{key,title,desc,type,value(),set(v)}`，可选 `visible()/dependsOn/indent/unit/min/max/options/normalize/component`。新增设置项**只加一条 item**，分类栏、搜索命中数、依赖提示全自动跟随。
+- **`SettingRow.vue`**：按 `type` 渲染 switch / number / text / select / segmented / custom / note；数值与文本输入本地持有草稿，change/blur/回车归一化落盘，非法回滚 + toast。
+- **`AboutPanel.vue`**：关于区（版本号 getVersion、便携/安装模式、打开数据目录、清理无用图片（`assets_gc` + 显示释放字节）、检查更新→GitHub Releases，opener allow-open-url 仅放行本仓库）。
+- 搜索态：跨分类汇总命中并显示每类命中数；未满足依赖的子项（如「停留时长」需先开「答对自动下一题」）不隐藏，而是标注原因。
 
 ### 配图文件化（前后端约定）
 - 题面 JSON 只存 `asset:<64hex>` 引用；`src/utils/image.js` 负责上传压缩（GIF 直存/小 PNG 直存/其余 WebP q85 长边 1920，拒 svg/超 20MB/超 12000px，EXIF 方向修正）；`src/api/assets.js` 负责 put/resolve/expand/normalize（resolve 结果 session 缓存，GC 后清）。

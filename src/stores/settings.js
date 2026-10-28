@@ -62,6 +62,17 @@ export function normalizeSteps(v, fallback) {
   const out = list.map((s) => String(s).trim()).filter((s) => STEP_RE.test(s)).slice(0, FSRS_LIMITS.stepsMax)
   return out.length ? out : [...fallback]
 }
+// 步长文本校验：给设置页用精确错误提示（normalizeSteps 是静默兜底，不适合直接当反馈）
+export function validateSteps(v) {
+  const list = (Array.isArray(v) ? v : String(v ?? '').split(','))
+    .map((s) => String(s).trim())
+    .filter(Boolean)
+  if (!list.length) return { ok: false, msg: '至少填写一个步长，如 1m,10m' }
+  const bad = list.filter((s) => !STEP_RE.test(s))
+  if (bad.length) return { ok: false, msg: `步长格式无效：${bad.join('、')}（示例：1m / 10m / 4h / 1d）` }
+  if (list.length > FSRS_LIMITS.stepsMax) return { ok: false, msg: `最多 ${FSRS_LIMITS.stepsMax} 个步长` }
+  return { ok: true, steps: list }
+}
 // 练习入库范围：仅接受 'wrong-only'，其余一律 'all'
 export function normalizePracticeScope(v) {
   return v === 'wrong-only' ? 'wrong-only' : 'all'
