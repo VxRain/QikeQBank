@@ -223,12 +223,12 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `sync_s3_config_set` | `settings: {endpoint, region, bucket, prefix, path_style, access_key, secret_key, session_token?}` | 校验后写入 `db_meta.s3_config`（本机表，不进同步包）。`secret_key` 留空 = 沿用已保存的密钥 |
 | `sync_s3_test` | — | 连通性/权限自检（写 → 读 → 列举 → 删 `_probe/hello.txt`），返回 `{ok, writable, readable, listable, endpoint, checked_at}` |
 | `sync_s3_push` | — | `export_delta_at(watermark)` → 裁剪 `review_state`（仅本批 records∪questions 的题号）→ NDJSON+gzip → PUT 新序号对象。设置无 `synced_at`，按内容指纹（key/value/updated_at）判重，未变化时不写对象。**只上传本批增量题目 + `s3_asset_pending` 引用的图片，禁止扫描全库**；失败项进 pending。返回 `{skipped, seq, key, rows, bytes, assets_uploaded, asset_errors}`。**`s3_push_watermark` 只在 PUT 成功后推进** |
-| `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）→ 标记设置已同步（防下轮保护性 push 回声）。返回 `{applied_logs, applied, assets_pulled, asset_errors, warnings}`。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
+| `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）→ 标记设置已同步（防下轮保护性 push 回声）。图片只下载「本次应用的 base/log bundle refs + `s3_asset_download_pending`」，不再全库扫描题目；升级后首次 pull 做一次 seed（`s3_asset_download_seeded`）把历史缺图写入待办。返回 `{applied_logs, applied, assets_pulled, asset_errors, warnings}`。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
 | `sync_s3_status` | — | `{device_id, push_seq, push_watermark, cursors, bootstrapped, last_push_at, last_pull_at}`（**UI 只展示 `last_*` 相对时间**，其余为排障用） |
 | `sync_s3_compact` | — | 用本机当前状态生成全量快照，`covered` 记各设备已覆盖序号；返回 `{base, rows, bytes}`。**不含图片**（图片走 repair）。**UI 不暴露**：首次上传自动留锚点、检测到前缀被清空时自动补，均由后端调用 |
 | `sync_s3_repair_assets` | — | **显式补图**：分页 LIST `assets/` 得到桶内 sha 集合 → 与本地 `assets` 登记表求差 → 只 PUT 缺失项。不扫描题目 JSON、不逐图 HEAD。返回 `{bucket_assets, registered, missing, uploaded, asset_errors}`。用于云端图片丢失/前缀清空后的恢复 |
 
-> **本机元数据**（`db_meta`，非同步表）：`s3_config` / `s3_device_id` / `s3_push_seq` / `s3_push_watermark` / `s3_cursors` / `s3_bootstrapped` / `s3_applied_logs` / `s3_asset_pending` / `s3_need_base` / `s3_local_incomplete` / `s3_settings_fp` / `s3_last_push_at` / `s3_last_pull_at`。
+> **本机元数据**（`db_meta`，非同步表）：`s3_config` / `s3_device_id` / `s3_push_seq` / `s3_push_watermark` / `s3_cursors` / `s3_bootstrapped` / `s3_applied_logs` / `s3_asset_pending` / `s3_asset_download_pending` / `s3_asset_download_seeded` / `s3_need_base` / `s3_local_incomplete` / `s3_settings_fp` / `s3_last_push_at` / `s3_last_pull_at`。
 >
 > **三条不变量**：① 日志按设备分链、序号稠密（读到的首个对象序号必须 = 本机游标+1），断链可精确检出；② 拉取一律 `SyncRole::Leaf`——保留来源 `synced_at` 且在 commit 后校准本机时钟，因此不会被再次导出，天然无回声；③ 对象不可变，重试只产生新序号，不覆盖历史（同名序号已存在且内容相同 = 幂等成功；内容不同 = DB 被复制到另一台机器，自动换 `s3_device_id` 并提示重试）。
 >

@@ -13,8 +13,8 @@
 use super::store::ObjectStore;
 use super::{asset_key, base_key, is_safe_device_id, log_key, wire, Credentials, S3Config};
 use crate::db::assets::{
-    asset_mime_ext, asset_path_for, asset_registry_get, assets_put_bytes_impl, collect_asset_refs,
-    is_asset_sha,
+    asset_file_present, asset_mime_ext, asset_path_for, asset_registry_get, assets_put_bytes_impl,
+    collect_asset_refs, is_asset_sha,
 };
 use crate::db::{
     apply_bundle, db_meta_value, export_delta_at, generate_id, next_sync_stamp, now_iso,
@@ -43,6 +43,10 @@ const NEED_BASE_KEY: &str = "s3_need_base";
 const LOCAL_INCOMPLETE_KEY: &str = "s3_local_incomplete";
 /// 上次成功推送/拉取后的设置指纹（设置没有 synced_at，全量导出会变成回声源）
 const SETTINGS_FP_KEY: &str = "s3_settings_fp";
+/// 下载失败的图片 sha（含升级后首次 seed 的历史缺图）：下次 pull 继续重试。
+const DOWNLOAD_PENDING_KEY: &str = "s3_asset_download_pending";
+/// 是否已做过「升级后首次缺图播种」；只影响一次全库扫描，之后 pull 只处理增量。
+const DOWNLOAD_SEEDED_KEY: &str = "s3_asset_download_seeded";
 /// 上次上传/下载时间（用户可见的唯一同步状态，其余内部计数不暴露）
 const LAST_PUSH_KEY: &str = "s3_last_push_at";
 const LAST_PULL_KEY: &str = "s3_last_pull_at";
@@ -479,6 +483,103 @@ enum LocalAssetError {
     Asset(&'static str),
 }
 
+/// 下载待办（sha 集合）：失败/中断后跨轮保留，避免只处理增量而漏掉旧缺图。
+fn load_download_pending(conn: &Connection) -> Result<HashSet<String>, String> {
+    let Some(raw) = db_meta_value(conn, DOWNLOAD_PENDING_KEY)? else {
+        return Ok(HashSet::new());
+    };
+    Ok(serde_json::from_str::<Vec<String>>(&raw)
+        .unwrap_or_default()
+        .into_iter()
+        .collect())
+}
+
+fn save_download_pending(conn: &Connection, set: &HashSet<String>) -> Result<(), String> {
+    if set.is_empty() {
+        conn.execute(
+            "DELETE FROM db_meta WHERE key = ?1",
+            rusqlite::params![DOWNLOAD_PENDING_KEY],
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let mut list: Vec<&String> = set.iter().collect();
+    list.sort();
+    let raw = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+    upsert_db_meta(conn, DOWNLOAD_PENDING_KEY, &raw)
+}
+
+fn merge_download_pending(conn: &Connection, refs: &HashSet<String>) -> Result<(), String> {
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let mut set = load_download_pending(conn)?;
+    let before = set.len();
+    set.extend(refs.iter().cloned());
+    if set.len() != before {
+        save_download_pending(conn, &set)?;
+    }
+    Ok(())
+}
+
+/// 一个 bundle 里题目引用的图片 sha。
+fn bundle_asset_refs(bundle: &Value) -> HashSet<String> {
+    let mut refs = HashSet::new();
+    for q in bundle
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        collect_asset_refs(q, &mut refs);
+    }
+    refs
+}
+
+/// 日志 bundle 应用后，按**本地胜出的行**取 refs：被 LWW 拒绝的旧行 /
+/// 同包墓碑删掉的行不应把图片带进下载待办，否则会给云端不存在的旧图
+/// 留下永远无法成功的重试。
+fn applied_log_asset_refs(conn: &Connection, bundle: &Value) -> Result<HashSet<String>, String> {
+    let mut refs = HashSet::new();
+    for q in bundle
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = q.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(local) = crate::db::fetch_question(conn, id)? {
+            collect_asset_refs(&local, &mut refs);
+        }
+    }
+    Ok(refs)
+}
+
+/// 升级后首次 pull 的迁移：全库扫一次历史缺图，写入下载待办。
+/// 之后普通 pull 只处理「本次应用的 bundle + 待办」，不再扫描全库。
+/// 这是唯一的 O(全库) 图片检查；未来由 `question_assets` 派生索引替代。
+fn seed_download_pending(conn: &Connection, assets_root: &Path) -> Result<(), String> {
+    if db_meta_value(conn, DOWNLOAD_SEEDED_KEY)?.as_deref() == Some("1") {
+        return Ok(());
+    }
+    let missing = sync_assets_missing_impl(conn, assets_root)?;
+    let mut refs = HashSet::new();
+    for item in missing
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(sha) = item.get("sha").and_then(Value::as_str) {
+            refs.insert(sha.to_string());
+        }
+    }
+    merge_download_pending(conn, &refs)?;
+    upsert_db_meta(conn, DOWNLOAD_SEEDED_KEY, "1")
+}
+
 /// 读取本地图片并复核 sha；Asset 错误串直接作为 `asset_errors.reason`。
 fn local_asset_bytes(
     conn: &Connection,
@@ -706,6 +807,8 @@ pub fn pull(
     cfg: &S3Config,
     device: &str,
 ) -> Result<Value, String> {
+    // 升级后首次 pull：把历史缺图播种到下载待办（只执行一次全库扫描）。
+    seed_download_pending(conn, assets_root)?;
     let mut rebased = false;
     loop {
         // 第一趟严格连续（断链就交给基线恢复）；第二趟仍断链说明**没有基线可回退**
@@ -753,7 +856,12 @@ fn bootstrap(
     // 信封的 7 个数组不含 `full` 字段（它在信封头里），这里显式回填，
     // 让 replace_snapshot 的「只接受全量」守卫按原语义生效。
     bundle["full"] = json!(true);
+    let base_refs = bundle_asset_refs(&bundle);
     let replaced = replace_snapshot(conn, &bundle)?;
+    // 基线是整库替换：待办重置为基线引用，丢掉已被替换掉的旧 refs；
+    // 基线覆盖之后的日志会在重放时重新加入。先落待办再推进 bootstrapped/游标，
+    // 若这一步失败，下次 pull 会重新走 bootstrap，不会漏图。
+    save_download_pending(conn, &base_refs)?;
     let mut cursors = BTreeMap::new();
     if let Some(map) = header.get("covered").and_then(Value::as_object) {
         for (dev, v) in map {
@@ -929,6 +1037,10 @@ fn pull_pass(
                 if let Some(max) = bundle_max_synced_at(&bundle) {
                     bump_push_watermark(conn, &max)?;
                 }
+                // 先把本批题目引用的图片记入下载待办，再推进游标：
+                // 顺序反了的话，此后若拉取中断，这些图不会再出现在增量里。
+                let refs = applied_log_asset_refs(conn, &bundle)?;
+                merge_download_pending(conn, &refs)?;
                 merge_stats(&mut applied_rows, &res);
                 seq = want;
                 cursors.insert(dev.clone(), seq);
@@ -945,7 +1057,17 @@ fn pull_pass(
     // 远端设置已经落库，且其来源日志就在桶里：标记为已同步，防止下轮 pull 的
     // 保护性 push 把它们当成本地改动再写一条日志（回声）。
     mark_settings_synced(conn)?;
-    let assets = pull_assets(conn, store, assets_root, cfg)?;
+    // 只下载「本次应用的 bundle + 历史待办」里的图；不再全库扫描题目。
+    let mut pending = load_download_pending(conn)?;
+    let (pulled, asset_errors) = pull_assets(conn, store, assets_root, cfg, &pending)?;
+    // 失败项留在待办，下一轮 pull 继续重试；成功/已在本地则移除。
+    let failed: HashSet<String> = asset_errors
+        .iter()
+        .filter_map(|e| e.get("sha").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    pending.retain(|sha| failed.contains(sha));
+    save_download_pending(conn, &pending)?;
+    let assets = (pulled, asset_errors);
     upsert_db_meta(conn, LAST_PULL_KEY, &now_iso())?;
     Ok(json!({
         "applied_logs": applied_logs,
@@ -1105,27 +1227,24 @@ fn merge_stats(acc: &mut Value, res: &Value) {
     }
 }
 
-/// 下载本机缺失的图片：key 由 sha 直接推导，mime 取对象的 Content-Type，
-/// 落库前复核 sha256（内容寻址的强校验）。
+/// 下载指定 sha 集合中本机缺失的图片：key 由 sha 直接推导，mime 取对象的
+/// Content-Type，落库前复核 sha256（内容寻址的强校验）。
+/// 集合由 pull 的「本次应用 bundle refs + s3_asset_download_pending」提供，
+/// 不再全库扫描题目。
 fn pull_assets(
     conn: &Connection,
     store: &dyn ObjectStore,
     assets_root: &Path,
     cfg: &S3Config,
+    shas: &HashSet<String>,
 ) -> Result<(u64, Vec<Value>), String> {
-    let missing = sync_assets_missing_impl(conn, assets_root)?;
     let mut pulled = 0u64;
     let mut errors = Vec::new();
-    for item in missing
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(sha) = item.get("sha").and_then(Value::as_str) else {
-            continue;
-        };
+    for sha in shas {
         if !is_asset_sha(sha) {
+            continue;
+        }
+        if asset_file_present(conn, assets_root, sha)? {
             continue;
         }
         let Some(rel) = asset_key(sha) else { continue };
@@ -1134,7 +1253,7 @@ fn pull_assets(
             errors.push(json!({"sha": sha, "reason": "not-in-bucket"}));
             continue;
         };
-        if sha256_hex(&obj.body) != sha {
+        if sha256_hex(&obj.body) != *sha {
             errors.push(json!({"sha": sha, "reason": "sha-mismatch"}));
             continue;
         }
@@ -1826,6 +1945,62 @@ mod tests {
         }
         let refs = crate::db::assets::scan_question_asset_refs(&conn).unwrap_or_default();
         eprintln!("[local-refs] {}", refs.len());
+    }
+
+
+
+    #[test]
+    fn log_asset_refs_follow_winning_local_row() {
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_log_refs");
+        q["bank_id"] = json!("bank_default");
+        questions_create_impl(&conn, q).unwrap();
+        let bundle = json!({"questions": [{"id": "q_log_refs"}]});
+        // 本地行没有图：即使日志里是旧行带图，也不应把图带进待办
+        assert!(applied_log_asset_refs(&conn, &bundle).unwrap().is_empty());
+
+        // 本地胜出行带图：无论日志行新旧，都应按本地行收集
+        let sha = "ef".repeat(32);
+        let mut q2 = sample_question();
+        q2["id"] = json!("q_log_refs");
+        q2["bank_id"] = json!("bank_default");
+        q2["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+        crate::db::questions_update_impl(&conn, "q_log_refs", q2).unwrap();
+        let refs = applied_log_asset_refs(&conn, &bundle).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert!(refs.contains(&sha));
+
+        // 本地不存在（被同包墓碑删除）：不收集
+        conn.execute("DELETE FROM questions WHERE id = 'q_log_refs'", []).unwrap();
+        assert!(applied_log_asset_refs(&conn, &bundle).unwrap().is_empty());
+    }
+
+    #[test]
+    fn seed_download_pending_scans_legacy_missing_once() {
+        let conn = test_conn();
+        let sha = "ab".repeat(32);
+        let mut q = sample_question();
+        q["id"] = json!("q_seed_asset");
+        q["bank_id"] = json!("bank_default");
+        q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+        questions_create_impl(&conn, q).unwrap();
+
+        let root = root("seeddl");
+        seed_download_pending(&conn, &root).unwrap();
+        let pending = load_download_pending(&conn).unwrap();
+        assert_eq!(pending.len(), 1, "历史缺图应被播种");
+        assert!(pending.contains(&sha));
+        assert_eq!(
+            db_meta_value(&conn, DOWNLOAD_SEEDED_KEY).unwrap().as_deref(),
+            Some("1")
+        );
+
+        // flag 生效后不会因为待办被清空而重新做全库扫描
+        save_download_pending(&conn, &HashSet::new()).unwrap();
+        seed_download_pending(&conn, &root).unwrap();
+        assert!(load_download_pending(&conn).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

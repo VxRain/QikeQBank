@@ -1891,3 +1891,67 @@ fn wipe_all_objects_then_repair_restores_assets() {
     );
     assert_converged(&a, &c);
 }
+
+// ---------------------------------------------------------------------------
+// 场景 30：日志已应用、图片 GET 失败 —— 待办必须在游标推进前落盘
+// 期望：下一轮 pull 即使没有任何新日志，也会从 pending 重试并补回图片
+// ---------------------------------------------------------------------------
+#[test]
+fn failed_asset_download_is_retried_from_pending() {
+    const PNG_B64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let sim = Sim::new("dlpending");
+    let a = sim.dev("A");
+    let bank = a.add_bank("库");
+    a.add_question(&bank, "q_img");
+    a.push(&sim);
+
+    let mut b = sim.dev("B");
+    b.pull(&sim);
+    assert!(
+        !crate::db::asset_file_present(&b.conn, &b.assets, &"ab".repeat(32)).unwrap(),
+        "预置检查"
+    );
+
+    // A 给已有题目加图 → 增量日志只带题目引用，图片单独上传
+    let (sha, _) = crate::db::assets_put_impl(
+        &a.conn,
+        &a.assets,
+        PNG_B64,
+        "image/png",
+        Some(1),
+        Some(1),
+    )
+    .expect("落图");
+    let mut q = crate::db::test_support::sample_question();
+    q["id"] = json!("q_img");
+    q["bank_id"] = json!(bank);
+    q["stem"] = json!({"type":"doc","content":[{"type":"imageBlock","attrs":{"src": format!("asset:{sha}")}}]});
+    crate::db::questions_update_impl(&a.conn, "q_img", q).expect("更新题目");
+    let p = a.push(&sim);
+    assert_eq!(p["assets_uploaded"], json!(1));
+
+    let asset_key = sim
+        .cfg
+        .full_key(&crate::db::s3::asset_key(&sha).expect("asset key"));
+    let store = FaultyStore::new(&sim.store);
+    store.fail_get_key(&asset_key);
+    let dev_b = b.device();
+    let err = sync::pull(&mut b.conn, &store, &b.assets, &sim.cfg, &dev_b)
+        .expect_err("图片 GET 失败必须中止本轮");
+    assert!(err.contains("injected get failure"), "{err}");
+    assert!(
+        !crate::db::asset_file_present(&b.conn, &b.assets, &sha).unwrap(),
+        "失败时不应有文件"
+    );
+
+    // 故障清除后，没有任何新日志，仍应凭 pending 补回图片
+    let r = b.pull(&sim);
+    assert!(r["asset_errors"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["assets_pulled"], json!(1), "{r}");
+    assert!(
+        crate::db::asset_file_present(&b.conn, &b.assets, &sha).unwrap(),
+        "pending 重试后应拿到图片"
+    );
+    assert_converged(&a, &b);
+}
