@@ -26,6 +26,18 @@
 
 > 近期先把前端闭环补齐（`frontend-product-todo.md`）；长期把本体从 `question` 换成 `block → card`，AI 只在内容加工层落地（`platform-evolution.md`）。**阶段 A（结构）不可跳过。**
 
+### 0.3 产品定位（唯一口径，禁止各自发挥）
+
+> **便携模式是运行方式（数据落同级目录，避免污染 C 盘），不是产品定位；产品定位是「本地优先 + S3 同步的桌面学习客户端」。**
+
+由此推导的三条硬约束。写方案 / 写文档时**一律照这三条**，不得自行替换成「小体积」「免安装」「U 盘即走」之类的论证前提：
+
+1. **数据归属**：数据全在本地（SQLite + 本地图片目录），云端只是同步中继（S3 即同步中心），不引入服务端。
+2. **同步体积是第一约束**：任何派生索引（FTS / 向量 / 缓存）**不进同步包**，由各设备本地重建。这也意味着每台设备各付一次算力，而不是传 N 次。
+3. **安装包体积不是决策变量**：可选重型资产（模型、词典、示例库）走「按需下载 + 内容寻址 + 不进同步包」，不内置。
+
+> 反例（曾出现过）：把「便携 U 盘即走」当作定位，据此否决 FTS 索引 / 嵌入模型。结论可能对，但论证方式错——换个场景就会推出错的结论。
+
 ## 1. 总体架构
 
 ```
@@ -65,11 +77,11 @@ QikeQBank/
 
 > v3（同步地基）：新增 `delete_log`（墓碑）、`app_settings`（需同步的设置）、
 > `db_meta`（库身份/版本/游标）；banks/questions/practice_records 加 `synced_at`
-> （同步游标，落库方 stamp）；review_state 加 `updated_at`（LWW 时钟）；
+> （同步游标，落库方 stamp）；review_state 加 `updated_at`（LWW 时钟）与 `synced_at`（增量推送游标，PE-A-01）；
 > wrong_dismiss 重塑为软状态（`is_dismissed + updated_at`）。
 > 旧库无迁移路径（未发版，删库重建）。**v3 守卫**：`init_schema` 检测到旧版
 > schema（banks 存在但任一 v3 关键列缺失）→ 自动删表重建（assets 表 schema
-> 未变予以保留）；全新库直接建表。双时钟语义：业务时间
+> 未变予以保留）；全新库直接建表。`review_state.synced_at` 不进守卫：存量 v3 库由 `init_schema` 幂等 `ALTER TABLE ADD COLUMN` 补列并回填接收戳（进守卫会把正常 v3 库判成 legacy 而删表）。双时钟语义：业务时间
 > （`updated_at/answered_at/deleted_at/dismissed_at/last_reviewed_at`）只用于 LWW，
 > `synced_at` 只用于增量过滤与墓碑 GC。
 
@@ -138,7 +150,8 @@ CREATE TABLE IF NOT EXISTS review_state (
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
@@ -228,7 +241,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 |---|---|---|
 | `settings_get` | — | `{success:true, data:[{key, value_json, updated_at}]}`（仅显式设置过的键） |
 | `settings_set` | `items: [{key, value_json}]` | 校验 JSON 合法；同一批同一戳 UPSERT；返回 `{updated:[keys], updated_at}` |
-| `sync_pull` | `since?: String`（缺省全量） | GC 墓碑 → 取单调边界 `server_time` → 校验游标：`since < tombstone_floor`（已 GC 的删除永远学不到）或 `since > server_time`（游标损坏/来自未来）→ `{full_resync_required:true, server_time:null, tombstone_floor, bundle:null}`，**不落游标**；否则增量 `(since, server_time]`（banks/questions/records/wrong_dismiss/tombstones）+ 全量 review_state/settings。正常返回 `{full_resync_required:false, server_time, tombstone_floor, bundle}`（`bundle.full=true` 表示全量，可配合 `sync_replace_snapshot`）。**游标由调用方持有**（`server_time`），中心不落库，多设备互不覆盖 |
+| `sync_pull` | `since?: String`（缺省全量） | GC 墓碑 → 取单调边界 `server_time` → 校验游标：`since < tombstone_floor`（已 GC 的删除永远学不到）或 `since > server_time`（游标损坏/来自未来）→ `{full_resync_required:true, server_time:null, tombstone_floor, bundle:null}`，**不落游标**；否则增量 `(since, server_time]`（banks/questions/records/review_state/wrong_dismiss/tombstones）+ 全量 settings。正常返回 `{full_resync_required:false, server_time, tombstone_floor, bundle}`（`bundle.full=true` 表示全量，可配合 `sync_replace_snapshot`）。**游标由调用方持有**（`server_time`），中心不落库，多设备互不覆盖 |
 | `sync_push` | `bundle`（`{device_id, banks[], questions[], records[], review_state[], wrong_dismiss[], settings[], tombstones[]}`） | 中心 `apply_bundle(role=Center)`：两阶段预裁决→落库（LWW/墓碑/零库守卫/地平线守卫/钳制）；本批所有 `synced_at` 统一改写为单调接收戳。返回 `{applied, skipped, dropped_orphans, conflicts}` |
 | `sync_apply_snapshot` | `bundle` | 叶子落快照：`apply_bundle(role=Leaf)`（`>=` 采纳中心，保留 `synced_at`；commit 后校准本机 `sync_clock`） |
 | `sync_replace_snapshot` | `bundle`（必须 `full=true` 且 `banks` 非空） | **全量重建**：单事务内清空本地同步表（banks/questions/records/review_state/wrong_dismiss/delete_log/app_settings）→ `apply_bundle(role=Leaf)`；assets / db_meta 保留；commit 后校准时钟。用于 `sync_pull` 返回 `full_resync_required:true` 的恢复路径 |
@@ -464,7 +477,7 @@ export function persistBankFilter(page, id)
 
 ## 8. 验证标准
 
-- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、export 形状（当前 v4，含 settings/delete_log）。
+- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、`review_state` 增量推送（增量只带改动行 / 全量快照仍含全表 / 存量库补列回填）、export 形状（当前 v4，含 settings/delete_log）。
 - **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；`tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults；`tests/unit/parseDocx.test.js`：docx 章节题号解析回归）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
@@ -479,4 +492,4 @@ export function persistBankFilter(page, id)
 | **数据保全**（备份 / 恢复） | JSON 导出导入 + S3 云同步（**支持自动定时同步**，开关 + 间隔 10～60 分钟，默认关；含增量日志与全量基线）。**仍无本地时间点快照**（无保留份数、无按时间点回滚）；云同步只有冲突计数提示，无逐行冲突可视化/逐行取舍 | 剩余决策：本地时间点快照（频率 / 保留份数 / 落盘位置 / 便携模式差异）、编辑后 debounce 触发（当前仅定时 + 启动后 60 秒）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
 | **模考（exam）** | `practice_records.mode` CHECK 已放行 `'exam'`（`schema.rs:53`、`practice.rs:232`、`sync.rs:813` 均兼容），题面已有 `score` 分值字段；但 UI 无入口、**全库无一处把分值聚合成总分** | 未立项；组卷形态（即时规则组卷 vs 持久化「试卷」实体）、判分口径（多选漏选 / 部分给分）、是否进 FSRS 复习、成绩单与场次历史是否入库同步——实现方案待规划后写入本文件 |
 | **图片同步（资源通道）** | 实测（`docs/asset_sync_bench.md`，100 万题 / 10 万图）：全库 JSON 扫描 8.0 s、升级 seed 10.6 s（每设备仅一次），而串行下载 10 万图 ≈100 min、逐图 autocommit ≈95 s、下载待办 JSON 46 ms/包（200 包 ≈1.23 GB 写放大）、1M base 逐题回读 57 s。故 **否决 `question_assets` 派生索引的增量维护版**（只省一次性 7.7 s；GC 依赖它会不可恢复删图） | v2 方案见 `docs/asset_sync_redesign.md`（图片定位为内容寻址缓存）。待拍板：① 是否接受「不默认全量下图」（首屏按需 + 窗口预热）② 待办表 `asset_jobs` 取代 `db_meta` JSON ③ 并发度策略 ④ base 分片按库还是按行。落地顺序见 §4（P0-1 待办落表 / P0-2 批量入库 / P0-3 header manifest / P1 并发 / P2 首屏按需 / P3 base 分片），P0 三项尚未开工 |
-| **平台化方向**（本体模型 / 块笔记 / 增量阅读 / AI） | 当前仍是 `question` 中心的题库客户端：`review_state.question_id` 为 PK（卡片只能绑定题目）、`delete_log.entity_type` CHECK 只放行 `bank/question`、`practice_records.question_id NOT NULL`（阅读/摘录进不了流水）；另 `sync.rs` 的 `review_state` 推送**无 WHERE（每次全量）**，卡片量上来后同步体积估算会失真 | 未立项。方向与取舍见 `docs/platform-evolution.md`（本体从 `question` 改为 `block → card`，AI 只做内容加工层）。该文 §10 列了 6 项待决（blocks 存真表 vs 索引表、embedding 云/本地、IR 优先级公式、事件流是否合流、今日队列是否跳库、AI 产物是否入同步包）。**Schema v4（该文附录 A）为草案，未启用、不得被代码引用**；启用前必须先并入 §3 |
+| **平台化方向**（本体模型 / 块笔记 / 增量阅读 / AI） | 当前仍是 `question` 中心的题库客户端：`review_state.question_id` 为 PK（卡片只能绑定题目）、`delete_log.entity_type` CHECK 只放行 `bank/question`、`practice_records.question_id NOT NULL`（阅读/摘录进不了流水）；另 `sync.rs` 的 `review_state` 推送已改为增量（PE-A-01：补 `synced_at` + 按接收时钟游标过滤） | 未立项。方向与取舍见 `docs/platform-evolution.md`（本体从 `question` 改为 `block → card`，AI 只做内容加工层）。该文 §10 列了 6 项待决（blocks 存真表 vs 索引表、embedding 落地方式（云/本地/并存）、IR 优先级公式、事件流是否合流、今日队列是否跳库、AI 产物是否入同步包）。**Schema v4（该文附录 A）为草案，未启用、不得被代码引用**；启用前必须先并入 §3 |

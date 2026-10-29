@@ -92,9 +92,9 @@ banks ──┬── questions ──────────────┐
 | FSRS-6 封装 | `src/utils/fsrs.js` + Rust 写入校验 | 调度器不用重写，只需扩「卡片来源」 |
 | S3 LWW 双时钟 | `src-tauri/src/db/sync.rs` | 新表只要遵守 `updated_at`/`synced_at` 契约即可并入 |
 
-### 2.2 已经存在的同步隐患（v4 之前必须修）
+### 2.2 同步隐患：`review_state` 全量推送（已修，PE-A-01）
 
-`sync.rs` 的 `review_state` 推送**没有 WHERE 条件**（全表，注释写「全量，均有界」）：
+原先 `sync.rs` 的 `review_state` 推送**没有 WHERE 条件**（全表，注释写「全量，均有界」）：
 
 ```rust
 "SELECT question_id, due_at, stability, ... FROM review_state ORDER BY question_id ASC"  // 全表
@@ -104,7 +104,13 @@ banks ──┬── questions ──────────────┐
 - README 里「一天 107 KB 未压缩 / 8 KB gzip」在卡片量上来后**不成立**。
 - `wrong_dismiss` / `records` 都是增量（带 `synced_at`），只有 `review_state` 是全量——这是历史遗留，不是设计。
 
-**结论**：`cards` 必须带 `synced_at` 走增量（见 附录 A §A.3）。顺手把 `review_state` 也改增量，否则卡片化之后同步会先崩。
+**已于 PE-A-01 修复**：补 `synced_at`（`DEFAULT ''`，兼容存量库 `ALTER TABLE ADD COLUMN`）、
+读路径改 `(since, server_time]` 游标、`fsrs_upsert` 与 sync apply 两处盖章
+（`DO UPDATE SET` 必带 `synced_at`，否则改动推不出去），并把 `review_state` 纳入
+`refresh_sync_clock` 的时钟校准。存量库由 `ensure_review_state_synced_at` 幂等补列 + 回填。
+
+> **给 v4 的两条约定**：① `cards` 从建表第一天就带 `synced_at`，不再走「先全量再补」的老路；
+> ② `synced_at` **不进** `rebuild_if_legacy` 的列嗅探——加了会把正常旧库判成 legacy 而删表。
 
 ### 2.3 搜索的现实
 
@@ -258,14 +264,28 @@ MVP 边界：
 
 #### 阶段 A · 结构（1–2 周）
 
-| ID | 任务 | 规模 | 后端 |
-|---|---|---|---|
-| PE-A-01 | `review_state` 改增量推送（补 `synced_at`） | M | 是 |
-| PE-A-02 | `cards` 表落地 + `review_state` 数据搬迁 + 读写路径切换 | L | 是 |
-| PE-A-03 | 首页改为「今日队列」（复习 N / 错题 K / 新题 M → 一键开始），统计降级为次要 | M | 否 |
-| PE-A-04 | FTS5 `trigram` 全库搜索（题 + 后续块） | L | 是 |
-| PE-A-05 | `delete_log` CHECK 扩枚举（note/block/card/concept） | M | 是 |
-| PE-A-06 | `study_events` 统一事件流（阅读/摘录/卡片复习） | M | 是 |
+| ID | 任务 | 规模 | 后端 | 状态 |
+|---|---|---|---|---|
+| PE-A-01 | `review_state` 改增量推送（补 `synced_at`） | M | 是 | ✅ 已完成 |
+| PE-A-02 | `cards` 表落地 + `review_state` 数据搬迁 + 读写路径切换 | L | 是 | |
+| PE-A-03 | 首页改为「今日队列」（复习 N / 错题 K / 新题 M → 一键开始），统计降级为次要 | M | 否 | |
+| PE-A-04 | FTS5 `trigram` 全库搜索（题 + 后续块） | L | 是 | 调研完成 · 暂不实施 |
+| PE-A-05 | `delete_log` CHECK 扩枚举（note/block/card/concept） | M | 是 | |
+| PE-A-06 | `study_events` 统一事件流（阅读/摘录/卡片复习） | M | 是 | |
+
+> **PE-A-02 的前置风险（已识别，尚未处理）**：`s3/sync.rs` 的 `scope_review_state` 会把复习态
+> 裁成「本批 `records ∪ questions` 出现的 question_id」。当前成立是因为卡片只能由 `fsrs_upsert`
+> 在写流水时改动；但 `cards` 表落地后，**不伴随流水的卡片变更**（挂起、手改、AI 调整、块卡
+> 首次生成）会被静默裁掉，且因为增量游标已推进，**不会重试**——这是丢数据级缺陷。
+> PE-A-02 必须同时做掉：要么删除 `scope_review_state`（增量导出已足够限制体积），要么改成
+> 「本批 + 本轮有变更的卡」并加回归测试。
+
+> **PE-A-04 调研结论（实测 · 2026-10-29）**：bundled SQLite 3.53.2 已编入 FTS5（`ENABLE_FTS5=1`），
+> 但 `trigram` 最小匹配 3 字符，而本仓真实语料里 **96.8% 的独立中文词是 1–2 字**（`Intl.Segmenter` 实测），
+> 这类查询 `MATCH` 返回 0 行且**不报错**；而现有 `plain_text LIKE '%x%'` 对中文是「正确但 O(n)」——
+> 333 题 1 ms / 10k 题 21 ms / 100k 题 250 ms。索引体积 ≈ 3.0× 正文（约 1.2 KB/题）。
+> **现阶段不做**：换 FTS 等于用正确性换延迟，而当前延迟用户感知不到。是否实施需根据**题库量级**考量，不做日历排期。
+> 完整实测数据与方案对比见 附录 A.1.7。
 
 #### 阶段 B · 块与流水线（3–4 周）
 
@@ -351,6 +371,7 @@ MVP 边界：
 | 手写 / 日程 / 番茄钟 / 白噪音 | 周边功能会稀释「聚合」的注意力，且都有更好的独立工具 |
 | 完整 SuperMemo IR 复刻 | 学习曲线劝退，80% 价值在 MVP 边界内（§3.3） |
 | 题库市场 / 社区 | 需要服务端 + 内容审核，与 §8 第一条同因 |
+| **以「便携 U 盘即走 / 小体积免安装」作为产品定位或论证前提** | 便携模式只是运行方式（数据落同级目录，避免污染 C 盘），不是定位。定位以 `PLAN.md §0.3` 为准；用错的定位推导出的取舍即使结论对，下一次也会推出错的结论 |
 
 ---
 
@@ -383,7 +404,7 @@ MVP 边界：
 | # | 问题 | 影响 |
 |---|---|---|
 | Q1 | `blocks` 真表 vs `doc_json` + 索引表，最终是否值得 diff 保存的复杂度？ | 决定阶段 B 的工期与编辑器改造范围 |
-| Q2 | embedding 用云 API 还是本地小模型（如 bge-small）？本地模型会显著增加安装包体积 | 决定 §2.3 搜索与 §4.2 查重的形态；与「小体积免安装」的产品调性冲突需权衡 |
+| Q2 | 嵌入能力怎么落地？（原先写成「云 API vs 本地模型」二选一，已改） | 三选一：**A** 云端 API（BYO key，零体积，无网不可用）/ **B** 本地模型（**运行时可下**，不内置安装包，离线可用，但多一套下载-校验-版本-降级生命周期）/ **C** 两者并存（向量需带 `model_id` 区分，索引按模型隔离）。判据不是体积，是「**是否需要无网可用**」：需要就 B，不需要就 A；C 只增复杂度，除非用户真的两种场景都有 |
 | Q3 | IR 的优先级用什么公式？纯手动 / SM 的 A-Factor 简化版 / 基于到期与阅读时长的启发式 | 决定阶段 E 的复杂度 |
 | Q4 | `practice_records` 是否并入统一 `study_events`，还是保留双流 + 视图合并？ | 决定统计层实现 |
 | Q5 | 「今日队列」是否需要跨库合并？（当前 `bankStore.currentBankId` 是单库视角） | 与「聚合」目标直接相关，可能要在阶段 A 就决策 |
@@ -624,24 +645,66 @@ CREATE INDEX IF NOT EXISTS idx_ai_sug_status ON ai_suggestions(status, created_a
 `ux_ai_jobs_cache` 就是内容寻址缓存：同 `kind + prompt_version + input_hash` 不重复调用。
 **这两张表不得出现在同步包里**（见 §A.3.1），否则违反 §5 红线 1。
 
-#### A.1.7 FTS5
+#### A.1.7 全文检索索引（已按实测修正）
+
+> 本节原稿写的是「独立 `search_fts` 表 + `trigram`」，已被实测推翻 4 处（见 A.1.7.1）。
+> 更重要的前提：**本项目中文语料里 96.8% 的独立词是 1–2 字**（真实 333 题语料，
+> `Intl.Segmenter('zh')` 实测），而 `trigram` 对 2 字查询 **0 命中且不报错**——
+> 这是静默漏，不是性能问题。所以 FTS **不是搜索的默认答案**，取舍见 A.1.7.2。
+
+##### A.1.7.1 修正后的 DDL（外部内容表，不存正文）
 
 ```sql
+-- 外部内容表：正文仍只在 questions.plain_text，FTS 只存索引
 CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
-  subject_type UNINDEXED,
-  subject_id   UNINDEXED,
-  bank_id      UNINDEXED,
-  title,
-  body,
-  tokenize = "trigram"
+  bank_id UNINDEXED,
+  plain_text,
+  content = 'questions',
+  content_rowid = 'rowid',
+  tokenize = "trigram",
+  detail = 'full'
 );
 ```
 
-- `trigram`：中文子串可检索（3 字符起点，2 字词会漏）；`unicode61` 对中文不切词，禁用。
-- 前置校验：`SELECT sqlite_version();` ≥ 3.34，且在 `tools/smoke-test.mjs` 加断言。
-- 维护方式：应用层在写 `questions` / `blocks` / `notes` 的同一事务内 upsert（**不用触发器**，触发器在重建表迁移时会丢，且难测）。
+四条硬约束（均来自实测，违反即静默错位或直接报错）：
 
----
+| # | 约束 | 实测原因 |
+|---|---|---|
+| 1 | **必须用 `content=` 外部内容表** | 独立表 = 索引 3.0× + `%_content` 1.4×（含 id 唯一索引）≈ 5× 原文；外部内容表只付 3.0× |
+| 2 | **`detail` 必须 `full`** | 改成 `none`/`column` 后 `MATCH` 直接报错 `phrase queries are not supported`（省的空间不值） |
+| 3 | **写入必须三段式** | 外部内容表更新要先 `INSERT INTO search_fts(search_fts, rowid, ...) VALUES('delete', ...)` 再 insert，不能直接 UPSERT |
+| 4 | **`replace_snapshot` 后必须 rebuild** | 全量镜像会 `DELETE FROM questions` 再重插，**隐式 rowid 全部改变**，不 rebuild 就永久错位 |
+
+索引体积实测：≈ **3.0 × UTF-8(plain_text)**，真实题库中位 405 B/题 → 约 1.2 KB/题；
+1 万题≈12 MB，10 万题≈120 MB，100 万题≈1.2 GB——**索引是纯增量开销**，不进同步包、不备份也没意义（可重建），但它落在本地数据目录里，会直接推高用户的磁盘占用。
+重建成本：10k 题 1.0 s、100k 题 12.9 s——只在升级/全量快照后发生一次；写入增量开销 <5%，可忽略。
+
+##### A.1.7.2 方案取舍（实测数据支撑）
+
+| 方案 | 1–2 字查询 | ≥3 字查询 | 体积 | 结论 |
+|---|---|---|---|---|
+| 现状 `plain_text LIKE '%x%'` | ✅ 正确，O(n) | ✅ 正确，O(n) | 0 | 333 题 1 ms、10k 21 ms、100k 250 ms |
+| `trigram` + 短查询降级 LIKE | ✅ 走 LIKE | ✅ 0.3–4.6 ms | 3.0× | **性价比最高的第一步** |
+| 逐字插空格 + `unicode61` 短语 | ✅ 0.08–1.2 ms | ✅ 也可 | 1.69× 索引 + 2× 派生正文 | 2 字必须快时的替代 |
+| 自定义 tokenizer（jieba-rs） | ✅ | ✅ | 0.5–1.5× | **不做**：需 `unsafe` FFI 注册 FTS5 vtable；换词典 = 全量重建，且跨设备 token 流不一致 |
+
+**关键判断：`LIKE` 对中文是「正确但慢」，`trigram` 是「快但漏」。** 在 2 字词占 97% 的语料里，
+直接换 FTS 是**用正确性换延迟**——而当前 333 题的延迟只有 1 ms，用户感知不到。
+
+**现状结论：现阶段不做。** 换 FTS 的收益随题量增长（延迟差异在题量上来后才会被感知），但代价
+（2 字词静默漏、3.0× 磁盘）**不随题量变化**。是否实施需根据题库量级考量，见 §6.2 的结论块。
+
+##### A.1.7.3 维护与重建
+
+- 维护方式：应用层在写 `questions` / `blocks` / `notes` 的同一事务内 update（**不用触发器**——重建表迁移时会丢，且三段式 delete 拿不到旧值）。
+- 重建触发点（缺一不可）：① `init_schema`（升级后首次）② `rebuild_if_legacy`（它 DROP 了 questions，FTS 必须一起 drop）③ `apply_bundle` 提交后 ④ `replace_snapshot` 之后。
+- 自检：`SELECT count(*) FROM search_fts` 与 `SELECT count(*) FROM questions` 不一致即 rebuild。
+- **不进同步包**：bundle 键是硬编码白名单（`sync.rs:265`），新表不加进 push 就不会被同步；到达端重建。
+
+##### A.1.7.4 前置校验
+
+- `sqlite_compileoption_used('ENABLE_FTS5')` 必须为 1。本仓 bundled 已实测通过（SQLite 3.53.2 / rusqlite 0.40.2）。
+- `tools/smoke-test.mjs` 用的 `node:sqlite` 为 3.53.4，同样支持 trigram。
 
 ### A.2 既有表改造
 
@@ -752,11 +815,12 @@ pub(crate) const SCHEMA_VERSION: &str = "4";
 |---|---|---|---|
 | `banks` / `questions` | ✓ | `synced_at` | 增量 |
 | `notes` / `blocks` | ✓ | `synced_at` | 增量 |
-| `cards` | ✓ | `synced_at` | **增量**（相对 `review_state` 的改进） |
+| `cards` | ✓ | `synced_at` | 增量 |
 | `concepts` / `concept_links` | ✓ | `synced_at` | 增量 |
 | `study_events` | ✓ | `synced_at` | 增量（只增不改） |
 | `practice_records` | ✓ | `synced_at` | 增量（不变） |
 | `wrong_dismiss` | ✓ | `synced_at` | 增量（不变） |
+| `review_state`（**过渡期**） | ✓ | `synced_at` | 增量（PE-A-01 起）；v4 由 `cards` 顶替，但在旧设备全部升级前继续推送（见 A.3.3） |
 | `app_settings` | ✓ | — | 全量（小，不变） |
 | `assets` | ✓（二进制走通道） | — | 内容寻址（不变） |
 | **`ai_jobs` / `ai_suggestions`** | **✗** | — | **本地 only** |
@@ -892,3 +956,5 @@ CREATE VIEW IF NOT EXISTS v_study_timeline AS
 |---|---|---|
 | v1 | 2026-10-29 | 初稿：本体模型、三方向取舍、AI 分层与碰撞矩阵、A–E 路线图、七条 AI 红线 |
 | v1.1 | 2026-10-29 | 原 `docs/schema-v4-draft.md` 合并为附录 A（编号改为 A.0–A.6，内部 `§N` 引用同步改为 `§A.N`）；删除附录 A 内重复的变更记录，并入本表 |
+| v1.2 | 2026-10-29 | PE-A-01 落地（`review_state` 改增量推送）：§2.2 从「待修隐患」改为「已修 + 给 v4 的两条约定」，§6.2 阶段 A 加「状态」列并标 PE-A-01 完成 |
+| v1.3 | 2026-10-29 | 全文检索调研落地：A.1.7 按实测重写（外部内容表、`detail=full`、三段式写入、4 个 rebuild 触发点、中文 2 字词 96.8% 的缺口）；§10 Q2 改为三选一且判据改为「是否需要无网可用」；§8 新增「便携 U 盘即走」负面清单项；§6.2 PE-A-04 标为「调研完成·暂不实施」并附实测结论，是否实施看题库量级；定位口径以 `PLAN.md §0.3` 为准 |
