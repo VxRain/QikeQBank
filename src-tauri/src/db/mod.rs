@@ -208,6 +208,8 @@ pub(crate) fn bump_sync_clock(conn: &Connection, candidate: &str) -> Result<(), 
 
 /// 以现有数据校准接收时钟：sync_clock = max(sync_clock, 各表 MAX(synced_at))。
 /// 旧库首次升级、叶子落快照、文件导入后调用，防止“未来时间戳行”被游标跳过。
+/// 调用方均为已初始化路径（`init_schema` 内 `ensure_review_state_synced_at` 之后），
+/// 因此可直接引用 `review_state.synced_at`。
 pub(crate) fn refresh_sync_clock(conn: &Connection) -> Result<(), String> {
     let data_max: Option<String> = conn
         .query_row(
@@ -217,6 +219,7 @@ pub(crate) fn refresh_sync_clock(conn: &Connection) -> Result<(), String> {
                UNION ALL SELECT MAX(synced_at) FROM practice_records
                UNION ALL SELECT MAX(synced_at) FROM delete_log
                UNION ALL SELECT MAX(synced_at) FROM wrong_dismiss
+               UNION ALL SELECT MAX(synced_at) FROM review_state
              )",
             [],
             |r| r.get(0),
@@ -344,9 +347,9 @@ mod tests {
 
         // review_due: both due immediately, filtered per bank
         conn.execute_batch(
-            "INSERT INTO review_state (question_id, due_at, updated_at) VALUES
-             ('q_test_1', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
-             ('q_b_1', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z');",
+            "INSERT INTO review_state (question_id, due_at, updated_at, synced_at) VALUES
+             ('q_test_1', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', '2026-09-10T12:00:00.000Z'),
+             ('q_b_1', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', '2026-09-10T12:00:00.000Z');",
         )
         .unwrap();
         let due_b = review_due_impl(&conn, Some(50), Some(bid.clone())).unwrap();
@@ -398,6 +401,30 @@ mod tests {
         assert!(after >= c);
         bump_sync_clock(&conn, "2000-01-01T00:00:00.000Z").unwrap();
         assert_eq!(db_meta_value(&conn, "sync_clock").unwrap().unwrap(), after);
+    }
+
+    /// PE-A-01：review_state 有 `synced_at` 后必须计入时钟校准，
+    /// 否则从快步调设备落下的卡（戳超前）会被本机游标永久跳过。
+    #[test]
+    fn refresh_sync_clock_covers_review_state() {
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_rsc");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        // 直接写一个「未来戳」的卡（模拟对端时钟超前）
+        let future = fmt_iso(Utc::now() + Duration::hours(3));
+        conn.execute(
+            "INSERT INTO review_state (question_id, due_at, updated_at, synced_at)
+             VALUES ('q_rsc', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', ?1)",
+            params![future],
+        )
+        .unwrap();
+        let before = db_meta_value(&conn, "sync_clock").unwrap().unwrap();
+        assert!(before < future, "前置：未来戳应领先于当前时钟");
+        refresh_sync_clock(&conn).unwrap();
+        let after = db_meta_value(&conn, "sync_clock").unwrap().unwrap();
+        assert!(after >= future, "review_state 的戳必须参与校准: {now} -> {after}", now = future);
     }
 
 }

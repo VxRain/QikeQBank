@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS review_state (
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
@@ -353,8 +354,8 @@ function main() {
 
     // ⑪ v3 同步地基列/表就位 + FSRS 状态写读
     const rsCols = db.prepare("SELECT name FROM pragma_table_info('review_state')").all().map((c) => c.name);
-    const rsOk = ['due_at', 'stability', 'difficulty', 'reps', 'lapses', 'state', 'learning_steps', 'scheduled_days', 'last_result', 'last_reviewed_at', 'updated_at'].every((c) => rsCols.includes(c));
-    check('review_state 为 v3 列（含 updated_at）', rsOk, JSON.stringify(rsCols));
+    const rsOk = ['due_at', 'stability', 'difficulty', 'reps', 'lapses', 'state', 'learning_steps', 'scheduled_days', 'last_result', 'last_reviewed_at', 'updated_at', 'synced_at'].every((c) => rsCols.includes(c));
+    check('review_state 为 v3 列（含 updated_at/synced_at）', rsOk, JSON.stringify(rsCols));
     const prCols = db.prepare("SELECT name FROM pragma_table_info('practice_records')").all().map((c) => c.name);
     check('practice_records 含 fsrs_log/synced_at 列', prCols.includes('fsrs_log') && prCols.includes('synced_at'), JSON.stringify(prCols));
     const wdCols = db.prepare("SELECT name FROM pragma_table_info('wrong_dismiss')").all().map((c) => c.name);

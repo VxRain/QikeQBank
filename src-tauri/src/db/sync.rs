@@ -184,16 +184,16 @@ pub(crate) fn export_delta_at(
         .map_err(to_str)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(to_str)?;
-    // review_state / wrong_dismiss / settings（全量，均有界）
+    // review_state / wrong_dismiss（增量：synced_at 游标）；settings（全量：无游标列）
     let mut stmt = conn
         .prepare(
             "SELECT question_id, due_at, stability, difficulty, reps, lapses, state,
-                    learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at
-             FROM review_state ORDER BY question_id ASC",
+                    learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at, synced_at
+             FROM review_state WHERE synced_at > ?1 AND synced_at <= ?2 ORDER BY question_id ASC",
         )
         .map_err(to_str)?;
     let review_state = stmt
-        .query_map([], |r| {
+        .query_map(params![since, server_time], |r| {
             Ok(json!({
                 "question_id": r.get::<_, String>(0)?,
                 "due_at": r.get::<_, String>(1)?,
@@ -207,6 +207,7 @@ pub(crate) fn export_delta_at(
                 "last_result": r.get::<_, Option<String>>(9)?,
                 "last_reviewed_at": r.get::<_, Option<String>>(10)?,
                 "updated_at": r.get::<_, String>(11)?,
+                "synced_at": r.get::<_, String>(12)?,
             }))
         })
         .map_err(to_str)?
@@ -978,13 +979,15 @@ fn apply_bundle_tx(
             skipped += 1;
             continue;
         }
+        let synced = sync_stamp(bv_str(&s, "synced_at"));
         tx.execute(
-            "INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at, synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(question_id) DO UPDATE SET due_at = excluded.due_at, stability = excluded.stability,
                difficulty = excluded.difficulty, reps = excluded.reps, lapses = excluded.lapses, state = excluded.state,
                learning_steps = excluded.learning_steps, scheduled_days = excluded.scheduled_days,
-               last_result = excluded.last_result, last_reviewed_at = excluded.last_reviewed_at, updated_at = excluded.updated_at",
+               last_result = excluded.last_result, last_reviewed_at = excluded.last_reviewed_at,
+               updated_at = excluded.updated_at, synced_at = excluded.synced_at",
             params![
                 qid,
                 card.due_at,
@@ -997,7 +1000,8 @@ fn apply_bundle_tx(
                 card.scheduled_days,
                 card.last_result,
                 card.last_reviewed_at,
-                updated
+                updated,
+                synced
             ],
         ).map_err(to_str)?;
         applied["review_state"] = json!(applied["review_state"].as_i64().unwrap_or(0) + 1);
@@ -2017,8 +2021,8 @@ mod tests {
         leaf.execute_batch(
             "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at)
                VALUES ('rec_local', 'q_local', 'practice', 'good', 1, '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z');
-             INSERT INTO review_state (question_id, due_at, updated_at)
-               VALUES ('q_local', '2026-09-20T00:00:00.000Z', '2026-09-10T12:00:00.000Z');
+             INSERT INTO review_state (question_id, due_at, updated_at, synced_at)
+               VALUES ('q_local', '2026-09-20T00:00:00.000Z', '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z');
              INSERT INTO wrong_dismiss (question_id, is_dismissed, updated_at, synced_at)
                VALUES ('q_local', 1, '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z');
              INSERT INTO app_settings (key, value_json, updated_at)
@@ -2118,6 +2122,285 @@ mod tests {
         assert!(path.exists());
         let _ = fs::remove_dir_all(&src_root);
         let _ = fs::remove_dir_all(&dst_root);
+    }
+
+    // ================= review_state 增量推送（PE-A-01） =================
+
+    fn fsrs_card(due: &str) -> FsrsCard {
+        FsrsCard {
+            stability: 2.5,
+            difficulty: 5.0,
+            reps: 1,
+            lapses: 0,
+            state: 2,
+            learning_steps: 0,
+            scheduled_days: 3.0,
+            due_at: due.to_string(),
+            last_reviewed_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+            last_result: Some("good".to_string()),
+        }
+    }
+
+    fn seed_card(conn: &Connection, qid: &str, due: &str) -> String {
+        let mut q = sample_question();
+        q["id"] = json!(qid);
+        q["bank_id"] = json!("bank_default");
+        insert_question(conn, &q).unwrap();
+        let at = "2026-09-10T12:00:00.000Z";
+        fsrs_upsert(conn, qid, &fsrs_card(due), at).unwrap();
+        conn.query_row("SELECT synced_at FROM review_state WHERE question_id = ?1", params![qid], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn review_state_delta_export_only_changed_rows() {
+        let conn = test_conn();
+        let stamp_d1 = seed_card(&conn, "q_rs_d1", "2026-10-01T00:00:00.000Z");
+        let stamp_d2 = seed_card(&conn, "q_rs_d2", "2026-10-01T00:00:00.000Z");
+        // 全量边界：游标严格大于库内任何已发出的接收戳
+        let (full, cursor) = export_delta(&conn, None).unwrap();
+        assert_eq!(full["review_state"].as_array().unwrap().len(), 2, "全量快照必须包含全部卡片");
+        assert!(cursor > stamp_d1 && cursor > stamp_d2);
+
+        // 只推进其中一张（走 UPSERT：updated_at 与 synced_at 都必须前移）
+        let later = "2026-09-11T12:00:00.000Z";
+        fsrs_upsert(&conn, "q_rs_d1", &fsrs_card("2026-10-02T00:00:00.000Z"), later).unwrap();
+        let (inc, _) = export_delta(&conn, Some(&cursor)).unwrap();
+        let rows = inc["review_state"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "增量只能带出被改动的卡片: {inc}");
+        assert_eq!(rows[0]["question_id"], json!("q_rs_d1"));
+        assert_eq!(rows[0]["updated_at"], json!(later));
+        assert_eq!(rows[0]["due_at"], json!("2026-10-02T00:00:00.000Z"));
+        assert!(
+            rows[0]["synced_at"].as_str().unwrap() > cursor.as_str(),
+            "改动卡必须重盖接收戳（否则永远推不出去）"
+        );
+        // 未改动的卡仍停在旧戳上（不被 UPSERT 误带出）
+        let untouched: String = conn
+            .query_row("SELECT synced_at FROM review_state WHERE question_id = 'q_rs_d2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(untouched, stamp_d2);
+    }
+
+    #[test]
+    fn full_snapshot_contains_all_review_state() {
+        // 核心断言：replace_snapshot 靠 full 快照重建叶子，review_state 必须全量带齐
+        // （增量过滤改不改都不允许在 since='' 时报丢行）
+        let conn = test_conn();
+        for id in ["q_rs_f1", "q_rs_f2", "q_rs_f3"] {
+            seed_card(&conn, id, "2026-10-01T00:00:00.000Z");
+        }
+        let (full, cursor) = export_delta(&conn, None).unwrap();
+        assert_eq!(full["full"], json!(true));
+        let mut ids: Vec<&str> = full["review_state"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["q_rs_f1", "q_rs_f2", "q_rs_f3"]);
+
+        // 无改动后再全量（新游标）：仍然含全部行（since='' 命中全表）
+        let (full2, cursor2) = export_delta(&conn, None).unwrap();
+        assert_eq!(full2["full"], json!(true));
+        assert_eq!(full2["review_state"].as_array().unwrap().len(), 3);
+        assert!(cursor2 > cursor);
+        // 同一游标下的增量则是空的（没改就没得推）
+        let (inc, _) = export_delta(&conn, Some(&cursor2)).unwrap();
+        assert_eq!(inc["review_state"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn legacy_review_state_backfilled_on_init() {
+        // 存量库（v3 早期形状：review_state 无 synced_at，其余列齐备）→ 守卫不得删表，
+        // init 只补列 + 回填，旧行必须能进全量快照
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch(MIGRATIONS).unwrap();
+        conn.execute_batch(
+            "DROP TABLE review_state;
+             CREATE TABLE review_state (
+               question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+               due_at TEXT NOT NULL,
+               stability REAL NOT NULL DEFAULT 0,
+               difficulty REAL NOT NULL DEFAULT 0,
+               reps INTEGER NOT NULL DEFAULT 0,
+               lapses INTEGER NOT NULL DEFAULT 0,
+               state INTEGER NOT NULL DEFAULT 0,
+               learning_steps INTEGER NOT NULL DEFAULT 0,
+               scheduled_days REAL NOT NULL DEFAULT 0,
+               last_result TEXT,
+               last_reviewed_at TEXT,
+               updated_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        seed_default_bank(&conn).unwrap();
+        let mut q = sample_question();
+        q["id"] = json!("q_rs_legacy");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        conn.execute(
+            "INSERT INTO review_state (question_id, due_at, updated_at)
+             VALUES ('q_rs_legacy', '2026-10-01T00:00:00.000Z', '2026-09-10T12:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        assert!(!has_column(&conn, "review_state", "synced_at").unwrap());
+
+        init_schema(&conn).unwrap();
+        assert!(has_column(&conn, "review_state", "synced_at").unwrap());
+        let stamped: String = conn
+            .query_row("SELECT synced_at FROM review_state WHERE question_id = 'q_rs_legacy'", [], |r| r.get(0))
+            .unwrap();
+        assert!(!stamped.is_empty(), "存量行必须被回填接收戳");
+
+        // 幂等：再 init 一次不报错、不推进（无漏行不取新戳）
+        init_schema(&conn).unwrap();
+        let again: String = conn
+            .query_row("SELECT synced_at FROM review_state WHERE question_id = 'q_rs_legacy'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(again, stamped);
+
+        // 回填后的行必须在全量快照里（否则叶子 replace_snapshot 会丢卡）
+        let (full, _) = export_delta(&conn, None).unwrap();
+        assert!(full["review_state"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["question_id"] == json!("q_rs_legacy")));
+    }
+
+    // --------- 端到端：卡片能不能真的过同步链（PE-A-01 回归防线） ---------
+
+    /// 中心复习 → 叶子跟到；中心再复习 → 增量必须带上这张卡。
+    /// 这是本次改动最核心的业务属性：以往 `review_state` 全靠「每次全量」兼带，
+    /// 改成增量后一旦上游漏盖章，卡片就再也过不去了。
+    #[test]
+    fn review_card_travels_center_to_leaf_end_to_end() {
+        let center = test_conn();
+        let mut leaf = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_card_e2e");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&center, &q).unwrap();
+        fsrs_upsert(
+            &center,
+            "q_card_e2e",
+            &fsrs_card("2026-10-01T00:00:00.000Z"),
+            "2026-09-10T12:00:00.000Z",
+        )
+        .unwrap();
+
+        // 首次全量：叶子拿到题与卡
+        let full = sync_pull_impl(&center, None).unwrap();
+        apply_bundle(&mut leaf, &full["bundle"].clone(), SyncRole::Leaf).unwrap();
+        let cursor1 = full["server_time"].as_str().unwrap().to_string();
+        let due: String = leaf
+            .query_row(
+                "SELECT due_at FROM review_state WHERE question_id = 'q_card_e2e'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(due, "2026-10-01T00:00:00.000Z", "全量后叶子必须持有这张卡");
+
+        // 中心再复习一次 → 增量 bundle 必须包含它，叶子跟着更新
+        fsrs_upsert(
+            &center,
+            "q_card_e2e",
+            &fsrs_card("2026-10-08T00:00:00.000Z"),
+            "2026-09-12T12:00:00.000Z",
+        )
+        .unwrap();
+        let inc = sync_pull_impl(&center, Some(cursor1)).unwrap();
+        assert_eq!(
+            inc["bundle"]["review_state"].as_array().unwrap().len(),
+            1,
+            "改过的卡必须在增量里（否则叶子永远学不到）"
+        );
+        apply_bundle(&mut leaf, &inc["bundle"].clone(), SyncRole::Leaf).unwrap();
+        let due2: String = leaf
+            .query_row(
+                "SELECT due_at FROM review_state WHERE question_id = 'q_card_e2e'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(due2, "2026-10-08T00:00:00.000Z", "叶子必须跟上中心的第二次复习");
+    }
+
+    /// 中心收到别的设备推上来的卡后要能**转发**：apply 时必须按 Center 角色重盖接收戳，
+    /// 否则该卡相对本地游标「没有新变化」，第三台设备永远拉不到。
+    #[test]
+    fn center_restamps_inbound_card_so_it_can_be_forwarded() {
+        let mut center = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_fwd");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&center, &q).unwrap();
+        // 先取「现在」，随后到货的卡必须严格大于这个游标才能被下一代设备看到
+        let (_, cursor) = export_delta(&center, None).unwrap();
+
+        let mut b = bundle("d");
+        b["questions"] = json!([sync_q("q_fwd", "bank_default", "2026-09-10T00:00:00.000Z")]);
+        b["review_state"] = json!([{
+            "question_id": "q_fwd", "due_at": "2026-10-01T00:00:00.000Z",
+            "stability": 2.5, "difficulty": 5.0, "reps": 1, "lapses": 0,
+            "state": 2, "learning_steps": 0, "scheduled_days": 3.0,
+            "last_result": "good", "last_reviewed_at": "2026-09-10T00:00:00.000Z",
+            "updated_at": "2026-09-10T00:00:00.000Z",
+            // 旧客户端没有 synced_at，顺便覆盖「缺字段→补位」分支
+        }]);
+        let res = apply_bundle(&mut center, &b, SyncRole::Center).unwrap();
+        assert_eq!(res["applied"]["review_state"], json!(1));
+
+        let stamped: String = center
+            .query_row(
+                "SELECT synced_at FROM review_state WHERE question_id = 'q_fwd'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!stamped.is_empty(), "到货卡必须被盖章，不能落成 ''（否则永久不可见）");
+
+        let (inc, _) = export_delta(&center, Some(&cursor)).unwrap();
+        assert_eq!(
+            inc["review_state"].as_array().unwrap().len(),
+            1,
+            "中心重盖戳后必须能转发给其他叶子"
+        );
+    }
+
+    /// 叶子落中心快照时保留中心戳（Role::Leaf），且不能被重新盖章成“本地新变化”，
+    /// 否则三设备互相回灌会变成回声风暴。
+    #[test]
+    fn leaf_keeps_center_stamp_on_inbound_card() {
+        let center = test_conn();
+        let mut leaf = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_leafstamp");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&center, &q).unwrap();
+        fsrs_upsert(
+            &center,
+            "q_leafstamp",
+            &fsrs_card("2026-10-01T00:00:00.000Z"),
+            "2026-09-10T12:00:00.000Z",
+        )
+        .unwrap();
+        let full = sync_pull_impl(&center, None).unwrap();
+        apply_bundle(&mut leaf, &full["bundle"].clone(), SyncRole::Leaf).unwrap();
+        let cursor = full["server_time"].as_str().unwrap().to_string();
+
+        // 落完后用同一游标拉增量 → 不能出现“刚同步过又冒出来”的卡
+        let (inc, _) = export_delta(&leaf, Some(&cursor)).unwrap();
+        assert_eq!(
+            inc["review_state"].as_array().unwrap().len(),
+            0,
+            "叶子不得把刚收到的卡重新盖戳（回声）"
+        );
     }
 
 }

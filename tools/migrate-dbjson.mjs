@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS review_state (
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (

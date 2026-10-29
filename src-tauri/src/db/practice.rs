@@ -69,9 +69,12 @@ pub(crate) fn validate_fsrs_card(c: &FsrsCard) -> Result<(), String> {
 /// 不是落库时间；调用方须先做 gated 比较（incoming.updated_at > existing 才调）。
 pub(crate) fn fsrs_upsert(conn: &Connection, question_id: &str, card: &FsrsCard, occurred_at: &str) -> Result<(), String> {
     validate_fsrs_card(card)?;
+    // synced_at 走单调接收时钟（与 updated_at 双时钟）：增量推送靠它过滤，
+    // 更新时必须同步重盖，否则日期不变 → 已同步的卡永远推不出去。
+    let synced = next_sync_stamp(conn)?;
     conn.execute(
-        "INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO review_state (question_id, due_at, stability, difficulty, reps, lapses, state, learning_steps, scheduled_days, last_result, last_reviewed_at, updated_at, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(question_id) DO UPDATE SET
            due_at = excluded.due_at,
            stability = excluded.stability,
@@ -83,7 +86,8 @@ pub(crate) fn fsrs_upsert(conn: &Connection, question_id: &str, card: &FsrsCard,
            scheduled_days = excluded.scheduled_days,
            last_result = excluded.last_result,
            last_reviewed_at = excluded.last_reviewed_at,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at,
+           synced_at = excluded.synced_at",
         params![
             question_id,
             card.due_at,
@@ -96,7 +100,8 @@ pub(crate) fn fsrs_upsert(conn: &Connection, question_id: &str, card: &FsrsCard,
             card.scheduled_days,
             card.last_result,
             card.last_reviewed_at,
-            occurred_at
+            occurred_at,
+            synced
         ],
     )
     .map_err(to_str)?;
@@ -946,10 +951,10 @@ mod tests {
         }
         let (_, end_today) = today_bounds();
         conn.execute_batch(&format!(
-            "INSERT INTO review_state (question_id, due_at, updated_at) VALUES
-             ('q_due_overdue', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
-             ('q_due_later_today', '{}', '2026-09-10T12:00:00.000Z'),
-             ('q_due_tomorrow', '{}', '2026-09-10T12:00:00.000Z');",
+            "INSERT INTO review_state (question_id, due_at, updated_at, synced_at) VALUES
+             ('q_due_overdue', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', '2026-09-10T12:00:00.000Z'),
+             ('q_due_later_today', '{}', '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z'),
+             ('q_due_tomorrow', '{}', '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z');",
             fmt_iso(end_today),
             fmt_iso(end_today + Duration::days(1))
         ))

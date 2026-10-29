@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS review_state (
   scheduled_days REAL NOT NULL DEFAULT 0,
   last_result TEXT,
   last_reviewed_at TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  synced_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS wrong_dismiss (
@@ -230,10 +231,39 @@ pub(crate) fn rebuild_if_legacy(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// v3 增量：review_state 补 synced_at（全量推送 → 增量推送）。
+/// 幂等：列已存在（新库由 DDL 建出）则只做兜底修复，不 ALTER。
+pub(crate) fn ensure_review_state_synced_at(conn: &Connection) -> Result<(), String> {
+    if !has_column(conn, "review_state", "synced_at")? {
+        // 存量库（v3 早期形状）：SQLite 的 NOT NULL 加列必须带默认值
+        conn.execute(
+            "ALTER TABLE review_state ADD COLUMN synced_at TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| format!("add review_state.synced_at failed: {e}"))?;
+    }
+    // 兜底修复：任何漏盖章的行（'' = 从未进入同步游标）都补新戳，否则永久漏推。
+    // 无漏行时不取戳，避免每次启动都推进接收时钟。
+    let missing: i64 = conn
+        .query_row("SELECT COUNT(*) FROM review_state WHERE synced_at = ''", [], |r| r.get(0))
+        .map_err(to_str)?;
+    if missing == 0 {
+        return Ok(());
+    }
+    let stamp = next_sync_stamp(conn)?;
+    conn.execute(
+        "UPDATE review_state SET synced_at = ?1 WHERE synced_at = ''",
+        params![stamp],
+    )
+    .map_err(to_str)?;
+    Ok(())
+}
+
 pub(crate) fn init_schema(conn: &Connection) -> Result<(), String> {
     rebuild_if_legacy(conn)?;
     conn.execute_batch(MIGRATIONS)
         .map_err(|e| format!("schema init failed: {e}"))?;
+    ensure_review_state_synced_at(conn)?;
     seed_default_bank(conn)?;
     seed_db_meta(conn)?;
     Ok(())

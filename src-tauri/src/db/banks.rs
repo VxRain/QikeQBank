@@ -330,7 +330,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO review_state (question_id, due_at, updated_at) VALUES ('q_c_1', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z')",
+            "INSERT INTO review_state (question_id, due_at, updated_at, synced_at) VALUES ('q_c_1', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', '2026-09-10T12:00:00.000Z')",
             [],
         )
         .unwrap();

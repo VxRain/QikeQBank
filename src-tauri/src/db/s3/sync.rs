@@ -182,10 +182,9 @@ fn save_cursors(conn: &Connection, cursors: &BTreeMap<String, u64>) -> Result<()
 // 推送
 // ---------------------------------------------------------------------------
 
-/// 只导出与本批变更题目相关的 review_state：`review_state` 只有 12 列、无 `synced_at`，
-/// 而 `export_delta_at` 对它做全量导出。全量塞进每个增量对象会让"几十 KB 增量"
-/// 退化成"每推一次 O(全部复习态)"。`fsrs_upsert` 只在有新流水时被调用，
-/// 因此「本批 records ∪ questions 的 question_id」就是变动集的精确上界。
+/// 只保留与本批变更题目相关的 review_state：`export_delta_at` 自 PE-A-01 起已按
+/// `synced_at` 增量导出复习态（不再是每次全量），这里再按「本批 records ∪ questions
+/// 的 question_id」裁一次，只作为日志体积兜底（卡片变更总随对应流水同批上行）。
 fn scope_review_state(bundle: &mut Value) {
     let mut qids: HashSet<String> = HashSet::new();
     for key in ["records", "questions"] {
@@ -1372,7 +1371,10 @@ mod tests {
     use super::*;
     use crate::db::s3::store::MemoryStore;
     use crate::db::test_support::*;
-    use crate::db::{banks_create_impl, questions_create_impl};
+    use crate::db::{
+        banks_create_impl, fetch_question, fsrs_upsert, questions_create_impl, record_answer_impl,
+        FsrsCard, RecordItem,
+    };
 
     fn cfg() -> S3Config {
         S3Config {
@@ -1479,7 +1481,7 @@ mod tests {
         seed(&conn, "q_rs");
         // 两条复习态：一条属于本题，一条属于旧题
         conn.execute(
-            "INSERT INTO review_state (question_id, due_at, updated_at) VALUES (?1, '2026-10-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
+            "INSERT INTO review_state (question_id, due_at, updated_at, synced_at) VALUES (?1, '2026-10-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
             rusqlite::params!["q_rs"],
         ).unwrap();
         conn.execute(
@@ -1488,7 +1490,7 @@ mod tests {
             [],
         ).ok();
         conn.execute(
-            "INSERT INTO review_state (question_id, due_at, updated_at) VALUES ('q_old', '2026-10-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
+            "INSERT INTO review_state (question_id, due_at, updated_at, synced_at) VALUES ('q_old', '2026-10-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')",
             [],
         ).ok();
         // 只改一条记录的题：直接构造 bundle 验证裁剪函数（不依赖 record_answer 的 FSRS 计算）
@@ -2022,6 +2024,152 @@ mod tests {
         }
         let got = list_bucket_assets(&store, &c).expect("分页列举");
         assert_eq!(got.len(), 1005, "必须翻页取全，不能停在第一页");
+    }
+
+    // --------- 卡片过 S3 日志链（PE-A-01 回归防线） ---------
+
+    fn fsrs_card(due: &str) -> FsrsCard {
+        FsrsCard {
+            stability: 2.5,
+            difficulty: 5.0,
+            reps: 1,
+            lapses: 0,
+            state: 2,
+            learning_steps: 0,
+            scheduled_days: 3.0,
+            due_at: due.to_string(),
+            last_reviewed_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+            last_result: Some("good".to_string()),
+        }
+    }
+
+    fn answer(conn: &mut Connection, qid: &str, grade: &str, card: FsrsCard) {
+        record_answer_impl(
+            conn,
+            &[RecordItem {
+                id: None,
+                question_id: qid.to_string(),
+                mode: "practice".to_string(),
+                grade: Some(grade.to_string()),
+                answered_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+                elapsed_ms: Some(1200),
+                detail: None,
+                card: Some(card),
+                fsrs_log: None,
+            }],
+        )
+        .unwrap();
+    }
+
+    fn card_due(conn: &Connection, qid: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT due_at FROM review_state WHERE question_id = ?1",
+            rusqlite::params![qid],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    /// A 复习 → push → B pull → B 必须拿到这张卡。
+    /// 这是真实链路上「卡片能不能到第二台设备」的唯一端到端断言：
+    /// 中间要穿过 `scope_review_state` 裁剪 + gzip/NDJSON 编解码 + 日志链回放。
+    #[test]
+    fn card_travels_through_log_chain_on_two_devices() {
+        let mut a = test_conn();
+        let mut b = test_conn();
+        let store = MemoryStore::new();
+        let c = cfg();
+        let ra = root("card-a");
+        let rb = root("card-b");
+        let dev_a = device_id(&a).unwrap();
+        let dev_b = device_id(&b).unwrap();
+
+        // A 建题并首推（同时留下 base 锚点），B 接入拿到题
+        seed(&a, "q_card");
+        let p1 = push(&a, &store, &ra, &c, &dev_a).unwrap();
+        assert_eq!(p1["skipped"], json!(false));
+        pull(&mut b, &store, &rb, &c, &dev_b).unwrap();
+        assert!(fetch_question(&b, "q_card").unwrap().is_some(), "前置：B 必须先有题");
+        assert_eq!(card_due(&b, "q_card"), None, "前置：此时 B 还没有卡");
+
+        // A 复习一次（流水 + 卡片同批产生）
+        answer(&mut a, "q_card", "good", fsrs_card("2026-10-01T00:00:00.000Z"));
+        let p2 = push(&a, &store, &ra, &c, &dev_a).unwrap();
+        assert_eq!(p2["skipped"], json!(false), "复习后必有新行可推: {p2}");
+
+        // B 拉取 → 卡片必须到达，且状态一致
+        pull(&mut b, &store, &rb, &c, &dev_b).unwrap();
+        assert_eq!(
+            card_due(&b, "q_card").as_deref(),
+            Some("2026-10-01T00:00:00.000Z"),
+            "卡片必须跨设备到达（否则增量改动等于白做）"
+        );
+        let stab: f64 = b
+            .query_row(
+                "SELECT stability FROM review_state WHERE question_id = 'q_card'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((stab - 2.5).abs() < 1e-9, "FSRS 状态必须原样到达: {stab}");
+
+        let _ = fs::remove_dir_all(&ra);
+        let _ = fs::remove_dir_all(&rb);
+    }
+
+    /// 已知缺陷的 characterization：**不伴随流水的卡片变更**会被 `scope_review_state`
+    /// 裁掉，push 直接返回 skipped，其他设备永远停在旧状态。
+    ///
+    /// 当前成立是因为卡片只能由 `fsrs_upsert` 在写流水时改动；`cards` 表（PE-A-02）
+    /// 引入挂起/手改/AI 调整后，这条会变成真实丢数据 —— 届时把本用例改成
+    /// 「卡片变更必须上行」即可，改好之前它会先红。
+    #[test]
+    fn card_change_without_record_is_swallowed_by_scope() {
+        let mut a = test_conn();
+        let mut b = test_conn();
+        let store = MemoryStore::new();
+        let c = cfg();
+        let ra = root("scope-a");
+        let rb = root("scope-b");
+        let dev_a = device_id(&a).unwrap();
+        let dev_b = device_id(&b).unwrap();
+
+        // A 建题 + 复习（有流水，卡随流水上行）
+        seed(&a, "q_scope");
+        answer(&mut a, "q_scope", "good", fsrs_card("2026-10-01T00:00:00.000Z"));
+        push(&a, &store, &ra, &c, &dev_a).unwrap();
+        pull(&mut b, &store, &rb, &c, &dev_b).unwrap();
+        assert_eq!(
+            card_due(&b, "q_scope").as_deref(),
+            Some("2026-10-01T00:00:00.000Z"),
+            "前置：B 已拿到第一版卡"
+        );
+
+        // A 直接改卡（不产生 practice_records）
+        fsrs_upsert(
+            &a,
+            "q_scope",
+            &fsrs_card("2026-11-01T00:00:00.000Z"),
+            "2026-09-20T12:00:00.000Z",
+        )
+        .unwrap();
+        let p = push(&a, &store, &ra, &c, &dev_a).unwrap();
+        assert_eq!(
+            p["skipped"],
+            json!(true),
+            "当前行为：卡被裁剪后无数据行 → 连日志都不产生（PE-A-02 要改掉）"
+        );
+
+        // B 拉不到新值 → 停在旧状态
+        pull(&mut b, &store, &rb, &c, &dev_b).unwrap();
+        assert_eq!(
+            card_due(&b, "q_scope").as_deref(),
+            Some("2026-10-01T00:00:00.000Z"),
+            "characterization：无流水的卡片变更不会跨设备传播"
+        );
+
+        let _ = fs::remove_dir_all(&ra);
+        let _ = fs::remove_dir_all(&rb);
     }
 
 }
