@@ -7,10 +7,11 @@
           <span class="badge badge-type">{{ form.type }}</span>
           <span v-if="isEdit" class="badge">所属题库：{{ bankBadgeText }}</span>
           <span v-else class="badge">将存入：{{ newBankName }}</span>
+          <span v-if="dirty" class="badge badge-bad" title="Ctrl/Cmd+S 保存">未保存</span>
         </h2>
         <div class="flex gap-2 items-center">
           <button class="btn" @click="goBack"><i class="i-lucide-arrow-left" />返回列表</button>
-          <button class="btn btn-primary" @click="onSave" :disabled="saving">
+          <button class="btn btn-primary" @click="onSave" :disabled="saving" title="Ctrl/Cmd+S">
             <i class="i-lucide-save" />{{ saving ? '保存中...' : '保存' }}
           </button>
         </div>
@@ -46,13 +47,23 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { get, create, update } from '@/api/questions.js'
 import { expandQuestions, normalizeDocAssets } from '@/api/assets.js'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
-import { toast } from '@/stores/ui.js'
+import { toast, confirmDialog } from '@/stores/ui.js'
+import {
+  draftKey,
+  snapshotOf,
+  isDirty,
+  saveDraft,
+  loadDraft,
+  clearDraft,
+  ageText,
+  startDraftTimer
+} from '@/stores/formDraft.js'
 import QuestionEditor from '@/components/QuestionEditor.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { validateQuestion } from '@/utils/validate.js'
@@ -117,7 +128,74 @@ function backTarget(){
   const bid = newBankId.value || (typeof route.query.bank === 'string' ? route.query.bank : '')
   return bid ? `/library?bank=${bid}` : '/'
 }
+
+// ══ FE-P0-03 防丢失：脏状态 + 离开确认 + Ctrl/Cmd+S + 30s 草稿 ══
+const dirty = ref(false)
+let baseline = null // 挂载（或重置）时的表单快照，脏判定基准
+let allowLeave = false // 已确认放行（保存成功 / 用户明确放弃），不再二次拦截
+let stopDraftTimer = () => {}
+const dkey = computed(()=> draftKey({ isEdit: isEdit.value, id: route.params.id, bankId: newBankId.value }))
+
+function resetBaseline(){
+  baseline = snapshotOf(form.value)
+  dirty.value = false
+}
+
 function goBack(){ router.push(backTarget()) }
+
+// 脏了就问一句（应用内弹窗，不用原生 confirm）
+async function confirmDiscard(){
+  if(!dirty.value) return true
+  return await confirmDialog({
+    title: '放弃未保存的修改？',
+    message: '当前录入内容还没有保存，离开后这次修改会丢失（最近 30 秒内的内容仍可从草稿恢复）。',
+    okText: '放弃修改',
+    cancelText: '继续编辑',
+    danger: true
+  })
+}
+
+onBeforeRouteLeave(async ()=>{
+  if(allowLeave) { allowLeave = false; return true }
+  if(!dirty.value) return true // 干净离开：草稿是崩溃兜底，不因普通导航销毁
+  const ok = await confirmDiscard()
+  if(ok) clearDraft(dkey.value) // 用户明确放弃才清 → 下次不再弹恢复
+  return ok
+})
+
+// 关窗口/刷新：交给浏览器自己的原生提示（该场景没有应用内 UI 可用，非「套壳式弹窗」）
+function onBeforeUnload(e){
+  if(!dirty.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+
+function onKeydown(e){
+  const mod = e.ctrlKey || e.metaKey
+  if(!mod || e.altKey) return
+  const key = (e.key || '').toLowerCase()
+  if(key !== 's') return
+  e.preventDefault()
+  if(!saving.value) onSave()
+}
+
+// 进入时：有未过期的草稿就问一句要不要恢复
+async function offerDraftRestore(){
+  const draft = loadDraft(dkey.value)
+  if(!draft) return
+  const ok = await confirmDialog({
+    title: '恢复未保存的录入内容？',
+    message: `检测到 ${ageText(draft.savedAt)}自动保存的草稿（可能是上次异常关闭留下的）。恢复会覆盖当前表单内容。`,
+    okText: '恢复草稿',
+    cancelText: '忽略'
+  })
+  if(ok){
+    form.value = draft.form
+    toast('已恢复上次未保存的内容', 'success')
+  } else {
+    clearDraft(dkey.value)
+  }
+}
 
 onMounted(async ()=>{
   if (!bankStore.loaded) {
@@ -141,9 +219,40 @@ onMounted(async ()=>{
     } catch(e){ error.value = e?.message || String(e) }
     finally{ loading.value=false }
   }
+  // 基线必须在草稿恢复之前建立？——不：草稿恢复本身就是一次「已脏」的差异，
+  // 所以先建基线（脏判定基准＝进入时内容），再问是否恢复草稿；恢复后 dirty 自然为 true。
+  resetBaseline()
+  await offerDraftRestore()
+  // 进入后才开始脏检测与草稿定时器：加载期间的 programmatic 变更不能算用户改动
+  stopDraftTimer = startDraftTimer(dkey.value, ()=> form.value)
+  window.addEventListener('beforeunload', onBeforeUnload)
+  // capture 阶段：编辑器（TipTap）拿到键事件之前先拦，保证 Ctrl+S 到得了保存
+  window.addEventListener('keydown', onKeydown, true)
 })
 
+onBeforeUnmount(()=>{
+  stopDraftTimer()
+  if(draftDebounce) clearTimeout(draftDebounce)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  window.removeEventListener('keydown', onKeydown, true)
+})
+
+// 脏标记 + 草稿：每次表单变化重算（deep，因为编辑器是原地改嵌套对象）。
+// 定时器 30 秒一次粒度太粗（意外关闭会丢半分钟内容），脏变化再叠 2 秒防抖写一次。
+let draftDebounce = null
+watch(
+  ()=> form.value,
+  (v)=> {
+    dirty.value = isDirty(baseline, v)
+    if(!dirty.value) return
+    if(draftDebounce) clearTimeout(draftDebounce)
+    draftDebounce = setTimeout(()=> { draftDebounce = null; saveDraft(dkey.value, form.value) }, 2000)
+  },
+  { deep: true }
+)
+
 async function onSave(){
+  if(saving.value) return // Ctrl+S 连按与按钮点击不叠加
   error.value=''
   const v = validateQuestion(form.value)
   if(!v.valid){ error.value = '校验失败：' + v.errors.join('; '); return }
@@ -166,13 +275,19 @@ async function onSave(){
     payload.plain_text = getAggregatedPlainText(payload)
     if(isEdit.value){
       await update(route.params.id, payload)
+      clearDraft(dkey) // 保存成功即清草稿，离开时不再提示
+      dirty.value = false
+      allowLeave = true
       toast('已保存', 'success')
       router.push(backTarget())
     } else {
       await create(payload)
       toast(`已保存到「${bankStore.banks.find(b=> b.id === newBankId.value)?.name || ''}」，可继续录入`, 'success')
       // 留页连续录入：走编辑器正规重置通道（各题型答案结构不同，不能直接改 type）
+      // 连续录入：草稿归零、基线重设为重置后的新表单，页面保持干净
+      clearDraft(dkey)
       editorRef.value?.resetTo(form.value.type, { difficulty: form.value.difficulty, score: form.value.score })
+      resetBaseline()
       window.scrollTo(0, 0)
     }
   } catch(e){
