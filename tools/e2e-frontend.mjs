@@ -115,7 +115,9 @@ function mockScript() {
         case 'assets_resolve': return { success: true, data: {} }
         case 'settings_get': return { success: true, data: [] }
         case 'review_stats':
-        case 'practice_stats': return { success: true, data: window.__stats }
+        case 'practice_stats':
+          if (window.__statsFail) throw 'stats backend down'
+          return { success: true, data: window.__stats }
         default: return { success: true, data: null }
       }
     },
@@ -263,6 +265,20 @@ try {
   ok('不出现「没有待复习」与「今日到期 N 题」自相矛盾',
     !/当前没有待复习的题/.test(reviewBody),
     reviewBody.match(/当前没有待复习[^\n]*/)?.[0] || '')
+  // 统计请求失败时不得把「未知」当「0 题」：开始按钮应仍可用，让 start() 报真实错误
+  await page.evaluate(() => { window.__statsFail = true })
+  await page.evaluate(() => { location.hash = '#/banks' })
+  await page.waitForTimeout(700)
+  await page.evaluate(() => { location.hash = '#/review' })
+  await page.waitForTimeout(1600)
+  const failStart = page.getByRole('button', { name: '开始复习' })
+  ok('统计失败时开始按钮仍可点', await failStart.isEnabled())
+  await page.evaluate(() => { window.__statsFail = false })
+  await page.evaluate(() => { location.hash = '#/banks' })
+  await page.waitForTimeout(700)
+  await page.evaluate(() => { location.hash = '#/review' })
+  await page.waitForTimeout(1600)
+
   await page.getByRole('button', { name: '开始复习' }).click()
   await page.waitForTimeout(1600)
   await page.locator('.option-btn').first().click()
