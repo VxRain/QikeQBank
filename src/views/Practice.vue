@@ -51,7 +51,14 @@
       </div>
 
       <div class="mb-5">
-        <div class="field-label">题量</div>
+        <div class="field-label !flex items-center justify-between gap-3">
+          <span>题量</span>
+          <span class="text-[12px] font-400 text-muted-light">
+            <template v-if="availLoading"><i class="i-lucide-loader-circle animate-spin" /> 统计可用题量…</template>
+            <template v-else-if="availableCount === null">可用题量未知</template>
+            <template v-else>可用 <b class="text-text">{{ availableCount }}</b> 题</template>
+          </span>
+        </div>
         <div class="flex gap-2 flex-wrap">
           <button
             v-for="c in COUNT_OPTIONS"
@@ -64,18 +71,34 @@
             {{ c.label }}
           </button>
         </div>
+        <div v-if="plan.capped" class="text-[12px] text-muted mt-2 flex items-center gap-1.5">
+          <i class="i-lucide-info" />本轮最多 {{ MAX_PER_ROUND }} 题，超出请分多轮。
+        </div>
+      </div>
+
+      <div v-if="noAvailable" class="mb-4 p-3 bg-bg-accent border border-line rounded-[12px] flex items-center justify-between gap-3 flex-wrap">
+        <span class="text-[13px] text-text-secondary">
+          <i class="i-lucide-info text-primary mr-1" />当前范围没有可练习的试题。
+        </span>
+        <div class="flex gap-2">
+          <button type="button" class="btn" @click="router.push('/create')"><i class="i-lucide-plus" />去录题</button>
+          <button type="button" class="btn" @click="router.push('/library')"><i class="i-lucide-file-up" />去导入</button>
+        </div>
       </div>
 
       <div>
         <button
           type="button"
           class="btn btn-primary btn-big"
-          :disabled="!selectedTypes.length || fetching"
+          :disabled="!selectedTypes.length || fetching || noAvailable"
           @click="start"
         >
           <i class="i-lucide-play" />{{ fetching ? '正在抽题…' : (mode === 'recite' ? '开始背题' : '开始刷题') }}
         </button>
-        <div class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
+        <div v-if="noAvailable" class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
+          <i class="i-lucide-info" />换一个题库或题型后即可开始（或先录入题目）
+        </div>
+        <div v-else class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
           <i class="i-lucide-keyboard" />键盘：A–F 选题，Enter 提交，M 切换材料；背题模式 ←/→ 翻题
         </div>
       </div>
@@ -258,6 +281,7 @@ import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flu
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
+import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
 
 // 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板用完整名（单选题）
 const ALL_TYPES = QUESTION_TYPE_KEYS
@@ -275,9 +299,44 @@ const error = ref('')
 const recordError = ref('')
 const fetching = ref(false)
 
-const selectedTypes = ref([...ALL_TYPES])
-const count = ref(5)
+// FE-P0-05：配置记忆 + 可用题量预览
+// 初值走 stores/runConfig 的归一化（脏数据不会把页面打空）
+const savedCfg = loadRunConfig('practice', ALL_TYPES)
+const selectedTypes = ref(savedCfg.types ? [...savedCfg.types] : [...ALL_TYPES])
+const count = ref(savedCfg.count)
 const bankId = ref('')
+// 可用题量：按当前题库 + 选中题型汇总（review_stats 的 by_type）
+const availStats = ref(null)
+const availLoading = ref(false)
+let availSeq = 0 // 只采信最后一次请求，避免快速切题库时旧结果覆盖新结果
+const pickedTypes = computed(() => (selectedTypes.value.length === ALL_TYPES.length ? null : selectedTypes.value))
+const availableCount = computed(() => availableCountOf(availStats.value, pickedTypes.value))
+const plan = computed(() => plannedCountOf(count.value, availableCount.value ?? 0))
+const noAvailable = computed(() => availableCount.value === 0)
+
+async function refreshAvailable() {
+  const seq = ++availSeq
+  availLoading.value = true
+  try {
+    const s = await fetchStats(bankId.value || undefined)
+    if (seq === availSeq) availStats.value = s || null
+  } catch (e) {
+    // 统计失败不阻断开始作答：仅把预览降级为「未知」
+    if (seq === availSeq) availStats.value = null
+    console.error(e)
+  } finally {
+    if (seq === availSeq) availLoading.value = false
+  }
+}
+
+// 配置变更即记忆（含连续点击档位的瞬时值）
+watch(
+  [selectedTypes, count],
+  () => { saveRunConfig('practice', { types: pickedTypes.value, count: count.value }, ALL_TYPES) },
+  { deep: true }
+)
+// 题型或题库变了，可用题量跟着变
+watch([pickedTypes, bankId], refreshAvailable, { deep: true })
 
 // 模式：practice 作答判分（计入复习）；recite 背题（直接看答案/解析，不判分不记录）
 const MODE_KEY = 'qbank.practiceMode'
@@ -601,16 +660,17 @@ async function start() {
   try {
     let limit = count.value
     if (limit === 0) {
-      // “全部”：用 stats 的 by_type 汇总得出精确上限
-      const s = await fetchStats().catch(() => null)
-      if (s && s.by_type && Object.keys(s.by_type).length) {
-        limit = types.reduce((sum, t) => sum + (Number(s.by_type[t]) || 0), 0)
-      } else if (s && typeof s.total === 'number') {
-        limit = s.total
-      } else {
-        limit = 10000
+      // “全部”：优先用界面已拉到的可用题量（与预览数字一致，不再多发一次请求）
+      limit = availableCount.value ?? 0
+      if (!limit) {
+        const s = await fetchStats(bankId.value || undefined).catch(() => null)
+        if (s && s.by_type && Object.keys(s.by_type).length) {
+          limit = types.reduce((sum, t) => sum + (Number(s.by_type[t]) || 0), 0)
+        } else if (s && typeof s.total === 'number') {
+          limit = s.total
+        }
       }
-      limit = Math.max(limit, 1)
+      limit = Math.max(Math.min(limit, MAX_PER_ROUND), 1)
     }
     let questions
     if (types.length === ALL_TYPES.length) {
@@ -838,6 +898,8 @@ onMounted(async () => {
     }
   }
   bankId.value = resolveBankFilter('practice')
+  // FE-P0-05：进入即拉一次可用题量（统计跟随当前题库，与实际抽题范围一致）
+  refreshAvailable()
   if (route.query.retry) {
     let ids = []
     try {

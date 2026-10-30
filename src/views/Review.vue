@@ -201,25 +201,35 @@ import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flu
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { typeLabel } from '@/constants/questions.js'
+import { loadRunConfig, saveRunConfig, MAX_PER_ROUND } from '@/stores/runConfig.js'
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref('')
 // 题量：输入框（默认 20，钳制 1–500）；“全部”按钮把今日到期数回填进输入框
+// FE-P0-05：题量记忆——刷新后保持上次选择（localStorage，键统一在 stores/runConfig.js）
 const countText = ref('20')
 const lastCount = ref(20)
+// 初值从记忆里取（脏数据已由 normalizeConfig 归一，不会把输入框打空）
+{
+  const init = loadRunConfig('review')
+  const n = Math.min(Math.max(Number(init?.count) || 20, 1), MAX_PER_ROUND)
+  lastCount.value = n
+  countText.value = String(n)
+}
 function fillAll() {
-  const n = Math.min(Math.max(dueToday.value || 0, 1), 500)
+  const n = Math.min(Math.max(dueToday.value || 0, 1), MAX_PER_ROUND)
   lastCount.value = n
   countText.value = String(n)
 }
 function commitCount() {
   const v = Number(String(countText.value).trim())
-  if (Number.isFinite(v) && Number.isInteger(v) && v >= 1 && v <= 500) {
+  if (Number.isFinite(v) && Number.isInteger(v) && v >= 1 && v <= MAX_PER_ROUND) {
     lastCount.value = v
     countText.value = String(v)
+    saveRunConfig('review', { count: v })
   } else {
     countText.value = String(lastCount.value)
-    error.value = '题量请输入 1～500 的整数'
+    error.value = `题量请输入 1～${MAX_PER_ROUND} 的整数`
   }
 }
 const reviewLimit = computed(() => lastCount.value)
