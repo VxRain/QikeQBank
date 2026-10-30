@@ -809,3 +809,4 @@
 | v3.1 | 2026-10-30 | 审计修复：①`Form.vue` 保存后清草稿传了 `computed` 对象而非 `.value`（导致保存后重进仍弹恢复框，恢复旧草稿会覆盖刚保存的内容）；②`exam_detail` 漏选 `options_json`（回看把作答显示成 `o1/o2` 而非 `A/B`）；③补 Review 的可用题量禁用与「已复习 N / 剩 M」。新增 `tests/unit/form-wiring.test.js` 与 `tools/e2e-frontend.mjs`（`pnpm test:e2e`，33 项断言），避免同类接线错误再次穿过门禁 |
 | v3.2 | 2026-10-30 | 审计回归修复：①Review「0 题禁用开始」误用 `due_total`（`due_at<=now`）而 `review_due` 截止是今天结束，学习步卡片夹在中间导致「今日到期 3 题」却禁用按钮；改用 `due_today` 同口径。②`startDraftTimer` 无条件每 30s 写草稿，未编辑过的表单重进会误报「恢复未保存的录入内容？」；加 `shouldSave` 门槛（仅脏时写）。E2E 新增 2 项分歧场景断言，单测增至 118 |
 | v3.3 | 2026-10-30 | 补齐同类口径：`refreshDue` 失败时 `dueToday` 仍为初始 0，导致「未知」被当成「0 题」而禁用开始复习；加 `statsFailed` 标记，拉不到统计时不禁用（让 start 报真实错误）。E2E 增至 36 项 |
+| v3.4 | 2026-10-30 | 审计驳回修复：①材料题回看完全不成立——流水挂母题 id 但题面/选项/答案在子题，`exam_detail` 未返回 `children_json`，导致每个子题都显示母题题面 + 内部选项 id；已补 `children` 并按 `detail.child_id` 切到子题，行标题标「第 N 问」。②最后一题评分后 `phase=done`，撤销控件只在 `card` 阶段，toast 承诺「可撤销」却无入口；已在结束页补撤销条，撤销时切回 `card`。cargo 144、E2E 45 |
