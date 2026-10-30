@@ -107,11 +107,7 @@
 
 /** import_questions @typedef {{batch_id:string, items:ImportItemResult[]}} ImportQuestionsResult */
 
-/** export_dbjson @typedef {{version:number, exported_at:string, db_uuid:string, banks:Bank[], questions:Question[], settings:Array<Object>, delete_log:Array<Object>}} ExportDoc */
-
-/** import_dbjson @typedef {{imported:number, banks_imported:number, settings_imported:number}} ImportDbJsonResult */
-
-/** save_text_file / open_*_dir @typedef {{path:string}} PathResult */
+/** open_*_dir @typedef {{path:string}} PathResult */
 
 /** exam_sessions @typedef {Object} ExamSession
  * @property {string} exam_id

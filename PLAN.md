@@ -295,7 +295,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 >
 > **为什么不用"单个 state.json 全量覆盖"**：全量 PUT 需要 CAS 条件写（部分 S3 兼容端点不支持），且每次都是 O(全库) 上行（实测 5000 题/5 万流水未压缩 36.5 MB）。分链增量把日常开销压到几十 KB 且不依赖 CAS。
 
-**接收时钟（数据保全不变量）**：`synced_at` 不取墙钟，统一由 `next_sync_stamp`（`db_meta.sync_clock`）单调发放：`max(now_ms, last+1ms)`。旧库首次 `init_schema` 以各表 `MAX(synced_at)` 校准；叶子落快照、JSON 导入后同样校准。因此中心墙钟回拨/VM 快照恢复不会让新行落在客户端游标之前（旧实现会永久漏行）。
+**接收时钟（数据保全不变量）**：`synced_at` 不取墙钟，统一由 `next_sync_stamp`（`db_meta.sync_clock`）单调发放：`max(now_ms, last+1ms)`。旧库首次 `init_schema` 以各表 `MAX(synced_at)` 校准；叶子落快照后同样校准。因此中心墙钟回拨/VM 快照恢复不会让新行落在客户端游标之前（旧实现会永久漏行）。
 
 **刷题/复习/统计（bank 可选过滤）**
 
@@ -320,16 +320,12 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `assets_gc` | — | 全库题面 JSON 扫 `asset:<sha>` 引用，清无引用文件+登记行（顺手收空分片目录）；返回 `{"removed","freed_bytes","total","scanned","dangling":[{"question_id","sha"}]}`（悬空=题在但文件/登记缺失，只上报不删） |
 | `is_portable_mode` | — | 返回 `{"portable":bool}`（data/ 或 portable.ini 存在即 true）；前端徽章/更新门控用，不经 DB 锁 |
 
-**导入导出（v3）**
+**JSON 备份导出 / 导入：已移除（2026-10）**
 
-> **数据保全（未定）**：`export_dbjson` / `import_dbjson` 只是**权宜之计**——定位是题库内容交换、跨机一次性搬运与应急取数，**不是主推的备份 / 恢复方案**。正式数据保全方案（自动备份；版本化快照；或先落同步服务端——目前 `sync_*` 只有地基：墓碑 + 双时钟 + 合并核，无可用服务端）**尚未定案**，见 §9。
-> 定案前：文档与 UI 均**不得**把「导出 JSON」表述为备份手段，也不得新增带「备份」措辞的入口。
-
-| command | 参数 | 变更 |
-|---|---|---|
-| `export_dbjson` | — | 输出 `{"version":4,"db_uuid","exported_at","banks":[...],"questions":[...],"settings":[{key,value_json,updated_at}],"delete_log":[...]}` |
-| `import_dbjson` | `path` | 兼容 v2/v3/v4：banks 按 id UPSERT，缺 banks 时确保默认库存在；question 无 bank_id → 默认库；**v2/v3 行缺 `synced_at` 落库填 now**；v4 settings 按 `updated_at` LWW。**文件导入三不**：不执行删除、不合并 `delete_log`（彻底忽略该段）、不进入同步传播链 |
-| `save_text_file` | `filename: String, content: String` | 通用文本落盘到 `app_data_dir/export/`（仅纯文件名，防路径穿越），返回 `{"path"}`；供导入模板下载等 |
+> `export_dbjson` / `import_dbjson` / `save_text_file` 三条命令**已从后端与前端 API 层删除**（`src-tauri/src/db/backup.rs` 只保留模板文件与目录命令）。
+> 原因：格式仍是 v1/v2 时代的题库快照契约（整库 UPSERT、无版本迁移路径、不含资产/复习态语义），与当前同步地基（墓碑 + 接收时钟 + S3 基线）完全不匹配，**继续沿用会把错误语义固化**。备份/恢复与题库交换需要重新设计，**不沿用旧接口**。
+> 定案前：文档与 UI 均**不得**把「导出 JSON」表述为备份手段，也不得新增带「备份」措辞的入口；保留 `open_data_dir` 供用户手动拷目录应急。方案待定项见 §9。
+> 模板文件命令（保留）：`open_templates_dir`（建 export/ + 补模板后后端直调 opener）、启动时 `ensure_template_files` 补发 MD/Excel/Word 模板。
 
 - `plain_text` 聚合、信封结构、AppState(Mutex<Connection>)、db 路径解析均沿用 v1；SM-2 已替换为 FSRS（见 §5）。
 
@@ -531,12 +527,12 @@ export function persistBankFilter(page, id)
 ### Home.vue（W3c）
 - 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。
 - 题库管理已独立为 `/banks` 路由（Banks.vue，导航「题库」），Home 不再内嵌管理卡，统计卡片只做跳转。
-- 其余卡片不动。`src/api/practice.js` 的 `exportData()` / `importData()` 是保留的 API 包装（**当前 UI 无任何入口**）；数据保全定案前不要新增「备份」措辞入口，见 §4 数据保全（未定）。
+- 其余卡片不动。数据保全定案前不要新增「备份」措辞入口，见 §4「JSON 备份导出 / 导入：已移除」。
 - streak 徽章：`recordsOverview` 的 days 算连续学习天数（今天未学从昨天起算，≥2 天显示火焰徽章；后端 UTC 日期口径，零点附近可差 1 天）。
 
 ## 8. 验证标准
 
-- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、`review_state` 增量推送（增量只带改动行 / 全量快照仍含全表 / 存量库补列回填）、export 形状（当前 v4，含 settings/delete_log）。
+- **W1**：`cargo check` 0 警告；`cargo test` 全绿，且**新增**：banks CRUD（含最后一个库删除被拒）、**旧库迁移测试**（先建 v1 无 bank_id 的 questions 结构 → 执行 MIGRATE → 断言列已加 + 默认题库种子 + 存量行回填 default）、**M4 测试**（旧 review_state 含 ease 列 → DROP 重建 + practice_records 补 fsrs_log + 幂等）、FSRS（校验拒绝非法卡/round-trip 覆盖更新/attach 有无行/`learning_due` 口径）、按库过滤（list/pool/due/stats）、删库级联、`review_state` 增量推送（增量只带改动行 / 全量快照仍含全表 / 存量库补列回填）、同步快照形状（`export_delta_at`，含 settings/delete_log）。
 - **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；`tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults；`tests/unit/parseDocx.test.js`：docx 章节题号解析回归）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
@@ -573,7 +569,7 @@ export function persistBankFilter(page, id)
 
 | 事项 | 现状（代码事实） | 卡点 / 需要决策的内容 |
 |---|---|---|
-| **数据保全**（备份 / 恢复） | JSON 导出导入 + S3 云同步（**支持自动定时同步**，开关 + 间隔 10～60 分钟，默认关；含增量日志与全量基线）。**仍无本地时间点快照**（无保留份数、无按时间点回滚）；云同步只有冲突计数提示，无逐行冲突可视化/逐行取舍 | 剩余决策：本地时间点快照（频率 / 保留份数 / 落盘位置 / 便携模式差异）、编辑后 debounce 触发（当前仅定时 + 启动后 60 秒）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
+| **数据保全**（备份 / 恢复） | S3 云同步（**支持自动定时同步**，开关 + 间隔 10～60 分钟，默认关；含增量日志与全量基线）。**JSON 导出/导入接口已移除，待重新设计**。**仍无本地时间点快照**（无保留份数、无按时间点回滚）；云同步只有冲突计数提示，无逐行冲突可视化/逐行取舍 | 剩余决策：本地时间点快照（频率 / 保留份数 / 落盘位置 / 便携模式差异）、编辑后 debounce 触发（当前仅定时 + 启动后 60 秒）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
 | **模考（exam）** | 已落地：规则组卷（题型 + 题量 + 限时 + 多选计分规则）→ 逐题作答 → 交卷统一判分落库（`mode='exam'`，不建 FSRS 卡）；答题卡三态与标记、成绩单、场次历史与逐题回看（`exam_sessions` / `exam_detail`）、得分率趋势（前端纯 SVG）均已可用。**仍未做**：持久化「试卷」实体（同一套题不可重考）、暂停计时、跨场次错题趋势 | 剩余决策：是否需要持久化试卷实体与题库级模考模板；模考错题是否入错题本（当前只服务成绩单，`wrong_list` CTE 已排除 exam） |
 | **图片同步（资源通道）** | 实测（`docs/asset_sync_bench.md`，100 万题 / 10 万图）：全库 JSON 扫描 8.0 s、升级 seed 10.6 s（每设备仅一次），而串行下载 10 万图 ≈100 min、逐图 autocommit ≈95 s、下载待办 JSON 46 ms/包（200 包 ≈1.23 GB 写放大）、1M base 逐题回读 57 s。故 **否决 `question_assets` 派生索引的增量维护版**（只省一次性 7.7 s；GC 依赖它会不可恢复删图） | v2 方案见 `docs/asset_sync_redesign.md`（图片定位为内容寻址缓存）。待拍板：① 是否接受「不默认全量下图」（首屏按需 + 窗口预热）② 待办表 `asset_jobs` 取代 `db_meta` JSON ③ 并发度策略 ④ base 分片按库还是按行。落地顺序见 §4（P0-1 待办落表 / P0-2 批量入库 / P0-3 header manifest / P1 并发 / P2 首屏按需 / P3 base 分片），P0 三项尚未开工 |
 | **平台化方向**（本体模型 / 块笔记 / 增量阅读 / AI） | 当前仍是 `question` 中心的题库客户端：`review_state.question_id` 为 PK（卡片只能绑定题目）、`delete_log.entity_type` CHECK 只放行 `bank/question`、`practice_records.question_id NOT NULL`（阅读/摘录进不了流水）；另 `sync.rs` 的 `review_state` 推送已改为增量（PE-A-01：补 `synced_at` + 按接收时钟游标过滤） | 未立项。方向与取舍见 `docs/platform-evolution.md`（本体从 `question` 改为 `block → card`，AI 只做内容加工层）。该文 §10 列了 6 项待决（blocks 存真表 vs 索引表、embedding 落地方式（云/本地/并存）、IR 优先级公式、事件流是否合流、今日队列是否跳库、AI 产物是否入同步包）。**Schema v4（该文附录 A）为草案，未启用、不得被代码引用**；启用前必须先并入 §3 |

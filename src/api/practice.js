@@ -102,17 +102,3 @@ export async function isPortableMode() {
   return !!data?.portable
 }
 
-/** @returns {Promise<import('./types.js').ExportDoc>} */
-export async function exportData() {
-  return unwrap(await cmd('export_dbjson'))
-}
-
-/** @returns {Promise<import('./types.js').ImportDbJsonResult>} */
-export async function importData(path) {
-  return unwrap(await cmd('import_dbjson', { path }))
-}
-
-/** @returns {Promise<import('./types.js').PathResult>} */
-export async function saveTextFile(content, filename) {
-  return unwrap(await cmd('save_text_file', { content, filename }))
-}

@@ -334,13 +334,10 @@ function mockScript() {
         case 'settings_set': return { success: true, data: {} }
         case 'settings_get': return { success: true, data: [] }
 
-        // ── 备份 / 文件类（C2）─────────────────────────────────────────
+        // ── 文件类（C2）─────────────────────────────────────────
         // 形状照 src-tauri/src/db/backup.rs 真实返回写，不是随手编的：
-        //   export_dbjson / save_text_file / open_*_dir → { path }
-        //   import_dbjson → { imported, banks_imported, settings_imported }
-        case 'export_dbjson': return { success: true, data: { path: '/mock/export/qbank.json' } }
-        case 'import_dbjson': return { success: true, data: { imported: 0, banks_imported: 0, settings_imported: 0 } }
-        case 'save_text_file': return { success: true, data: { path: '/mock/export/' + (args?.filename || 'file.txt') } }
+        //   open_*_dir → { path }
+        // （export_dbjson / import_dbjson / save_text_file 已随 FE-P0-01 移除）
         case 'open_templates_dir': return { success: true, data: { path: '/mock/export' } }
         case 'open_data_dir': return { success: true, data: { path: '/mock/data' } }
 

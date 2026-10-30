@@ -66,7 +66,6 @@
 
 | ID | 任务 | 优先级 | 规模 | 后端 | 建议迭代 | 状态 |
 |---|---|---|---|---|---|---|
-| FE-P0-01 | JSON 备份导出 / 导入入口 | P0 | S–M | 部分已有 | 1 | [ ] |
 | FE-P0-02 | 删除可恢复（回收站 / 撤销） | P0 | L–XL | 是 | 2–3 | [ ] |
 | FE-P0-03 | 录题表单防丢失 + Ctrl+S | P0 | S–M | 否 | 1 | [x] |
 | FE-P0-04 | 练习 / 复习会话恢复 + 离开提示 | P0 | M | 否 | 2 | [x] |
@@ -124,7 +123,6 @@
 | ID | 任务 | 状态 |
 |---|---|---|
 | FE-DOC-01 | README 命令数量与实际一致 | [ ] |
-| FE-DOC-02 | README 的 JSON 导出/导入描述 | [ ] |
 | FE-DOC-03 | 题型命名统一 | [x] |
 | FE-DOC-04 | 首页卡片可点击描述 | [ ] |
 | FE-DOC-05 | 未使用字段说明 | [ ] |
@@ -135,34 +133,6 @@
 ---
 
 ## 2. P0 详细任务
-
-### [ ] FE-P0-01 JSON 备份导出 / 导入入口
-
-**问题**
-- 后端 `export_dbjson` / `import_dbjson` / `save_text_file` 已存在，`src/api/practice.js` 也有封装，但前端没有任何入口，属于死代码。
-- README 已把「JSON 导出 / 导入」写成现有功能，对外承诺与实现不一致。
-- 用户无法主动做本地备份，只能依赖 S3；误删/换机场景缺兜底。
-
-**改动**
-- 新增 `src/components/settings/BackupPanel.vue`，放入设置「关于与维护」或新分类「数据与备份」；在 `src/components/settings/registry.js` 注册。
-- 导出：调用 `exportData()` → `saveTextFile(json, 'qbank-backup-YYYYMMDD-HHmm.json')`，成功后 toast 展示路径并提供「打开导出目录」（复用 `open_data_dir` 或新增导出目录命令）。
-- 导入：当前 `import_dbjson(path)` 需要文件路径，但项目未安装 dialog 插件。二选一：
-  - 方案 A（推荐）：新增后端命令 `import_dbjson_text(content: String)`，前端用 HTML `<input type="file">` 读取文本；避免引入新插件。
-  - 方案 B：引入 `@tauri-apps/plugin-dialog`，用原生文件选择器。
-- 导入前 `confirmDialog` 说明「按 id 合并 / 不会清空现有题库」，导入后展示题库数、题数、失败项。
-- 首页或设置页显示「上次备份时间」；超过 7 天给一次 info toast。
-
-**验收**
-- 打开设置 → 数据与备份 → 导出，能在导出目录得到可重新导入的 JSON。
-- 选择备份文件导入后，题库结构、题目数量、答案/解析与导出前一致。
-- 导入非法文件时给出可读错误，不产生半导入数据。
-- 全流程无原生弹窗。
-
-**依赖 / 备注**
-- 不要用 `window.open` / 浏览器下载；桌面端走 Rust 落盘。
-- 与 FE-P0-02 分开交付：先提供备份入口，再做回收站。
-
----
 
 ### [ ] FE-P0-02 删除可恢复（回收站 / 撤销）
 
@@ -189,7 +159,7 @@
 - 批量删除部分失败时，用户能看到哪些成功、哪些失败。
 
 **依赖 / 备注**
-- 若短期不做归档表，至少先做 FE-P0-01，保证用户有备份可回滚。
+- 若短期不做归档表，至少让用户能整库导出（导出能力随数据保全方案重新设计后再提供）。
 - 该任务涉及同步，禁止前端单独实现「假恢复」。
 
 ---
@@ -502,9 +472,9 @@
 
 - **今日任务卡**：到期数 + 今日已刷/目标 + 最弱题型 + 「开始今日复习 / 弱项专练」。
 - **新用户引导**：`total === 0` 时显示「三步开始」：建题库 → 导入模板/新增第一题 → 开始刷题；提供模板下载与导入入口。
-- **数据安全状态**：显示上次备份 / 上次同步时间；超过 7 天给一次提示。
+- **数据安全状态**：显示上次备份 / 上次同步时间；超过 7 天给一次提示（备份口径随数据保全方案定；当前仅有同步时间可用）。
 - **指标**：首次启动 3 分钟内完成第一题；首页到开始刷题 ≤ 2 次点击。
-- **文件**：`src/views/Home.vue`、`src/components/settings/BackupPanel.vue`。
+- **文件**：`src/views/Home.vue`（备份面板暂不做：JSON 备份接口在 FE-P0-01 移除时一并删除，等数据保全方案定案）。
 
 ### [ ] FE-P1-02 题库页快捷入口 / 搜索 / 排序 / 复制
 
@@ -633,7 +603,7 @@
 
 ### [ ] FE-P2-07 题库分享 / 导入 / 模板市场
 
-- 基于 JSON 导入导出做题库分享；支持按库导出、导入时查重。
+- 题库分享/按库导出：需在数据保全方案重新设计后定义交换格式（旧 JSON 导入导出接口已移除）。
 - 后续可做模板市场/官方题库包；先保证导入安全（预览、校验、可撤销）。
 
 ### [ ] FE-P2-08 题目版本历史 / 审计
@@ -710,7 +680,7 @@
 
 ### [x] FE-ARCH-06 API 契约收敛
 
-> ✅ 已完成（前端架构批次）。落地：`api/bridge.js` 提供统一 `unwrap({success,data}) → data | throw`，全部 `src/api/*.js` 改用它；`List.vue` 的多信封兜底解析删除；`api/types.js` 补齐 Bank/Question/QuestionSummary/PracticeStats/ExportDoc 等 JSDoc typedef。`grep "\.data" src/api` 为 0。守卫：`tests/unit/api-contract.test.js`。
+> ✅ 已完成（前端架构批次）。落地：`api/bridge.js` 提供统一 `unwrap({success,data}) → data | throw`，全部 `src/api/*.js` 改用它；`List.vue` 的多信封兜底解析删除；`api/types.js` 补齐 Bank/Question/QuestionSummary/PracticeStats 等 JSDoc typedef。`grep "\.data" src/api` 为 0。守卫：`tests/unit/api-contract.test.js`。
 
 - `src/api/bridge.js` 提供统一 `unwrap`（`{success,data}` → data 或抛错）。
 - 删除 `List.vue` 中兼容多种信封形状的兜底解析（约 30 行）。
@@ -766,7 +736,7 @@
 
 | 迭代 | 目标 | 任务 |
 |---|---|---|
-| **迭代 1** | 先止血：不再丢数据、不再丢进度、搜索可用 | FE-P0-01、FE-P0-03、FE-P0-05、FE-P0-08、FE-ARCH-01、FE-ARCH-06 |
+| **迭代 1** | 先止血：不再丢数据、不再丢进度、搜索可用 | FE-P0-03、FE-P0-05、FE-P0-08、FE-ARCH-01、FE-ARCH-06 |
 | **迭代 2** | 核心作答体验 | FE-P0-04、FE-P0-06、FE-P0-09、FE-P0-10、FE-ARCH-04、FE-ARCH-08 |
 | **迭代 3** | 模考与错题闭环 | FE-P0-07、FE-P0-11、FE-P0-02（设计+后端）、FE-ARCH-02 |
 | **迭代 4** | 口径与规模化 | FE-P0-12、FE-P1-01~03、FE-ARCH-03、FE-ARCH-05 |
@@ -789,8 +759,7 @@
 ### 7.2 数据安全
 
 - [ ] 误删 1 分钟内可恢复（回收站/撤销）。
-- [ ] 备份新鲜度 ≤ 7 天（有提示）。
-- [ ] JSON 备份可被重新导入，题库结构/题数一致。
+- [ ] 备份新鲜度 ≤ 7 天（有提示）。（备份/恢复方案待重新设计，口径随设计定）
 - [ ] 批量删除/移动有逐项结果，无静默失败。
 
 ### 7.3 效率与规模
@@ -812,11 +781,7 @@
 
 ### [ ] FE-DOC-01 README 命令数量
 
-- README 一处写「36 个命令」，结构章节写「43 个」，`generate_handler` 实际 44 个；统一为实际值，并说明统计口径。
-
-### [ ] FE-DOC-02 README 的 JSON 导出/导入
-
-- FE-P0-01 完成前，README 不应把它写成已有功能；完成后补入口路径与操作说明。
+- README 两处均已写 45 个（本轮移除 3 条 JSON 备份命令后：48 → 45），与 `generate_handler` 当前实际一致；本条仅剩「统计口径说明」待补，勿再抄旧数字（36 / 43 / 44）。
 
 ### [x] FE-DOC-03 题型命名统一
 
@@ -850,14 +815,13 @@
 | 列表无排序/难度筛选 | `List.vue` 只有 `query` + `type`；后端 `ORDER BY created_at DESC` |
 | 页码不收敛 | `List.vue` / `Wrong.vue` 删除后直接 `fetchList()`，未 clamp `page` |
 | 批量逐条 IPC | `List.vue` 的 `moveQuestions` / `onBatchDelete` 循环 `await update/remove`；后端无批量命令 |
-| 备份 UI 缺失 | `src/api/practice.js` 有 `exportData/importData/saveTextFile`；全仓无调用方 |
 | 删除不可恢复 | `src-tauri/src/db/questions.rs` `questions_remove` 写墓碑后 `DELETE`；`delete_log` 无题面快照 |
 | 抽题配额 | `Practice.vue` / `Exam.vue` 多题型时 `per = Math.ceil(limit / types.length)`，随后 `dedupeShuffle`，不足不补 |
 | 材料题口径 | `review_state` 按母题 id；`Review.vue` `reviewedCount++` 按子题；`buildItems` 拆子题 |
 | 状态/难度未产品化 | `schema.rs` 有 `status`/`difficulty`；前端无 status 入口，difficulty 不展示/不筛选/不参与抽题 |
 | 子题不可排序/改类型 | `QuestionEditor.vue` 子题只有追加/删除；`onChildTypeChange` 定义但模板未使用 |
 | 测试覆盖不足 | `tests/unit` 仅 5 个工具级测试；无组件/E2E |
-| 文档漂移 | README「36 个命令」vs `generate_handler` 44 个；JSON 导入导出无 UI |
+| 文档漂移 | README「36 个命令」vs `generate_handler` 45 个；README 仍把「JSON 导出/导入」写成已有功能（接口已移除） |
 
 ---
 
@@ -871,10 +835,9 @@
 | D4 | 模考「答对」口径 | A. 全对；B. 得分率 ≥ 60%；C. 分项展示不合并 | 成绩单、趋势、与练习正确率的可比性 | FE-P0-12、FE-P1-07 |
 | D5 | 单轮题量上限 | A. 保持 500；B. 可配置；C. 不设上限但分页 | 抽题 SQL、前端进度、性能 | FE-P0-12 |
 | D6 | 桌面到期提醒默认值 | A. 默认关闭；B. 首次引导开启；C. 默认开启 | 打扰度、通知权限、留存 | FE-P2-05 |
-| D7 | JSON 导入是否包含设置 | A. 仅题库；B. 题库 + 设置；C. 导入时勾选 | 备份语义、跨机迁移 | FE-P0-01 |
 | D8 | 是否全量迁移 TypeScript | A. 保持 JS + JSDoc；B. 先迁 utils/api；C. 全量 | 开发成本、重构收益 | FE-ARCH-06 |
 
-> 建议在迭代 1 结束前拍板 D1、D2、D7；否则会阻塞 P0-12 与 P0-02。
+> 建议在迭代 1 结束前拍板 D1、D2；否则会阻塞 P0-12 与 P0-02。
 
 ---
 

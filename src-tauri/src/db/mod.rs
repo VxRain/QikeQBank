@@ -6,7 +6,7 @@
 //! - `questions` 题目 CRUD / 检索 / plain_text 聚合 / 批量导入
 //! - `practice` 刷题流水 / FSRS 复习状态 / 错题本 / 统计
 //! - `assets`   题配图内容寻址存储
-//! - `backup`   v4 导出导入 / 模板 / 数据目录
+//! - `backup`   导入模板 / 模板目录 / 数据目录（JSON 导出导入接口已移除，待重新设计）
 //! - `settings` 应用设置（需同步的键）
 //! - `sync`     同步合并核（export_delta / apply_bundle / 墓碑 / SyncRole）
 //! - `s3`       S3/S3 兼容端点同步通道（SigV4 / 对象适配 / NDJSON 信封）

@@ -882,7 +882,7 @@ DELETE FROM review_state;  -- 然后按 bundle.review_state 插入
 | `src/api/*.js` | 新增 `notes.js` / `blocks.js` / `cards.js`；统一取 `.data` 信封 |
 | `src-tauri/src/db/sync.rs` | bundle 新键 + 合并分支 + `replace_snapshot` 的 DELETE 列表 |
 | `src-tauri/src/db/mod.rs` | 新模块声明与 `pub use` |
-| `PLAN.md §7` 导出格式 | JSON 导出加 `notes` / `blocks` / `cards`，并保持旧文件可导入 |
+| `PLAN.md §7` 导出格式 | 旧 JSON 导出/导入命令已移除（FE-P0-01），交换格式随数据保全方案重新设计；`notes` / `blocks` / `cards` 需纳入新设计 |
 
 ---
 

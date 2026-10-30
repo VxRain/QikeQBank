@@ -80,7 +80,6 @@ pub fn run() {
             db::review_stats,
             db::records_overview,
             db::exam_sessions,
-            db::export_dbjson,
             db::settings_get,
             db::settings_set,
             db::sync_pull,
@@ -102,10 +101,8 @@ pub fn run() {
             db::assets_put,
             db::assets_resolve,
             db::assets_gc,
-            db::save_text_file,
             db::open_templates_dir,
             db::open_data_dir,
-            db::import_dbjson,
             db::import_questions
         ])
         .run(tauri::generate_context!())

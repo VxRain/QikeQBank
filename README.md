@@ -2,7 +2,7 @@
 
 本地优先、无需联网的桌面题库应用：多题库管理、富文本录题（公式/图片/填空）、刷题判分、错题本、基于 **FSRS-6** 算法的间隔复习。数据落在本地 SQLite（库文件 + 图片目录）。
 
-> **数据保全**：JSON 导出导入 + **S3 云同步**（增量日志 + 全量基线，兼容 MinIO / R2 / B2 等 S3 协议端点），支持**自动同步**（定时后台合并，默认关闭）。详见下方「云同步（S3）」。
+> **数据保全**：**S3 云同步**（增量日志 + 全量基线，兼容 MinIO / R2 / B2 等 S3 协议端点），支持**自动同步**（定时后台合并，默认关闭）。详见下方「云同步（S3）」。
 
 ## 技术栈
 
@@ -10,7 +10,7 @@
 |---|---|
 | 外壳 | Tauri 2（WebView2，系统内置无 Chromium 打包） |
 | 前端 | Vue 3 + Vite 5 + Vue Router（hash 路由）+ Tiptap 3 + KaTeX + ts-fsrs |
-| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），36 个命令 |
+| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），45 个命令 |
 | 存储 | SQLite3（WAL + 外键级联），默认 `%APPDATA%\com.qike.qbank\qbank.db`，`QKEBANK_DB` 环境变量可覆盖 |
 
 ## 功能
@@ -52,8 +52,8 @@
 
 - **模板导入**（txt/md）：严格模板解析 + 导入前预览，一票否决（有错块则不可入库），UTF-8/GBK 自动识别
 - **Word 导入**（docx）：公式/图片一并解析入库
-- **JSON 导出 / 导入**：导出 v4 JSON（含题库结构），旧版本文件兼容导入；按库查重、可重入；导入模板一键下载
-- **数据保全**：JSON 导出用于题库内容交换、跨机一次性搬运与应急取数；多端同步走下面的「云同步（S3）」，可开自动同步定时合并。**仍没有本地时间点快照**（无保留份数、不能回滚到某个时刻），误删仍无自动兜底
+- **模板一键下载**：Markdown / Excel / Word 三份导入模板随包发布，缺失时自动补发到导出目录
+- **数据保全**：多端同步走下面的「云同步（S3）」，可开自动同步定时合并。**仍没有本地时间点快照**（无保留份数、不能回滚到某个时刻），误删仍无自动兜底；JSON 备份导出/导入接口已移除，备份与恢复方案重新设计后再提供
 - **旧库升级**：存量数据库自动迁移（默认库种子、FSRS 状态表重建），幂等可重复执行
 
 ### 刷题
@@ -138,7 +138,7 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 │   ├── stores/             # bank.js（题库） settings.js（FSRS 参数等） autoSync.js（自动同步定时） ui.js（弹层服务）
 │   ├── utils/              # fsrs.js render.js validate.js normalize.js parsePureText.js image.js
 │   └── views/              # Home / Banks / List / Form / Practice / Review / Wrong
-├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（43 个 command + FSRS 写入校验 + 统计 + 同步合并核/资产通道/S3 通道）
+├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（45 个 command + FSRS 写入校验 + 统计 + 同步合并核/资产通道/S3 通道）
 │   └── src/db/             # 9 表 Schema / 迁移 / 单测（mod schema banks questions practice assets backup settings sync s3）
 └── tools/                  # migrate-dbjson.mjs / smoke-test.mjs / make-portable.mjs
 ```

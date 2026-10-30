@@ -39,24 +39,6 @@ pub(crate) fn fetch_bank(conn: &Connection, id: &str) -> Result<Option<Value>, S
     Ok(out.into_iter().next())
 }
 
-pub(crate) fn list_all_banks(conn: &Connection) -> Result<Vec<Value>, String> {
-    let mut stmt = conn
-        .prepare("SELECT id, name, description, created_at, updated_at FROM banks ORDER BY created_at ASC, id ASC")
-        .map_err(to_str)?;
-    let mut rows = stmt.query([]).map_err(to_str)?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().map_err(to_str)? {
-        out.push(json!({
-            "id": row.get::<_, String>(0).map_err(to_str)?,
-            "name": row.get::<_, String>(1).map_err(to_str)?,
-            "description": row.get::<_, Option<String>>(2).map_err(to_str)?,
-            "created_at": row.get::<_, String>(3).map_err(to_str)?,
-            "updated_at": row.get::<_, String>(4).map_err(to_str)?,
-        }));
-    }
-    Ok(out)
-}
-
 /// Returns 'bank_default' if present, otherwise the id of the first bank.
 /// Schema init always seeds at least one bank (M1); the error path is defensive.
 pub(crate) fn resolve_default_bank(conn: &Connection) -> Result<String, String> {
