@@ -98,6 +98,13 @@ function mockScript() {
         }
       },
       {
+        // 简答题：正确答案在 answer.reference（富文本），不在 ids/blanks
+        record_id: 'r4', question_id: 'qs', grade: 'again', correct: 0,
+        answered_at: '2026-09-05T10:04:00.000Z', elapsed_ms: 9000,
+        detail: { my_answer: '我写的答案ABC', self_grade: '不会', score_earned: 0, full_score: 10, exam_seq: 4 },
+        question: { id: 'qs', type: 'short', stem: doc('简答题题干'), answer: { reference: doc('标准参考答案XYZ') }, analysis: null, score: 10, options: null }
+      },
+      {
         // 答错行：必须展示「正确答案：A」，且作答仍显示字母
         record_id: 'r2', question_id: 'q2', grade: 'again', correct: 0,
         answered_at: '2026-09-05T10:02:00.000Z', elapsed_ms: 3000,
@@ -389,6 +396,14 @@ try {
   ok('材料子题不显示母题题面充当题面', !/材料母题题面/.test(matText))
   ok('材料子题作答映射为字母', /你的作答：\s*B/.test(matText), matText.match(/你的作答：[^\n]*/)?.[0] || '(未找到)')
   ok('材料子题不泄露内部选项 id', !/\bo[12]\b/.test(matText))
+
+  // 简答回看：必须给出参考答案（answer.reference），否则「每道题的正确答案」不成立
+  const shortRow = page.locator('.hr-panel button').filter({ hasText: '简答题' }).first()
+  ok('简答行存在', (await shortRow.count()) > 0)
+  if (await shortRow.count()) { await shortRow.click(); await page.waitForTimeout(600) }
+  const shortText2 = await page.locator('body').innerText()
+  ok('简答回看显示我的答案', /我写的答案ABC/.test(shortText2), shortText2.match(/我的答案：[^\n]*/)?.[0] || '(未找到)')
+  ok('简答回看显示参考答案', /参考答案：\s*标准参考答案XYZ/.test(shortText2), shortText2.match(/参考答案：[^\n]*/)?.[0] || '(未找到参考答案)')
 
   ok('全程无 pageerror', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
 } catch (e) {

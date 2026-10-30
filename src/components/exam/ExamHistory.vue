@@ -79,13 +79,23 @@
                   </div>
 
                   <!-- 简答作答 -->
-                  <div v-if="r.myAnswer" class="text-[12px] text-text-secondary">
-                    我的答案：<span class="text-text">{{ r.myAnswer }}</span>
+                  <div v-if="r.type === 'short'" class="text-[12px] text-text-secondary">
+                    我的答案：<span class="text-text">{{ r.myAnswer || '（未填写）' }}</span>
                     <span v-if="r.selfGrade" class="ml-2 badge">{{ r.selfGrade === '会' ? '自评：会' : '自评：不会' }}</span>
                   </div>
 
-                  <!-- 正确答案摘要（选择题已在作答行内展示，这里只给填空/简答兜底） -->
-                  <div v-if="r.answerText && !r.selected.length" class="text-[12px] text-success">
+                  <!-- 简答参考答案：answer.reference 是简答的「正确答案」，
+                       与当场成绩单 refOf()、Wrong.vue 一致；缺了它回看只剩自己的答案 -->
+                  <div
+                    v-if="r.refHtml"
+                    class="p-2.5 bg-success-bg border border-[#bcd9c4] rounded-[6px] text-[12px] leading-[1.7] text-text-secondary"
+                  >
+                    <b class="text-success">参考答案：</b>
+                    <span v-html="r.refHtml"></span>
+                  </div>
+
+                  <!-- 正确答案摘要：选择题在作答行内展示，填空逐空自带，简答走参考答案块，这里只兜剩下无人认领的情况 -->
+                  <div v-if="r.answerText && !r.selected.length && !r.blanks.length && r.type !== 'short'" class="text-[12px] text-success">
                     正确答案：{{ r.answerText }}
                   </div>
 
@@ -218,6 +228,8 @@ async function load() {
     built.forEach((r, i) => {
       const q = enriched[i]?.question
       r.answerText = answerTextOf(q)
+      // 简答的正确答案存在 answer.reference（富文本），不是 ids/blanks
+      r.refHtml = q?.type === 'short' && q.answer?.reference ? renderDoc(q.answer.reference) : ''
       // 选项表给「作答 id → 字母」映射用
       r.options = q?.options || []
       // 材料子题标记（标题上显示「第 N 问」）

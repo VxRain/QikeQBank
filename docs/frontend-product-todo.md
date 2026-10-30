@@ -288,7 +288,7 @@
 
 ### [x] FE-P0-07 模考答题卡 + 历史回看
 
-> ✅ 已完成。落地：`src/components/exam/ExamSheet.vue`（三态答题卡，材料题按母题分组）+ `src/utils/examSheet.js`（分组/计数/标记重映射纯逻辑）+ `src/components/exam/ExamHistory.vue`（历史回看）+ `src/components/exam/ExamTrend.vue`（纯 SVG 趋势图，不引图表库）+ `src/utils/examTrend.js`；后端新增 `exam_detail(exam_id)`（复用 detail_json，LEFT JOIN 容忍删题，不改 schema）。守卫：`tests/unit/exam-sheet.test.js`、`tests/unit/exam-trend.test.js` + `practice.rs` exam_detail 两例。
+> ✅ 已完成。落地：`src/components/exam/ExamSheet.vue`（三态答题卡，材料题按母题分组）+ `src/utils/examSheet.js`（分组/计数/标记重映射纯逻辑）+ `src/components/exam/ExamHistory.vue`（历史回看）+ `src/components/exam/ExamTrend.vue`（纯 SVG 趋势图，不引图表库）+ `src/utils/examTrend.js`；后端新增 `exam_detail(exam_id)`（复用 detail_json，LEFT JOIN 容忍删题，不改 schema）。回看覆盖四类题的「作答 + 正确答案 + 解析」：选择/判断映射字母、填空逐空给正确答案、简答按 `answer.reference` 展示参考答案、材料题按 `detail.child_id` 切到子题并标「第 N 问」。**趋势的「按题库筛选」未做**：`exam_sessions` 无 bank 参数，需改后端签名才能支持，与本轮「后端仅两条命令」的约束冲突，故降级为「最近 N 场全库趋势」并在文档显式标注。守卫：`tests/unit/exam-sheet.test.js`、`tests/unit/exam-trend.test.js` + `practice.rs` exam_detail 两例。
 
 **问题**
 - 只有上一题/下一题，没有答题卡、标记、跳题；交卷前无法总览未答分布。
@@ -810,3 +810,4 @@
 | v3.2 | 2026-10-30 | 审计回归修复：①Review「0 题禁用开始」误用 `due_total`（`due_at<=now`）而 `review_due` 截止是今天结束，学习步卡片夹在中间导致「今日到期 3 题」却禁用按钮；改用 `due_today` 同口径。②`startDraftTimer` 无条件每 30s 写草稿，未编辑过的表单重进会误报「恢复未保存的录入内容？」；加 `shouldSave` 门槛（仅脏时写）。E2E 新增 2 项分歧场景断言，单测增至 118 |
 | v3.3 | 2026-10-30 | 补齐同类口径：`refreshDue` 失败时 `dueToday` 仍为初始 0，导致「未知」被当成「0 题」而禁用开始复习；加 `statsFailed` 标记，拉不到统计时不禁用（让 start 报真实错误）。E2E 增至 36 项 |
 | v3.4 | 2026-10-30 | 审计驳回修复：①材料题回看完全不成立——流水挂母题 id 但题面/选项/答案在子题，`exam_detail` 未返回 `children_json`，导致每个子题都显示母题题面 + 内部选项 id；已补 `children` 并按 `detail.child_id` 切到子题，行标题标「第 N 问」。②最后一题评分后 `phase=done`，撤销控件只在 `card` 阶段，toast 承诺「可撤销」却无入口；已在结束页补撤销条，撤销时切回 `card`。cargo 144、E2E 45 |
+| v3.5 | 2026-10-30 | 审计驳回修复：简答题历史回看缺「正确答案」——`answerTextOf` 只处理 ids/blanks，`answer.reference` 未渲染，而 `normalize.js` 会把只有 analysis 的简答迁移为 reference 并清空 analysis，导致这类题回看只剩自己的答案；已补参考答案块（与当场成绩单 `refOf`、`Wrong.vue` 同语言）。顺带修掉填空回看正确答案重复输出两次。FE-P0-07 趋势「按题库筛选」显式降级为全库（需改 `exam_sessions` 签名，与后端边界冲突）。E2E 48 |
