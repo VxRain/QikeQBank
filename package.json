@@ -13,6 +13,7 @@
     "portable": "node tools/make-portable.mjs",
     "build:all": "pnpm tauri build && node tools/make-portable.mjs --skip-build",
     "test:e2e": "node tools/e2e-frontend.mjs",
+    "test:e2e:banks": "node tools/e2e-frontend.mjs banks",
     "test:e2e:list": "node tools/e2e-frontend.mjs list",
     "test:e2e:batch": "node tools/e2e-frontend.mjs batch",
     "test:e2e:form": "node tools/e2e-frontend.mjs form",

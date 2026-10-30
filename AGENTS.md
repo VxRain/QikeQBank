@@ -26,7 +26,7 @@
 - 路由：hash 模式（桌面端）；题库归属走 `stores/bank.js` 的 `bankStore.currentBankId`（localStorage 记忆），新增题必须显式归属（优先 `?bank=` 路由参数）。
 - 验证门禁（默认档，每改必跑）：`pnpm build`、`cargo test` 全绿、`pnpm lint`（cargo clippy `-D warnings`，0 警告，新增警告即失败）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
 - **E2E 分级（禁止「改一行跑全量」）**：`tools/e2e-frontend.mjs` 支持按模块跑，模块名与 `docs/frontend-product-todo.md §0.3`、`PLAN.md §8` 三处必须逐字一致：
-  `list`(试题列表) / `batch`(批量操作) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本)。
+  `list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本)。
   - **改了哪个页面就跑哪个模块**：`pnpm test:e2e:<模块>`，如 `pnpm test:e2e:wrong`（约 2s）——这是默认动作。
   - 不确定影响面：`pnpm test:e2e:changed`（按 git 改动自动选模块）。
   - **全量 `pnpm test:e2e`（约 16s）只在提交前 / 发版前 / 真跨模块改动时跑**，不作为每次改动的前置门禁。

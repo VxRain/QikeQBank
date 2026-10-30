@@ -126,7 +126,8 @@ const MODULE_BASELINE = {
   practice: 8,
   review: 18,
   exam: 20,
-  wrong: 21
+  wrong: 21,
+  banks: 16
 }
 
 /** 注入 mock IPC：覆盖本批功能涉及的全部命令 */
@@ -213,7 +214,7 @@ function mockScript() {
       try {
       window.__calls.push(cmd)
       switch (cmd) {
-        case 'banks_list': return { success: true, data: [bank, bank2] }
+        case 'banks_list': return { success: true, data: window.__forceSingleBank ? [bank] : [bank, bank2] }
         case 'questions_list': {
           // 真实实现一遍筛选/排序/分页，E2E 才能验「参数真的生效」而不是只看请求发出去了
           window.__listArgs = args
@@ -327,21 +328,78 @@ function mockScript() {
         case 'wrong_dismiss': return { success: true, data: { id: args?.questionId } }
         case 'records_overview': return { success: true, data: { total_practiced: 0, today_practiced: 0, correct_rate: null } }
         case 'is_portable_mode': return { success: true, data: false }
-        case 'banks_create': return { success: true, data: { id: 'bank_new', name: args?.name } }
+        case 'banks_create': window.__lastBankCreate = args; return { success: true, data: { id: 'bank_new', name: args?.name } }
         case 'banks_update': return { success: true, data: { id: args?.id } }
         case 'banks_remove': return { success: true, data: { id: args?.id } }
         case 'settings_set': return { success: true, data: {} }
         case 'settings_get': return { success: true, data: [] }
+
+        // ── 备份 / 文件类（C2）─────────────────────────────────────────
+        // 形状照 src-tauri/src/db/backup.rs 真实返回写，不是随手编的：
+        //   export_dbjson / save_text_file / open_*_dir → { path }
+        //   import_dbjson → { imported, banks_imported, settings_imported }
+        case 'export_dbjson': return { success: true, data: { path: '/mock/export/qbank.json' } }
+        case 'import_dbjson': return { success: true, data: { imported: 0, banks_imported: 0, settings_imported: 0 } }
+        case 'save_text_file': return { success: true, data: { path: '/mock/export/' + (args?.filename || 'file.txt') } }
+        case 'open_templates_dir': return { success: true, data: { path: '/mock/export' } }
+        case 'open_data_dir': return { success: true, data: { path: '/mock/data' } }
+
+        // ── 资产（C2）──────────────────────────────────────────────────
+        // putAsset 要求必须返回 sha，否则前端自己 throw（见 src/api/assets.js:22），
+        // 所以这里给一个合法的 64 位 sha，别用占位符。
+        case 'assets_put': return { success: true, data: { sha: 'a'.repeat(64), path: '/mock/assets/aa/' + 'a'.repeat(64) } }
+        case 'assets_gc': return { success: true, data: { removed: 0, freed_bytes: 0, total: 0, scanned: 0, dangling: 0 } }
+
+        // ── 云同步（C2）────────────────────────────────────────────────
+        // e2e 里 autoSyncEnabled 默认 false（settings_get 返回 [] → settings.settings.autoSyncEnabled
+        // 默认 false，见 src/stores/settings.js:101），且 STARTUP_DELAY_MS=60s，
+        // 所以 7 个模块（均 < 4s）不会自动触发同步。
+        // 这些 mock 是为「将来加同步用例」准备的，形状照 src-tauri/src/db/sync.rs。
+        case 'sync_pull': return { success: true, data: { full_resync_required: false, tombstone_floor: null, server_time: '2026-01-01T00:00:00.000Z', bundle: { questions: [], banks: [], records: [], review_states: [], settings: [], delete_log: [], assets: [] } } }
+        case 'sync_push': return { success: true, data: { applied: 0, skipped: 0, conflicts: [] } }
+        case 'sync_apply_snapshot': return { success: true, data: { applied: 0, skipped: 0, conflicts: [] } }
+        case 'sync_replace_snapshot': return { success: true, data: { applied: 0, skipped: 0, conflicts: [] } }
+        case 'sync_assets_missing': return { success: true, data: { total: 0, items: [] } }
+        case 'sync_assets_pull': return { success: true, data: { items: [], skipped: [], total_bytes: 0 } }
+        case 'sync_assets_push': return { success: true, data: { items: [], skipped: [], total_bytes: 0 } }
         case 'review_stats':
-        case 'practice_stats':
           if (window.__statsFail) throw 'stats backend down'
           return { success: true, data: window.__stats }
-        // ── 未 mock 的命令必须炸，不能「假装成功」（A5 / C3）──────────────
+
+        // ── S3 云同步（C2）──────────────────────────────────────────
+        // 形状照 src-tauri/src/db/s3/mod.rs + s3/sync.rs 真实返回写。
+        // 注意：S3 面板在设置弹窗里，当前 7 个模块不打开它；
+        // 这些 mock 是为「将来加设置/同步用例」准备的，不赚覆盖率。
+        case 'sync_s3_config_get': return { success: true, data: { configured: false } }
+        case 'sync_s3_config_set': return { success: true, data: { configured: true } }
+        case 'sync_s3_test': return {
+          success: true,
+          data: { ok: true, writable: true, readable: true, listable: true, deletable: true, endpoint: 'mock-s3', checked_at: '2026-01-01T00:00:00.000Z' }
+        }
+        case 'sync_s3_status': return {
+          success: true,
+          data: { device_id: 'dev_mock', push_seq: 0, push_watermark: '', cursors: {}, bootstrapped: false, last_push_at: '', last_pull_at: '' }
+        }
+        case 'sync_s3_push': return { success: true, data: { pushed: 0, assets: 0 } }
+        case 'sync_s3_pull': return { success: true, data: { applied: 0, skipped: 0, assets: 0 } }
+        case 'sync_s3_compact': return { success: true, data: { compacted: 0 } }
+        case 'sync_s3_repair_assets': return { success: true, data: { repaired: 0, missing: 0 } }
+
+        // ── 导入（C2）────────────────────────────────────────────────
+        // import_questions 是导入链路真正落库的命令（questions.rs:871），
+        // 返回 { batch_id, items }。
+        case 'import_questions': return { success: true, data: { batch_id: 'batch_mock', items: [] } }
+        // ── 未 mock 的命令必须炸，不能「假装成功」（C3）──────────────
         // 旧写法 `default: return { success: true, data: null }` 让「忘了 mock」
         // 变成静默通过：前端调用拿到 null 也不报错，页面看起来正常，
         // 于是 e2e 绿了但那条链路一次都没验过。
+        // 现在：default 直接抛，并附上「已知但故意不 mock」的清单提示。
         default:
-          throw new Error(`e2e mock 未覆盖的命令：${cmd}（请在 mockScript 里补 case，不要依赖 default）`)
+          throw new Error(
+            `e2e mock 未覆盖的命令：${cmd}。` +
+            `若它确实不该在 e2e 里被调用（如纯后端/纯外壳命令），请加到 tools/e2e/guard.mjs 的 UNMOCKED_ALLOWLIST；` +
+            `否则在 mockScript 里补 case。`
+          )
       }
       } finally {
         window.__inflight--
@@ -443,6 +501,7 @@ const flush = async (page, budget = 1000) => {
  */
 const ROUTE_TITLE = {
   '#/banks': '题库',
+  '#/': '首页',
   '#/library?bank=bank_default': '试题列表',
   '#/create?bank=bank_default': '新增试题',
   '#/practice': '刷题',
@@ -508,7 +567,7 @@ const MODULES = [
   {
     id: 'list',
     label: '试题列表：排序 / 筛选 / 页码收敛',
-    owns: ['src/views/List.vue', 'src/stores/listFilter.js'],
+    owns: ['src/views/List.vue', 'src/stores/listFilter.js', 'src/stores/bank.js'],
     async run({ page, ok }) {
       // ── FE-P0-09：列表排序 / 筛选 / 页码收敛 ──
       await goto(page, '#/banks')
@@ -1019,6 +1078,99 @@ const MODULES = [
       ok('统计失败时不显示错乱统计条', !/错题 6/.test(failStatsBody))
       await page.evaluate(() => { window.__wrongStatsFail = false })
     }
+  },
+
+  {
+    id: 'banks',
+    label: '题库管理：新建 / 重命名 / 删除保护',
+    // C1：Banks.vue 原本没有任何模块 owns —— 改它时 --changed 命中 0 个模块、
+    // 静默退化为全量（安全但慢），而且该页的行为（新建/改名/删库保护）从未被测过。
+    // Home.vue 也归到这里：它只调 stats / records_overview / is_portable_mode，
+    // 与题库页共享同一批 mock 与首屏链路。
+    owns: ['src/views/Banks.vue', 'src/views/Home.vue', 'src/stores/bank.js', 'src/stores/ui.js', 'src/api/banks.js'],
+    async run({ page, ok }) {
+      // ── 题库列表与进入 ──
+      await goto(page, '#/banks')
+      const body = await page.locator('body').innerText()
+      ok('题库页显示两个题库', /默认题库/.test(body) && /第二题库/.test(body))
+      ok('显示题库数量', /2 个题库/.test(body), body.match(/\d+ 个题库[^\n]*/)?.[0] || '')
+      ok('有新建题库入口', (await page.getByRole('button', { name: /新建题库/ }).count()) >= 1)
+
+      // ── 新建：必须是应用内弹层（不是原生 prompt）──
+      await page.getByRole('button', { name: /新建题库/ }).first().click()
+      await flush(page)
+      const dlgInput = page.locator('.dg-card input[type="text"]')
+      ok('新建弹层已打开（应用内 input，不是原生 prompt）', (await dlgInput.count()) > 0, `${await dlgInput.count()} 个 input`)
+
+      // 名称为空时不调 IPC。
+      // 坑：不能用 `.click().catch(() => {})` —— 元素不可点击时 Playwright 会等满
+      // 默认 30s 才抛错，实测把一个 12 条的模块拖到 30.9s。必须"先判断再点"。
+      const okBtnSel = () => page.locator('.dg-card button').filter({ hasText: /^(确定|保存|创建)$/ }).last()
+      if (await okBtnSel().count()) {
+        // 名称为空时按钮是 disabled（Banks.vue:140 `dlg.saving || !dlg.name.trim()`），
+        // 所以这里**不能**去点它 —— Playwright 会等满 30s 报 "element is not enabled"。
+        // 正确断言：按钮处于禁用态，且没发起 IPC。
+        ok('名称为空时确认按钮禁用', await okBtnSel().isDisabled())
+        await page.evaluate(() => { window.__calls = [] })
+        await okBtnSel().dispatchEvent('click')   // 绕过可操作性检查，直接派发事件
+        await flush(page)
+        const emptyCalls = await page.evaluate(() => (window.__calls || []).filter((c) => c === 'banks_create').length)
+        ok('名称为空时不调 banks_create', emptyCalls === 0, `实际 ${emptyCalls} 次`)
+        ok('名称为空时弹层不关闭', (await dlgInput.count()) > 0)
+      } else {
+        ok('新建弹层有确认按钮', false, '未找到 .dg-card 里的确定/保存/创建按钮')
+      }
+
+      // 填名字后创建：只 1 次 IPC，且参数正确
+      if (await dlgInput.count()) {
+        await dlgInput.first().fill('E2E 新题库')
+        await page.evaluate(() => { window.__calls = []; window.__lastBankCreate = null })
+        await okBtnSel().click()
+        await flush(page)
+        const res = await page.evaluate(() => ({
+          calls: (window.__calls || []).filter((c) => c === 'banks_create').length,
+          last: window.__lastBankCreate
+        }))
+        ok('新建题库只触发 1 次 banks_create', res.calls === 1, `实际 ${res.calls} 次`)
+        ok('建库参数带 name', res.last?.name === 'E2E 新题库', JSON.stringify(res.last))
+        // 弹层关闭要等 createBank + loadBanks 两次 IPC 都完成，而 flush 只等「当前 inflight 归零」——
+        // 提交那刻第 2 次 IPC 还没发出，所以这里必须显式等元素消失，不能用 flush 顶替。
+        const closed = await page
+          .waitForFunction(() => document.querySelectorAll('.dg-card input[type="text"]').length === 0, null, { timeout: 5000 })
+          .then(() => true)
+          .catch(() => false)
+        ok('建库成功后弹层关闭', closed, `仍有 ${await dlgInput.count()} 个 input`)
+      }
+
+      // ── 删库保护：只剩一个题库时不得调 banks_remove ──
+      // 坑：goto 同一个 hash 不会重新加载（location.hash 值没变），
+      // 所以必须先跳走再跳回来，否则 __forceSingleBank 不生效。
+      await goto(page, '#/wrong')
+      await page.evaluate(() => { window.__forceSingleBank = true; window.__calls = [] })
+      await goto(page, '#/banks')
+      const singleBody = await page.locator('body').innerText()
+      ok('压到单库后只显示 1 个题库', /1 个题库/.test(singleBody), singleBody.match(/\d+ 个题库/)?.[0] || '(未找到)')
+
+      const removeBtns = page.locator('button[title="删除题库"]')
+      if (await removeBtns.count()) {
+        await removeBtns.first().click()
+        await flush(page)
+        const removed = await page.evaluate(() => (window.__calls || []).filter((c) => c === 'banks_remove').length)
+        ok('仅剩一个题库时不调 banks_remove', removed === 0, `实际 ${removed} 次`)
+        const tip = await page.locator('body').innerText()
+        ok('提示「至少保留一个题库」', /至少保留一个题库/.test(tip), tip.match(/至少保留[^\n]*/)?.[0] || tip.slice(-120))
+      } else {
+        ok('删库按钮存在', false, '未找到 button[title="删除题库"]')
+      }
+      await page.evaluate(() => { window.__forceSingleBank = false })
+
+      // ── 首页：能进、不报错 ──
+      await goto(page, '#/banks')
+      await goto(page, '#/')
+      const homeBody = await page.locator('body').innerText()
+      ok('首页有进入刷题的入口', /刷题/.test(homeBody))
+      ok('首页不出现加载失败提示', !/加载失败|失败：/.test(homeBody), homeBody.slice(0, 80))
+    }
   }
 ]
 
@@ -1160,6 +1312,22 @@ if (!FLAGS.has('--skip-guard')) {
   }
   const pass = (guard.output.match(/ℹ pass (\d+)/) || guard.output.match(/# pass (\d+)/))?.[1] ?? '?'
   console.log(`契约守卫通过（${pass} 项）`)
+
+  // mock 覆盖率守卫（C2）：后端命令集 ↔ mock 覆盖集，防「新增命令无人 mock」。
+  // 运行时还有 second 防线（default 抛出），这里提前 0.1s 告警。
+  const { coverageReport } = await import('./e2e/mock-coverage.mjs')
+  const cov = coverageReport()
+  const covBad = cov.missing.length || cov.stale.length || cov.staleMock.length || cov.overlap.length
+  if (covBad) {
+    console.error('\n✗ E2E mock 覆盖率检查失败 —— 以下命令会在运行时因 default 抛错而炸：\n')
+    if (cov.missing.length) console.error(`  未 mock 且不在白名单：${cov.missing.join(', ')}`)
+    if (cov.stale.length) console.error(`  白名单里有后端已不存在的命令：${cov.stale.join(', ')}`)
+    if (cov.staleMock.length) console.error(`  mock 了后端已不存在的命令：${cov.staleMock.join(', ')}`)
+    if (cov.overlap.length) console.error(`  既 mock 又列白名单（二选一）：${cov.overlap.join(', ')}`)
+    console.error('\n（确认只想强行跑：--skip-guard）\n')
+    process.exit(3)
+  }
+  console.log(`mock 覆盖 ${cov.mocked.length}/${cov.backend.length} 条后端命令`)
 }
 
 const { chromium } = await loadPlaywright()
