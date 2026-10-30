@@ -256,6 +256,7 @@ import { gradeQuestion } from '@/utils/gradeQuestion.js'
 import { ui, toast } from '@/stores/ui.js'
 import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.js'
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
+import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 
 // 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板用完整名（单选题）
@@ -526,6 +527,13 @@ function persistSession() {
   if (phase.value !== 'card') return
   scheduleSave(SNAP_MODE, snapshotNow())
 }
+
+// FE-P0-04：离开时只提示「进度已保住」，不拦路（进度已在 sessionStorage）
+useSessionLeaveNotice(
+  () => phase.value === 'card',
+  '刷题进度已保存，下次进来可以继续',
+  { before: () => { rememberAnswer(); flushSession(SNAP_MODE); saveSession(SNAP_MODE, snapshotNow()) } }
+)
 watch([curIdx, phase, singlePick, multiPick, fillValues, shortText, selfGrade, showRef, graded], persistSession, { deep: true })
 onBeforeUnmount(() => {
   if (phase.value !== 'card') return

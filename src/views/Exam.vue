@@ -284,6 +284,7 @@ import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/st
 import { ui, confirmDialog, toast } from '@/stores/ui.js'
 import { randomUUID } from '@/utils/device.js'
 import { save as saveSession, scheduleSave, flush as flushSession, load as loadSession, clear as clearSession, parentIdsOf } from '@/stores/session.js'
+import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { buildExamDetail, summarizePaper, ratioToGrade } from '@/utils/grading.js'
 import { gradeQuestion } from '@/utils/gradeQuestion.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
@@ -637,6 +638,13 @@ async function confirmSubmit() {
   })
   if (ok) submitPaper(false)
 }
+
+// FE-P0-04：模考离开时告知草稿已存，不拦路（去查题/看统计再回来还能接着做）
+useSessionLeaveNotice(
+  () => phase.value === 'card',
+  '模考草稿已保存，下次进来可以继续作答',
+  { before: () => { flushSession(SNAP_MODE); saveDraft() } }
+)
 
 // 交卷：全卷统一判分落库（mode='exam'，不建 FSRS 卡；材料拆子题，一子题一条流水）
 async function submitPaper(timeout = false) {

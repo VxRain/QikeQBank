@@ -199,6 +199,7 @@ import { settings } from '@/stores/settings.js'
 import { ui, toast } from '@/stores/ui.js'
 import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.js'
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
+import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { typeLabel } from '@/constants/questions.js'
 
 const phase = ref('due') // due | loading | card | done
@@ -421,6 +422,13 @@ function persistSession() {
   if (phase.value !== 'card') return
   scheduleSave(SNAP_MODE, snapshotNow())
 }
+
+// FE-P0-04：离开时只提示「进度已保住」，不拦路
+useSessionLeaveNotice(
+  () => phase.value === 'card',
+  '复习进度已保存，下次进来可以接着刷',
+  { before: () => { rememberAnswer(); flushSession(SNAP_MODE); saveSession(SNAP_MODE, snapshotNow()) } }
+)
 watch(
   [curIdx, phase, singlePick, multiPick, fillValues, shortText, showRef, graded, reviewedCount, roundMs],
   persistSession,
