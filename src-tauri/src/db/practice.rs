@@ -702,7 +702,7 @@ pub(crate) fn exam_detail_impl(conn: &Connection, exam_id: &str) -> Result<Value
     let mut stmt = conn
         .prepare(
             "SELECT p.id, p.question_id, p.grade, p.correct, p.answered_at, p.elapsed_ms,
-                    p.detail_json, q.id, q.type, q.stem_json, q.answer_json, q.analysis_json, q.score, q.options_json
+                    p.detail_json, q.id, q.type, q.stem_json, q.answer_json, q.analysis_json, q.score, q.options_json, q.children_json
              FROM practice_records p
              LEFT JOIN questions q ON q.id = p.question_id
              WHERE p.mode = 'exam'
@@ -731,6 +731,11 @@ pub(crate) fn exam_detail_impl(conn: &Connection, exam_id: &str) -> Result<Value
                 // options 必带回：前端要把选项 id 映射回字母（o1 → A），
                 // 缺了就只能显示内部 id，用户看不出选的是哪个
                 "options": parse_json_opt(row.get::<_, Option<String>>(13).map_err(to_str)?),
+                // children 必带回：材料题的流水挂在**母题** id 上（Exam.vue 的 question_id=e.q.id），
+                // 但选项/答案/题面属于子题。不带 children，材料题回看就只能显示母题题面
+                // 与盒内选项 id，永远看不到子题题干和正确答案。
+                // 非材料题这里为 null，不影响。
+                "children": parse_json_opt(row.get::<_, Option<String>>(14).map_err(to_str)?),
             })
         } else {
             Value::Null
@@ -1154,9 +1159,59 @@ mod tests {
         assert_eq!(opts.len(), 2);
         assert_eq!(opts[0]["id"], "o1");
         assert_eq!(opts[1]["id"], "o2");
+        // 非材料题 children 为空（NULL → Null），不影响回看
+        assert!(items[0]["question"]["children"].is_null() || items[0]["question"]["children"].is_array());
         // 作答详情原样带回
         assert_eq!(items[0]["detail"]["selected"][0], "o1");
         assert_eq!(items[0]["detail"]["exam_seq"], 1);
+    }
+
+    #[test]
+    fn exam_detail_returns_children_for_material_questions() {
+        // 材料题的流水挂在母题 id 上（Exam.vue 的 question_id=e.q.id），
+        // 而题面/选项/答案在 children 里。exam_detail 不带 children 的话，
+        // 回看只能显示母题题面与内部选项 id —— 这正是被驳回的缺陷。
+        let conn = test_conn();
+        let child1 = json!({
+            "id": "c1", "type": "single", "version": 2, "difficulty": 2, "score": 4, "status": "published",
+            "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "子题一"}]}]},
+            "options": [{"id": "o1", "content": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "A"}]}]}},
+                        {"id": "o2", "content": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "B"}]}]}}],
+            "answer": {"ids": ["o1"]}, "analysis": null, "created_at": "2026-09-10T12:00:00.000Z"
+        });
+        let child2 = {
+            let mut c = child1.clone();
+            c["id"] = json!("c2");
+            c
+        };
+        let mat = json!({
+            "id": "qm1", "bank_id": "bank_default", "type": "material", "version": 2, "difficulty": 2,
+            "score": 8, "status": "published",
+            "stem": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "材料正文"}]}]},
+            "options": null, "answer": null, "analysis": null,
+            "children": [child1, child2],
+            "plain_text": "材料", "created_at": "2026-09-10T12:00:00.000Z", "updated_at": "2026-09-10T12:00:00.000Z"
+        });
+        insert_question(&conn, &mat).unwrap();
+        conn.execute(
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at)
+             VALUES ('rm1', 'qm1', 'exam', 'good', 1, '2026-09-15T10:00:00.000Z',
+                     '{\"exam_id\":\"em\",\"exam_seq\":1,\"score_earned\":4,\"full_score\":4,\"child_id\":\"c2\",\"child_index\":2,\"parent_id\":\"qm1\"}',
+                     '2026-09-15T10:00:00.000Z')",
+            [],
+        ).unwrap();
+
+        let v = exam_detail_impl(&conn, "em").unwrap();
+        let q = &v["items"][0]["question"];
+        assert_eq!(q["type"], "material");
+        let kids = q["children"].as_array().expect("材料题必须带回 children");
+        assert_eq!(kids.len(), 2);
+        assert_eq!(kids[1]["id"], "c2");
+        assert!(kids[1]["options"].is_array(), "子题选项要能拿到，否则前端无法把 id 映射成字母");
+        assert_eq!(kids[1]["answer"]["ids"][0], "o1");
+        // detail 里的定位信息要能被前端读到
+        assert_eq!(v["items"][0]["detail"]["child_id"], "c2");
+        assert_eq!(v["items"][0]["detail"]["child_index"], 2);
     }
 
     #[test]

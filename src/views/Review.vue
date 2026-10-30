@@ -196,6 +196,13 @@
         · 剩余待复习 {{ remainingDue == null ? '—' : remainingDue }} 题
       </div>
 
+      <!-- 最后一题刚评完就进本页：撤销必须在这里也能用，否则 toast 承诺的「可撤销」是假的 -->
+      <div v-if="lastRevert" class="flex items-center gap-2 flex-wrap justify-center text-[13px] text-text-secondary px-3.5 py-2.5 bg-bg-accent border border-line rounded-[10px]">
+        <i class="i-lucide-undo-2 text-primary" />
+        <span>刚才把最后一题记为「{{ GRADE_TEXT[lastRevert.grade] }}」</span>
+        <button type="button" class="btn" @click="undoLastGrade"><i class="i-lucide-rotate-ccw" />撤销并重评<span class="ml-1 text-[11px] text-muted">{{ Math.round(REVERT_WINDOW_MS / 1000) }}s</span></button>
+      </div>
+
       <div class="flex gap-3 flex-wrap justify-center">
         <button v-if="remainingDue > 0" type="button" class="btn btn-primary btn-big" @click="backToDue">
           <i class="i-lucide-repeat" />再复习一轮
@@ -357,6 +364,8 @@ async function undoLastGrade() {
     forgetRecordId(cur.value)
     graded.value = true // 保留刚看的判分结果
     if (p.gradeResult) gradeResult.value = p.gradeResult
+    // 最后一题撤销时页面已进 done，必须切回 card 才看得到评分按钮
+    if (phase.value === 'done') phase.value = 'card'
     toast('已撤销，可重新评分', 'success')
     focusCard()
   } catch (e) {

@@ -41,6 +41,7 @@
                     <span class="text-[13px] font-500 text-text truncate">
                       {{ r.missing ? '题目已删除' : (TYPE_FULL_LABELS[r.type] || r.type) }}
                     </span>
+                    <span v-if="r.childIndex" class="badge shrink-0">第 {{ r.childIndex }} 问</span>
                     <span v-if="r.unanswered" class="badge shrink-0">未作答</span>
                   </div>
                   <div class="flex items-center gap-2 shrink-0">
@@ -188,20 +189,39 @@ async function load() {
     rateText.value = rateOfDetail(d)
     // 填空题的「正确答案」要合到逐空行里；这里把题目答案注入 detail.blanks
     const enriched = (d.items || []).map((it) => {
-      const q = it.question
-      const blanks = it.detail?.blanks
+      // 材料题的流水挂在母题 id 上，真正的题面/选项/答案在子题里：
+      // detail.child_id 指向子题，parent_id 指向母题（见 utils/grading.js buildExamDetail）。
+      // 不在这里切到子题，回看就只会显示母题题面 + 盒内选项 id。
+      const detail = it.detail || {}
+      let q = it.question
+      if (detail.child_id && q?.children) {
+        const child = q.children.find((c) => c && c.id === detail.child_id)
+        if (child) {
+          q = {
+            ...child,
+            // 保留母题标记，模板可据此提示「材料题第 N 问」
+            _parentStem: q.stem,
+            _parentType: q.type,
+            _childIndex: detail.child_index ?? null
+          }
+        }
+      }
+      const blanks = detail.blanks
       if (Array.isArray(blanks) && q?.answer?.blanks) {
         const map = new Map(q.answer.blanks.map((b) => [b.id, b.answers || []]))
-        it.detail = { ...it.detail, blanks: blanks.map((b) => ({ ...b, answers: map.get(b.id) || [] })) }
+        it.detail = { ...detail, blanks: blanks.map((b) => ({ ...b, answers: map.get(b.id) || [] })) }
       }
-      return it
+      return { ...it, question: q }
     })
     const built = buildReviewRows(enriched, renderDoc)
     // 选择题正确答案摘要（附在行上，避免模板里再算一遍）
     built.forEach((r, i) => {
-      r.answerText = answerTextOf(enriched[i]?.question)
+      const q = enriched[i]?.question
+      r.answerText = answerTextOf(q)
       // 选项表给「作答 id → 字母」映射用
-      r.options = enriched[i]?.question?.options || []
+      r.options = q?.options || []
+      // 材料子题标记（标题上显示「第 N 问」）
+      r.childIndex = q?._childIndex ?? null
     })
     rows.value = built
   } catch (e) {

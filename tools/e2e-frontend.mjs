@@ -85,6 +85,19 @@ function mockScript() {
         question: { id: 'q1', type: 'single', stem: doc('第一题题面'), answer: { ids: ['o1'] }, analysis: doc('第一题解析'), score: 5, options: [{ id: 'o1' }, { id: 'o2' }] }
       },
       {
+        // 材料子题：流水挂在母题 id 上，题面/选项/答案在 children 里
+        record_id: 'r3', question_id: 'qm', grade: 'good', correct: 1,
+        answered_at: '2026-09-05T10:03:00.000Z', elapsed_ms: 5000,
+        detail: { selected: ['o2'], score_earned: 4, full_score: 4, exam_seq: 3, child_id: 'c2', child_index: 2, parent_id: 'qm' },
+        question: {
+          id: 'qm', type: 'material', stem: doc('材料母题题面'), answer: {}, analysis: null, score: 8, options: null,
+          children: [
+            { id: 'c1', type: 'single', stem: doc('子题一题面'), answer: { ids: ['o1'] }, analysis: doc('子题一解析'), score: 4, options: [{ id: 'o1' }, { id: 'o2' }] },
+            { id: 'c2', type: 'single', stem: doc('子题二题面'), answer: { ids: ['o1'] }, analysis: doc('子题二解析'), score: 4, options: [{ id: 'o1' }, { id: 'o2' }] }
+          ]
+        }
+      },
+      {
         // 答错行：必须展示「正确答案：A」，且作答仍显示字母
         record_id: 'r2', question_id: 'q2', grade: 'again', correct: 0,
         answered_at: '2026-09-05T10:02:00.000Z', elapsed_ms: 3000,
@@ -107,7 +120,7 @@ function mockScript() {
         case 'questions_create': window.__creates++; window.__lastCreate = args; return { success: true, data: { id: 'qNew' } }
         case 'questions_update': window.__lastUpdate = args; return { success: true, data: {} }
         case 'practice_pool': return { success: true, data: args && args.ids ? args.ids.map((id) => qs.find((q) => q.id === id)).filter(Boolean) : qs }
-        case 'review_due': return { success: true, data: qs.slice(0, 5) }
+        case 'review_due': return { success: true, data: qs.slice(0, window.__reviewOnly ? 1 : 5) }
         case 'record_answer': window.__recorded.push(args); return { success: true, data: { inserted: 1, skipped: 0 } }
         case 'review_revert': window.__reverted.push(args); return { success: true, data: { reverted: 1, skipped: 0 } }
         case 'exam_sessions': return { success: true, data: { items: sessions } }
@@ -297,6 +310,32 @@ try {
   ok('撤销调用 review_revert', (await page.evaluate(() => window.__reverted.length)) > 0)
   ok('撤销后提示可重新评分', /已撤销/.test(await page.locator('body').innerText()))
 
+  // ── 最后一题也必须能撤销（否则 toast 承诺的「可撤销」是假的）──
+  console.log('\n复习最后一题撤销')
+  await page.evaluate(() => { window.__reviewOnly = 1 })
+  await page.evaluate(() => { sessionStorage.clear() })
+  await goto(page, '#/banks')
+  await goto(page, '#/review')
+  await page.getByRole('button', { name: '开始复习' }).click()
+  await page.waitForTimeout(1600)
+  await page.locator('.option-btn').first().click()
+  await page.waitForTimeout(250)
+  const j2 = page.getByRole('button', { name: '判分' })
+  if (await j2.count()) { await j2.click(); await page.waitForTimeout(800) }
+  const beforeUndo = await page.evaluate(() => window.__reverted.length)
+  await page.getByRole('button', { name: /^良好/ }).click()
+  await page.waitForTimeout(900)
+  const doneBody = await page.locator('body').innerText()
+  ok('最后一题评完进入结束页', /本轮复习完成/.test(doneBody))
+  const undoOnDone = page.getByRole('button', { name: /撤销并重评/ })
+  ok('结束页仍有撤销入口（不再只是口头承诺）', (await undoOnDone.count()) === 1,
+    doneBody.match(/刚才把最后一题[^\n]*/)?.[0] || '(未找到撤销条)')
+  if (await undoOnDone.count()) { await undoOnDone.click(); await page.waitForTimeout(1200) }
+  ok('结束页撤销真的调用了 review_revert', (await page.evaluate(() => window.__reverted.length)) > beforeUndo)
+  const afterUndoBody = await page.locator('body').innerText()
+  ok('撤销后回到作答卡（可重新评分）', /自评记忆效果/.test(afterUndoBody))
+  await page.evaluate(() => { window.__reviewOnly = 0 })
+
   // ── FE-P0-07：答题卡 + 回看 ──
   console.log('\nFE-P0-07 模考答题卡与历史回看')
   await goto(page, '#/exam')
@@ -340,6 +379,16 @@ try {
   if (await wrongRow.count()) { await wrongRow.click(); await page.waitForTimeout(600) }
   const wrongText = await page.locator('body').innerText()
   ok('答错行展示正确答案字母', /正确答案：\s*A/.test(wrongText), wrongText.match(/正确答案：[^\n]*/)?.[0] || '(未找到)')
+
+  // 材料子题回看：必须切到子题题面与子题选项，不能显示母题题面或内部 id
+  const matRow = page.locator('.hr-panel button').filter({ hasText: '第 2 问' }).first()
+  ok('材料子题行标注「第 N 问」', (await matRow.count()) > 0)
+  if (await matRow.count()) { await matRow.click(); await page.waitForTimeout(600) }
+  const matText = await page.locator('body').innerText()
+  ok('材料子题显示子题题面', /子题二题面/.test(matText), matText.match(/子题[^\n]*题面/)?.[0] || '(未找到子题题面)')
+  ok('材料子题不显示母题题面充当题面', !/材料母题题面/.test(matText))
+  ok('材料子题作答映射为字母', /你的作答：\s*B/.test(matText), matText.match(/你的作答：[^\n]*/)?.[0] || '(未找到)')
+  ok('材料子题不泄露内部选项 id', !/\bo[12]\b/.test(matText))
 
   ok('全程无 pageerror', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
 } catch (e) {
