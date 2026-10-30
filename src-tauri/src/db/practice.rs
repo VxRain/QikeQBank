@@ -350,6 +350,97 @@ pub fn review_due(limit: Option<u64>, bank_id: Option<String>, state: State<'_, 
     ok(json!(rows))
 }
 
+// ---------------------------------------------------------------------------
+// 撤销上一条评分（FE-P0-06）
+//
+// 语义：把「刚才那一次复习评分」整体回退 —— 删掉这条 practice_records 流水，
+// 并把 review_state 恢复到评分前的快照（前端把评分前的 card 原样传回）。
+//
+// 为什么前端传快照而不是后端自己算逆运算：FSRS 的 next() 不可逆（lapses/stability 的
+// 分支丢失了历史），唯一正确的做法是前端把「评分前」那张卡留住，撤销时写回。
+//
+// 墓碑：被撤销的流水写一条 delete_log（entity_type='record'）—— 注意 schema 的
+// CHECK 只允许 bank/question，所以这里不写 delete_log，而是靠「删除本身 + 单调
+// synced_at 推进」让下次 pull 不会把旧流水拉回来（远端已同步的行会被 sync_apply
+// 的 same-id 比对判为已存在，见 sync.rs）。
+#[derive(Debug, serde::Deserialize)]
+pub struct RevertItem {
+    /// 要撤销的流水 ID（前端 recordAnswer 时自己生成的 UUID，需原样带回）
+    pub record_id: String,
+    pub question_id: String,
+    /// 评分前的 review_state 快照；为 None 表示此前没有 review_state 行 → 撤销时整行删除
+    pub card: Option<FsrsCard>,
+}
+
+#[tauri::command]
+pub fn review_revert(items: Vec<RevertItem>, state: State<'_, AppState>) -> Result<Value, String> {
+    let mut conn = state.0.lock().map_err(to_str)?;
+    ok(review_revert_impl(&mut conn, &items)?)
+}
+
+pub(crate) fn review_revert_impl(conn: &mut Connection, items: &[RevertItem]) -> Result<Value, String> {
+    let tx = conn.transaction().map_err(to_str)?;
+    // 撤销也要推进接收时钟：review_state 被写回时必须能被下一次 push 看到
+    let _sync_stamp = next_sync_stamp(&tx)?;
+    let mut reverted: i64 = 0;
+    let mut skipped: i64 = 0;
+
+    for item in items {
+        if item.record_id.trim().is_empty() {
+            return Err("record_id is required".to_string());
+        }
+        // 只允许撤销 review 流水：练习/模考没有「上一条可撤销」的语义
+        let mode: Option<String> = tx
+            .query_row(
+                "SELECT mode FROM practice_records WHERE id = ?1",
+                params![item.record_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(to_str)?;
+        let Some(mode) = mode else {
+            // 已经被撤销过 / 被同步覆盖：幂等跳过，不报错（用户点两次撤销不该失败）
+            skipped += 1;
+            continue;
+        };
+        if mode != "review" {
+            return Err(format!("record {} is mode '{mode}', only review records can be reverted", item.record_id));
+        }
+        let n = tx
+            .execute("DELETE FROM practice_records WHERE id = ?1", params![item.record_id])
+            .map_err(to_str)?;
+        if n == 0 {
+            skipped += 1;
+            continue;
+        }
+        match &item.card {
+            Some(card) => {
+                // 写回评分前快照：updated_at 用原 last_reviewed_at（没有则用 now），
+                // 避免把「上次复习时间」也一起改掉
+                let occurred = card
+                    .last_reviewed_at
+                    .clone()
+                    .unwrap_or_else(now_iso);
+                fsrs_upsert(&tx, &item.question_id, card, &occurred).map_err(to_str)?;
+            }
+            None => {
+                // 评分前没有复习态 → 整行删除，恢复到「从没复习过」
+                tx.execute(
+                    "DELETE FROM review_state WHERE question_id = ?1",
+                    params![item.question_id],
+                )
+                .map_err(to_str)?;
+            }
+        }
+        // 答错时评分会解除手动移出（undismiss_wrong）；撤销不再反推「重新移出」——
+        // 用户手动移出是有意行为，撤销一次评分不该把它撤掉。
+        reverted += 1;
+    }
+
+    tx.commit().map_err(to_str)?;
+    Ok(json!({ "reverted": reverted, "skipped": skipped }))
+}
+
 pub(crate) fn review_due_impl(
     conn: &Connection,
     limit: Option<u64>,
@@ -1181,6 +1272,128 @@ mod tests {
         record_answer_impl(&mut conn, &[mk("2026-09-10T00:00:00.000Z")]).unwrap();
         let u: String = conn.query_row("SELECT updated_at FROM review_state WHERE question_id = 'q_r3'", [], |r| r.get(0)).unwrap();
         assert_eq!(u, "2026-09-12T00:00:00.000Z");
+    }
+
+    #[test]
+    fn review_revert_restores_previous_card_and_drops_record() {
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_rv");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+
+        // 第一次评分：建卡（reps=1, stability=2.5）
+        let rid = "33333333-3333-7333-8333-333333333333".to_string();
+        let card1 = sample_fsrs_card();
+        record_answer_impl(&mut conn, &[RecordItem {
+            id: Some(rid.clone()),
+            question_id: "q_rv".to_string(),
+            mode: "review".to_string(),
+            grade: Some("good".to_string()),
+            answered_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+            elapsed_ms: None, detail: None, card: Some(card1.clone()), fsrs_log: None,
+        }]).unwrap();
+        // 第二次评分：推卡（reps=2, stability=9）
+        let rid2 = "44444444-4444-7444-8444-444444444444".to_string();
+        let mut card2 = card1.clone();
+        card2.stability = 9.0;
+        card2.reps = 2;
+        card2.due_at = "2026-09-20T12:00:00.000Z".to_string();
+        card2.last_reviewed_at = Some("2026-09-11T12:00:00.000Z".to_string());
+        record_answer_impl(&mut conn, &[RecordItem {
+            id: Some(rid2.clone()),
+            question_id: "q_rv".to_string(),
+            mode: "review".to_string(),
+            grade: Some("easy".to_string()),
+            answered_at: Some("2026-09-11T12:00:00.000Z".to_string()),
+            elapsed_ms: None, detail: None, card: Some(card2.clone()), fsrs_log: None,
+        }]).unwrap();
+        let stability: f64 = conn.query_row("SELECT stability FROM review_state WHERE question_id = 'q_rv'", [], |r| r.get(0)).unwrap();
+        assert_eq!(stability, 9.0);
+
+        // 撤销第二次：卡回到 card1，且只删掉 rid2 流水
+        let res = review_revert_impl(&mut conn, &[RevertItem {
+            record_id: rid2.clone(),
+            question_id: "q_rv".to_string(),
+            card: Some(card1.clone()),
+        }]).unwrap();
+        assert_eq!(res["reverted"], 1);
+        assert_eq!(res["skipped"], 0);
+        let (stability, reps): (f64, i64) = conn.query_row(
+            "SELECT stability, reps FROM review_state WHERE question_id = 'q_rv'", [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(stability, 2.5);
+        assert_eq!(reps, 1);
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM practice_records WHERE id = ?1", params![rid2], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "被撤销的流水应该没了");
+        let n1: i64 = conn.query_row("SELECT COUNT(*) FROM practice_records WHERE id = ?1", params![rid], |r| r.get(0)).unwrap();
+        assert_eq!(n1, 1, "更早的流水要留着");
+
+        // 重复撤销：幂等跳过，不报错
+        let again = review_revert_impl(&mut conn, &[RevertItem {
+            record_id: rid2,
+            question_id: "q_rv".to_string(),
+            card: Some(card1),
+        }]).unwrap();
+        assert_eq!(again["reverted"], 0);
+        assert_eq!(again["skipped"], 1);
+    }
+
+    #[test]
+    fn review_revert_without_previous_card_deletes_state() {
+        // 评分前没有 review_state（首次复习就后悔）→ 撤销后整行不存在
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_rv2");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rid = "55555555-5555-7555-8555-555555555555".to_string();
+        record_answer_impl(&mut conn, &[RecordItem {
+            id: Some(rid.clone()),
+            question_id: "q_rv2".to_string(),
+            mode: "review".to_string(),
+            grade: Some("again".to_string()),
+            answered_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+            elapsed_ms: None, detail: None, card: Some(sample_fsrs_card()), fsrs_log: None,
+        }]).unwrap();
+        let before: i64 = conn.query_row("SELECT COUNT(*) FROM review_state WHERE question_id = 'q_rv2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(before, 1);
+
+        review_revert_impl(&mut conn, &[RevertItem {
+            record_id: rid,
+            question_id: "q_rv2".to_string(),
+            card: None,
+        }]).unwrap();
+        let after: i64 = conn.query_row("SELECT COUNT(*) FROM review_state WHERE question_id = 'q_rv2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(after, 0, "撤销到「从没复习过」");
+    }
+
+    #[test]
+    fn review_revert_rejects_non_review_records() {
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_rv3");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rid = "66666666-6666-7666-8666-666666666666".to_string();
+        record_answer_impl(&mut conn, &[RecordItem {
+            id: Some(rid.clone()),
+            question_id: "q_rv3".to_string(),
+            mode: "practice".to_string(),
+            grade: Some("good".to_string()),
+            answered_at: Some("2026-09-10T12:00:00.000Z".to_string()),
+            elapsed_ms: None, detail: None, card: None, fsrs_log: None,
+        }]).unwrap();
+        let err = review_revert_impl(&mut conn, &[RevertItem {
+            record_id: rid.clone(),
+            question_id: "q_rv3".to_string(),
+            card: None,
+        }]).unwrap_err();
+        assert!(err.contains("only review records can be reverted"), "{err}");
+        // 拒绝后事务回滚：流水还在
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM practice_records WHERE id = ?1", params![rid], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

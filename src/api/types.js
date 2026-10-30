@@ -138,6 +138,7 @@
  */
 
 /** practice_records 写入项 @typedef {Object} RecordItem
+ * @property {string} [id] 客户端流水 ID（UUID，离线幂等；撤销时用它精确引用）
  * @property {string} question_id
  * @property {'practice'|'review'|'exam'} mode
  * @property {string} grade
@@ -147,5 +148,13 @@
  * @property {Object|null} [detail]
  * @property {FsrsState|null} [card]
  */
+
+/** review_revert 撤销项 @typedef {Object} RevertItem
+ * @property {string} record_id 要撤销的流水 ID（评分时前端生成，需原样带回）
+ * @property {string} question_id
+ * @property {FsrsState|null} card 评分前的卡片快照；null = 此前没有复习态（撤销时整行删除）
+ */
+
+/** review_revert @typedef {{reverted:number, skipped:number}} ReviewRevertResult */
 
 export {}

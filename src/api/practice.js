@@ -15,6 +15,15 @@ export async function recordAnswer(items) {
   return unwrap(await cmd('record_answer', { items }))
 }
 
+/**
+ * 撤销上一条复习评分（FE-P0-06）：删流水 + 写回评分前的卡片快照。
+ * @param {import('./types.js').RevertItem[]} items
+ * @returns {Promise<import('./types.js').ReviewRevertResult>}
+ */
+export async function reviewRevert(items) {
+  return unwrap(await cmd('review_revert', { items }))
+}
+
 /** @returns {Promise<import('./types.js').Question[]>} */
 export async function reviewDue({ limit = 20, bankId } = {}) {
   const args = { limit }

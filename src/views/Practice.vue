@@ -110,10 +110,42 @@
         <div class="flex items-center gap-2 min-w-0">
           <span class="badge badge-type">{{ curBadge }}</span>
           <span v-if="recite" class="badge shrink-0"><i class="i-lucide-book-open" />背题模式</span>
+          <span v-if="isFlagged" class="badge badge-bad shrink-0"><i class="i-lucide-flag" />已标记</span>
         </div>
         <span class="text-[13px] text-muted font-500 shrink-0">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
+
+      <!-- FE-P0-06 练习导航：上一题 / 标记 / 跳过 + 已答·剩余计数 -->
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="btn"
+            :disabled="curIdx === 0"
+            title="回到上一题（可回看/修改答案）"
+            @click="prev"
+          ><i class="i-lucide-arrow-left" />上一题</button>
+          <button
+            type="button"
+            class="btn"
+            :class="isFlagged && 'bg-danger-bg border-[#e3c9c5] text-danger'"
+            :title="isFlagged ? '取消标记' : '标记待定，稍后再看'"
+            @click="toggleFlag"
+          ><i class="i-lucide-flag" />{{ isFlagged ? '取消标记' : '标记' }}</button>
+          <button
+            type="button"
+            class="btn"
+            :disabled="graded || recite"
+            title="跳过本题，本轮末尾再出现"
+            @click="skipCurrent"
+          ><i class="i-lucide-skip-forward" />跳过</button>
+        </div>
+        <span class="text-[12px] text-muted">
+          已答 <b class="text-text">{{ answeredCount }}</b> / 剩余 <b class="text-text">{{ remainingCount }}</b>
+          <span v-if="flaggedKeys.size" class="ml-1.5 text-danger">· 标记 {{ flaggedKeys.size }}</span>
+        </span>
+      </div>
 
       <QuestionRunner
         :item="cur"
@@ -532,6 +564,80 @@ function buildItems(questions) {
 // ── 会话快照（FE-ARCH-05）：只存题目 id 与作答状态，离开后可继续 ──
 const SNAP_MODE = 'practice'
 const answers = reactive({}) // key → { selected, picked, fillValues, shortText, selfGrade, showRef, graded }
+
+// FE-P0-06 练习导航：标记待定 / 跳过的题
+// 两者都按「本轮内的 item key」记录，不存题面（与 stores/session.js 同口径）
+const flaggedKeys = ref(new Set())
+const skippedKeys = ref(new Set())
+const isFlagged = computed(() => !!cur.value && flaggedKeys.value.has(itemKeyOf(cur.value)))
+function toggleFlag() {
+  const k = itemKeyOf(cur.value)
+  if (!k) return
+  // Set 直接换新实例，才能触发 computed / 会话快照的变更
+  const next = new Set(flaggedKeys.value)
+  if (next.has(k)) next.delete(k)
+  else next.add(k)
+  flaggedKeys.value = next
+}
+
+// 已答 / 剩余：已答 = 本轮真有作答内容或已判分的项
+// （不能用「answers 里有键」判断：切题时 rememberAnswer 会给未作答的题写空记录）
+function hasAnswerContent(a) {
+  if (!a) return false
+  if (a.graded) return true
+  if (a.selected) return true
+  if (Array.isArray(a.picked) && a.picked.length) return true
+  if (Object.values(a.fillValues || {}).some((v) => String(v || '').trim())) return true
+  if (String(a.shortText || '').trim()) return true
+  return false
+}
+const answeredCount = computed(() => pool.value.reduce((n, it) => (hasAnswerContent(answers[itemKeyOf(it)]) ? n + 1 : n), 0))
+const remainingCount = computed(() => Math.max(0, pool.value.length - answeredCount.value))
+
+/** 跳到指定下标（统一处理记住当前作答、重置、恢复缓存、计时） */
+function jumpTo(idx) {
+  if (idx < 0 || idx >= pool.value.length || idx === curIdx.value) return
+  cancelAutoNext()
+  rememberAnswer()
+  if (recite.value) round.value.ms += Date.now() - startedAt.value
+  curIdx.value = idx
+  resetAnswer()
+  restoreCachedAnswer()
+  startedAt.value = Date.now()
+  focusCard()
+}
+
+// 跳过：标记本题，本轮其余题走完后再回来做（不重排 pool，避免与快照 keys 失同步）
+function firstPendingIndex(from, { includeSkipped = false } = {}) {
+  const list = pool.value
+  for (let i = Math.max(0, from); i < list.length; i++) {
+    const k = itemKeyOf(list[i])
+    if (!k) continue
+    if (answers[k]?.graded) continue // 已判分的不算待做
+    if (!includeSkipped && skippedKeys.value.has(k)) continue
+    return i
+  }
+  return -1
+}
+
+function skipCurrent() {
+  const it = cur.value
+  if (!it) return
+  const k = itemKeyOf(it)
+  if (!k) return
+  // 已判分的题不能「跳过」：已入流水，再答一遍会造成重复记录
+  if (graded.value) return
+  skippedKeys.value = new Set(skippedKeys.value).add(k)
+  // 先找后面还没跳过的待做项；没有就回卷把所有待做项（含跳过的）重新走一遍
+  let idx = firstPendingIndex(curIdx.value + 1)
+  if (idx < 0) idx = firstPendingIndex(0, { includeSkipped: true })
+  if (idx < 0) {
+    toast('本轮题目已全部处理完毕', 'info')
+    return
+  }
+  jumpTo(idx)
+  toast('已跳过，本题会在本轮末尾再出现', 'info', 2500)
+}
 function currentAnswerKey() {
   return itemKeyOf(cur.value)
 }
@@ -579,7 +685,14 @@ function snapshotNow() {
     round: { total: round.value.total, correct: round.value.correct, wrongKeys: round.value.wrong.map(itemKeyOf), ms: round.value.ms },
     rounds: rounds.value.map((r) => ({ total: r.total, correct: r.correct, wrongKeys: (r.wrong || []).map(itemKeyOf), ms: r.ms, rate: r.rate || 0 })),
     startedAt: startedAt.value,
-    extra: { practiceMode: mode.value, selectedTypes: [...selectedTypes.value], count: count.value }
+    extra: {
+      practiceMode: mode.value,
+      selectedTypes: [...selectedTypes.value],
+      count: count.value,
+      // FE-P0-06：标记/跳过的题按 key 存，恢复时只保留仍存在的项
+      flaggedKeys: [...flaggedKeys.value],
+      skippedKeys: [...skippedKeys.value]
+    }
   }
 }
 function persistSession() {
@@ -602,6 +715,8 @@ onBeforeUnmount(() => {
 })
 function resetSessionState() {
   for (const k of Object.keys(answers)) delete answers[k]
+  flaggedKeys.value = new Set()
+  skippedKeys.value = new Set()
   clearSession(SNAP_MODE)
 }
 
@@ -638,6 +753,10 @@ async function resumeSession(snap) {
     if (snapshot.bankId) bankId.value = snapshot.bankId
     if (snapshot.extra?.practiceMode === 'recite') setMode('recite')
     else if (snapshot.extra?.practiceMode === 'practice') setMode('practice')
+    // 标记/跳过只保留仍在本轮里的项（题目被删时不能留下悬空 key）
+    const liveKeys = new Set(snapshot.keys)
+    flaggedKeys.value = new Set((snapshot.extra?.flaggedKeys || []).filter((k) => liveKeys.has(k)))
+    skippedKeys.value = new Set((snapshot.extra?.skippedKeys || []).filter((k) => liveKeys.has(k)))
     resetAnswer()
     restoreCachedAnswer()
     phase.value = 'card'
@@ -823,12 +942,15 @@ function next() {
   // 背题模式无 commit 计时：切题时把本页停留累进 round.ms（练习模式已在 commit 里记，此处不加防 double count）
   if (recite.value) round.value.ms += Date.now() - startedAt.value
   if (curIdx.value < pool.value.length - 1) {
-    curIdx.value++
-    resetAnswer()
-    restoreCachedAnswer()
-    startedAt.value = Date.now()
-    focusCard()
+    jumpTo(curIdx.value + 1)
   } else {
+    // 到了队尾但有跳过的题：回卷把它补完（FE-P0-06 的「跳过题本轮末尾重现」）
+    const pending = firstPendingIndex(0, { includeSkipped: true })
+    if (!recite.value && pending >= 0 && pending !== curIdx.value) {
+      jumpTo(pending)
+      toast('回到本轮跳过的题目', 'info', 2500)
+      return
+    }
     rounds.value.push({ ...round.value, rate: round.value.total ? Math.round((round.value.correct / round.value.total) * 100) : 0 })
     phase.value = 'done'
     resetSessionState() // 本轮已收口，不再"继续上次"
@@ -837,13 +959,7 @@ function next() {
 
 function prev() {
   if (curIdx.value > 0) {
-    rememberAnswer()
-    if (recite.value) round.value.ms += Date.now() - startedAt.value
-    curIdx.value--
-    resetAnswer()
-    restoreCachedAnswer()
-    startedAt.value = Date.now()
-    focusCard()
+    jumpTo(curIdx.value - 1)
   }
 }
 

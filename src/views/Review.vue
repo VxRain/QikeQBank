@@ -131,10 +131,17 @@
 
           <div v-if="canSelfGrade" class="flex items-center gap-2 flex-wrap border-t border-line pt-3.5">
             <span class="text-[13px] text-muted font-600">自评记忆效果：<span class="font-400 text-muted-light">（键盘 1–4）</span></span>
-            <button type="button" class="btn btn-danger" :disabled="submitting" @click="reviewGrade('again')"><i class="i-lucide-rotate-ccw" />忘记</button>
-            <button type="button" class="btn border-[#d9c4a3] text-[#a06a2a] bg-[#f0e6d6] hover:bg-[#f0e6d6] hover:border-[#c4a87f]" :disabled="submitting" @click="reviewGrade('hard')"><i class="i-lucide-frown" />困难</button>
-            <button type="button" class="btn border-[#bcd9c4] text-success bg-success-bg hover:bg-success-bg hover:border-[#9bc4ad]" :disabled="submitting" @click="reviewGrade('good')"><i class="i-lucide-meh" />良好</button>
-            <button type="button" class="btn btn-primary-link" :disabled="submitting" @click="reviewGrade('easy')"><i class="i-lucide-smile" />简单</button>
+            <button type="button" class="btn btn-danger" :disabled="submitting" title="下次复习：{{ previewLabel('again') }}" @click="reviewGrade('again')"><i class="i-lucide-rotate-ccw" />忘记<span v-if="previewLabel('again')" class="ml-1.5 text-[11px] font-400 opacity-75">{{ previewLabel('again') }}</span></button>
+            <button type="button" class="btn border-[#d9c4a3] text-[#a06a2a] bg-[#f0e6d6] hover:bg-[#f0e6d6] hover:border-[#c4a87f]" :disabled="submitting" title="下次复习：{{ previewLabel('hard') }}" @click="reviewGrade('hard')"><i class="i-lucide-frown" />困难<span v-if="previewLabel('hard')" class="ml-1.5 text-[11px] font-400 opacity-75">{{ previewLabel('hard') }}</span></button>
+            <button type="button" class="btn border-[#bcd9c4] text-success bg-success-bg hover:bg-success-bg hover:border-[#9bc4ad]" :disabled="submitting" title="下次复习：{{ previewLabel('good') }}" @click="reviewGrade('good')"><i class="i-lucide-meh" />良好<span v-if="previewLabel('good')" class="ml-1.5 text-[11px] font-400 opacity-75">{{ previewLabel('good') }}</span></button>
+            <button type="button" class="btn btn-primary-link" :disabled="submitting" title="下次复习：{{ previewLabel('easy') }}" @click="reviewGrade('easy')"><i class="i-lucide-smile" />简单<span v-if="previewLabel('easy')" class="ml-1.5 text-[11px] font-400 opacity-75">{{ previewLabel('easy') }}</span></button>
+          </div>
+
+          <!-- 撤销：评分后 5 秒内可回退（与 toast 同时出现，两者共用 lastRevert） -->
+          <div v-if="lastRevert" class="flex items-center gap-2 flex-wrap text-[13px] text-text-secondary">
+            <i class="i-lucide-undo-2 text-primary" />
+            <span>已记为{{ GRADE_TEXT[lastRevert.grade] }}</span>
+            <button type="button" class="btn" @click="undoLastGrade"><i class="i-lucide-rotate-ccw" />撤销<span class="ml-1 text-[11px] text-muted">{{ Math.round(REVERT_WINDOW_MS / 1000) }}s</span></button>
           </div>
         </template>
       </QuestionRunner>
@@ -189,7 +196,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { reviewDue, practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
+import { reviewDue, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
@@ -201,6 +208,8 @@ import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flu
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { typeLabel } from '@/constants/questions.js'
+import { previewIntervals, revertPayloadOf, REVERT_WINDOW_MS } from '@/utils/reviewPreview.js'
+import { randomUUID } from '@/utils/device.js'
 import { loadRunConfig, saveRunConfig, MAX_PER_ROUND } from '@/stores/runConfig.js'
 
 const phase = ref('due') // due | loading | card | done
@@ -288,6 +297,49 @@ const curFsrsRow = computed(() => {
   return it.parent ? it.parent.fsrs : it.q.fsrs
 })
 const curFsrsState = computed(() => curFsrsRow.value?.state ?? null)
+
+// FE-P0-06：四键下次间隔预览（只计算、不写库；每换一题重算）
+// 依赖 curFsrsRow：同一张卡不会变，所以按题切题才需要重算
+const intervalPreview = computed(() => previewIntervals(curFsrsRow.value, settings.fsrs))
+const previewLabel = (g) => intervalPreview.value?.[g]?.label || ''
+
+// 撤销窗口：记录上一条评分的撤销载荷，5 秒内可回退
+// lastRevert = { recordId, questionId, card, grade }；用完置 null
+const lastRevert = ref(null)
+let revertTimer = null
+function clearRevert() {
+  if (revertTimer) { clearTimeout(revertTimer); revertTimer = null }
+  lastRevert.value = null
+}
+function armRevert(payload) {
+  clearRevert()
+  lastRevert.value = payload
+  revertTimer = setTimeout(clearRevert, REVERT_WINDOW_MS)
+}
+const GRADE_TEXT = { again: '忘记', hard: '困难', good: '良好', easy: '简单' }
+async function undoLastGrade() {
+  const p = lastRevert.value
+  if (!p) return
+  clearRevert()
+  try {
+    await reviewRevert([{ record_id: p.recordId, question_id: p.questionId, card: p.card }])
+    // 回到刚才那题，把计数退回，让用户重新评
+    gradesCount[p.grade] = Math.max(0, gradesCount[p.grade] - 1)
+    reviewedCount.value = Math.max(0, reviewedCount.value - 1)
+    curIdx.value = p.idx
+    resetAnswer()
+    restoreCachedAnswer()
+    // 下次重新评分要用新 UUID（旧流水已被删除，复用会造成语义混乱）
+    forgetRecordId(cur.value)
+    graded.value = true // 保留刚看的判分结果
+    if (p.gradeResult) gradeResult.value = p.gradeResult
+    toast('已撤销，可重新评分', 'success')
+    focusCard()
+  } catch (e) {
+    console.error('review_revert failed', e)
+    toast('撤销失败：' + (e?.message || e), 'error', 5000)
+  }
+}
 
 const curBadge = computed(() => {
   const it = cur.value
@@ -615,8 +667,10 @@ function reviewGrade(g) {
   // FSRS：四键 1:1 映射 Rating，前端算卡，后端可信写入
   let card = null
   let fsrsLog = null
+  let fsrsRowSnapshot = null
   try {
     const fsrsRow = it.parent ? it.parent.fsrs : it.q.fsrs
+    fsrsRowSnapshot = fsrsRow || null // 撤销时要写回的「评分前」快照
     const res = fsrsAnswer(cardFromRow(fsrsRow), g, settings.fsrs)
     card = toRow(res.card, g)
     fsrsLog = toLog(res.log)
@@ -626,7 +680,10 @@ function reviewGrade(g) {
     submitting.value = false
     return
   }
+  // 先取流水 ID 再发请求：后端会用这个 ID 落库，撤销时才能精确引用
+  const recId = recordIdOf(it)
   recordAnswer([{
+    id: recId,
     question_id: it.isChild ? it.parent.id : it.q.id,
     mode: 'review',
     grade: g,
@@ -634,11 +691,42 @@ function reviewGrade(g) {
     detail: buildDetail(it, g, autoCorrect, elapsed),
     card,
     fsrs_log: fsrsLog
-  }]).then(() => next()).catch((e) => {
+  }]).then(() => {
+    // 记下撤销载荷：流水 ID 与评分前的卡片快照（后端靠它写回）
+    forgetRecordId(it) // 已写入就丢掉临时 ID：回看再评会产生新流水，不复用旧 UUID
+    armRevert({
+      recordId: recId,
+      questionId: it.isChild ? it.parent.id : it.q.id,
+      card: revertPayloadOf(fsrsRowSnapshot),
+      grade: g,
+      idx: curIdx.value,
+      gradeResult: gradeResult.value
+    })
+    toast(`已记为${GRADE_TEXT[g]} · 可撤销`, 'info', REVERT_WINDOW_MS)
+    next()
+  }).catch((e) => {
     console.error('record_answer failed', e)
     recordError.value = (e?.message || e)
     submitting.value = false
   })
+}
+
+// 前端为每条复习流水生成 UUID（离线幂等 + 撤销时能精确引用）
+const pendingRecordIds = new Map() // key -> { id, key }
+function recordIdOf(it) {
+  const key = it.uid || (it.isChild ? `${it.parent.id}#${it.q.id}` : it.q.id)
+  let id = pendingRecordIds.get(key)
+  if (!id) {
+    id = randomUUID()
+    pendingRecordIds.set(key, id)
+  }
+  return id
+}
+/** 撤销后扔掉该题的流水 ID：下次重新评分用新 UUID，不复用已删除的 ID */
+function forgetRecordId(it) {
+  if (!it) return
+  const key = it.uid || (it.isChild ? `${it.parent.id}#${it.q.id}` : it.q.id)
+  pendingRecordIds.delete(key)
 }
 
 function next() {

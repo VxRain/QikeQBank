@@ -72,6 +72,7 @@ pub fn run() {
             db::wrong_dismiss,
             db::wrong_list,
             db::review_due,
+            db::review_revert,
             db::review_stats,
             db::records_overview,
             db::exam_sessions,
