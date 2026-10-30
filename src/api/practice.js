@@ -32,12 +32,34 @@ export async function reviewDue({ limit = 20, bankId } = {}) {
 }
 
 /** @returns {Promise<{total:number, items:import('./types.js').Question[]}>} */
-export async function wrongList({ limit = 50, offset = 0, bankId, type = '', leaveAfterCorrect } = {}) {
+export async function wrongList({
+  limit = 50,
+  offset = 0,
+  bankId,
+  type = '',
+  leaveAfterCorrect,
+  query = '',
+  sort,
+  minWrongCount
+} = {}) {
   const args = { limit, offset }
   if (bankId) args.bankId = bankId
   if (type) args.typeFilter = type
   if (leaveAfterCorrect != null) args.leaveAfterCorrect = leaveAfterCorrect
+  if (query && query.trim()) args.query = query.trim()
+  if (sort) args.sort = sort
+  if (minWrongCount != null) args.minWrongCount = minWrongCount
   return unwrap(await cmd('wrong_list', args))
+}
+
+/**
+ * 错题本统计（FE-P0-11）：全库概览，不受当前筛选影响。
+ * @returns {Promise<{total:number, stubborn:number, by_bank:Record<string,number>, by_type:Record<string,number>}>}
+ */
+export async function wrongStats({ leaveAfterCorrect } = {}) {
+  const args = {}
+  if (leaveAfterCorrect != null) args.leaveAfterCorrect = leaveAfterCorrect
+  return unwrap(await cmd('wrong_stats', args))
 }
 
 export async function wrongDismiss(questionId) {

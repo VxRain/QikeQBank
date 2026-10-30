@@ -63,6 +63,8 @@ function ok(name, cond, detail = '') {
 function mockScript() {
   const doc = (t) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] })
   const bank = { id: 'bank_default', name: '默认题库', description: '', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
+  // 第二个题库：错题本统计条要按库分组，需要一个真实可解析的库名
+  const bank2 = { id: 'bank_b', name: '第二题库', description: '', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
   const mk = (i, t) => ({
     id: 'q' + i, bank_id: 'bank_default', type: t || 'single', version: 2,
     // 难度/状态各不同，供 FE-P0-09 的筛选与排序验证（q1..q3 难度 1..3，q4.. 循环）
@@ -134,7 +136,7 @@ function mockScript() {
     invoke: async (cmd, args) => {
       window.__calls.push(cmd)
       switch (cmd) {
-        case 'banks_list': return { success: true, data: [bank] }
+        case 'banks_list': return { success: true, data: [bank, bank2] }
         case 'questions_list': {
           // 真实实现一遍筛选/排序/分页，E2E 才能验「参数真的生效」而不是只看请求发出去了
           window.__listArgs = args
@@ -201,6 +203,51 @@ function mockScript() {
         case 'exam_sessions': return { success: true, data: { items: sessions } }
         case 'exam_detail': window.__detailArg = args; return { success: true, data: detail }
         case 'assets_resolve': return { success: true, data: {} }
+        case 'wrong_list': {
+          window.__wrongArgs = args
+          // 构造错题集：q1..q6，错次数 1,4,3,2,5,1；不同类型/题库
+          const wrong = [
+            { id: 'q1', n: 1, at: '2026-09-01T10:00:00.000Z', type: 'single', bank: 'bank_default' },
+            { id: 'q2', n: 4, at: '2026-09-02T10:00:00.000Z', type: 'multi', bank: 'bank_default' },
+            { id: 'q3', n: 3, at: '2026-09-03T10:00:00.000Z', type: 'single', bank: 'bank_b' },
+            { id: 'q4', n: 2, at: '2026-09-04T10:00:00.000Z', type: 'judge', bank: 'bank_b' },
+            { id: 'q5', n: 5, at: '2026-09-05T10:00:00.000Z', type: 'single', bank: 'bank_default' },
+            { id: 'q6', n: 1, at: '2026-09-06T10:00:00.000Z', type: 'material', bank: 'bank_default' }
+          ]
+          let items = wrong.map((w) => {
+            const base = qs.find((q) => q.id === w.id) || mk(Number(w.id.slice(1)))
+            return {
+              ...base, id: w.id, type: w.type, bank_id: w.bank, wrong_count: w.n,
+              last_wrong_at: w.at, plain_text: w.id + '题干关键词',
+              // 材料题带子题，验「重练整题（含 N 问）」文案
+              children: w.type === 'material'
+                ? [{ id: 'c1', type: 'single', score: 2, stem: doc('子一') }, { id: 'c2', type: 'single', score: 2, stem: doc('子二') }]
+                : undefined
+            }
+          })
+          if (args?.query) items = items.filter((q) => q.plain_text.includes(args.query))
+          if (args?.typeFilter) items = items.filter((q) => q.type === args.typeFilter)
+          if (args?.bankId) items = items.filter((q) => q.bank_id === args.bankId)
+          if (args?.minWrongCount > 1) items = items.filter((q) => q.wrong_count >= args.minWrongCount)
+          const cmp = {
+            last_wrong_desc: (a, b) => (a.last_wrong_at < b.last_wrong_at ? 1 : -1),
+            last_wrong_asc: (a, b) => (a.last_wrong_at > b.last_wrong_at ? 1 : -1),
+            wrong_count_desc: (a, b) => b.wrong_count - a.wrong_count,
+            wrong_count_asc: (a, b) => a.wrong_count - b.wrong_count
+          }
+          items.sort(cmp[args?.sort] || cmp.last_wrong_desc)
+          return { success: true, data: { total: items.length, items } }
+        }
+        case 'wrong_stats': {
+          window.__wrongStatsCalls = (window.__wrongStatsCalls || 0) + 1
+          if (window.__wrongStatsFail) throw 'stats down'
+          // 全库口径：固定值，不随筛选变化
+          return {
+            success: true,
+            data: { total: 6, stubborn: 3, by_bank: { bank_default: 4, bank_b: 2 }, by_type: { single: 3, multi: 1, judge: 1, material: 1 } }
+          }
+        }
+        case 'wrong_dismiss': return { success: true, data: { id: args?.questionId } }
         case 'settings_get': return { success: true, data: [] }
         case 'review_stats':
         case 'practice_stats':
@@ -614,6 +661,70 @@ try {
   const shortText2 = await page.locator('body').innerText()
   ok('简答回看显示我的答案', /我写的答案ABC/.test(shortText2), shortText2.match(/我的答案：[^\n]*/)?.[0] || '(未找到)')
   ok('简答回看显示参考答案', /参考答案：\s*标准参考答案XYZ/.test(shortText2), shortText2.match(/参考答案：[^\n]*/)?.[0] || '(未找到参考答案)')
+
+  // ── FE-P0-11：错题本搜索 / 排序 / 统计 ──
+  console.log('\nFE-P0-11 错题本搜索排序统计')
+  await goto(page, '#/wrong')
+  const wBody = await page.locator('body').innerText()
+  ok('统计条显示全库错题数', /错题 6/.test(wBody), wBody.match(/错题 \d+/)?.[0] || '')
+  ok('统计条按题型分组', /简答|单选|多选|判断/.test(wBody))
+  ok('统计条按题库分组', /默认题库 4/.test(wBody) && /第二题库 2/.test(wBody), wBody.match(/题库[^\n]*/)?.[0] || '')
+  ok('顽固错题入口可见', /顽固错题 3/.test(wBody), wBody.match(/顽固错题 \d+/)?.[0] || '')
+  ok('重练全部显示真实数量', /重练全部（6 题）/.test(wBody), wBody.match(/重练全部（[^）]*）/)?.[0] || '')
+  ok('有搜索框', (await page.locator('input[placeholder="搜索题干..."]').count()) === 1)
+  ok('有排序下拉', /最近错优先/.test(wBody))
+
+  // 排序：错得最多优先 → 首行应是 wrong_count=5 的 q5
+  await page.locator('select').filter({ hasText: '最近错优先' }).first().selectOption('wrong_count_desc')
+  await page.waitForTimeout(900)
+  const wSortArgs = await page.evaluate(() => window.__wrongArgs)
+  ok('排序参数下发 wrong_count_desc', wSortArgs?.sort === 'wrong_count_desc', String(wSortArgs?.sort))
+  const firstWrongRow = await page.locator('tbody tr').first().innerText()
+  ok('wrong_count_desc 首行为 q5（错 5 次）', /q5/.test(firstWrongRow) && /5/.test(firstWrongRow), firstWrongRow.slice(0, 50))
+
+  // 搜索：q3 → 只剩 1 条
+  await page.locator('input[placeholder="搜索题干..."]').fill('q3')
+  await page.getByRole('button', { name: '搜索' }).first().click()
+  await page.waitForTimeout(1000)
+  const wSearchArgs = await page.evaluate(() => window.__wrongArgs)
+  ok('搜索参数下发', wSearchArgs?.query === 'q3', String(wSearchArgs?.query))
+  ok('搜索后只剩 1 条', (await page.locator('tbody tr').count()) === 1, `${await page.locator('tbody tr').count()} 行`)
+  ok('搜索后统计条不变（全库口径）', /错题 6/.test(await page.locator('body').innerText()))
+
+  // 搜不到：提示筛选空而不是「暂无错题」
+  await page.locator('input[placeholder="搜索题干..."]').fill('zzz-none')
+  await page.getByRole('button', { name: '搜索' }).first().click()
+  await page.waitForTimeout(1000)
+  const wEmpty = await page.locator('body').innerText()
+  ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件的错题/.test(wEmpty))
+  ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
+  await page.getByRole('button', { name: '清除筛选' }).click()
+  await page.waitForTimeout(1000)
+
+  // 顽固错题筛选：minWrongCount=3 → 3 条（q2=4, q3=3, q5=5）
+  await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
+  await page.waitForTimeout(1000)
+  const stubArgs = await page.evaluate(() => window.__wrongArgs)
+  ok('顽固筛选下发 minWrongCount=3', stubArgs?.minWrongCount === 3, String(stubArgs?.minWrongCount))
+  ok('顽固筛选后剩 3 条', (await page.locator('tbody tr').count()) === 3, `${await page.locator('tbody tr').count()} 行`)
+  // 再点一次取消
+  await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
+  await page.waitForTimeout(1000)
+  ok('再点一次取消顽固筛选', (await page.locator('tbody tr').count()) === 6, `${await page.locator('tbody tr').count()} 行`)
+
+  // 材料题重练文案：必须明说含 N 问（不是默默整题重练）
+  const matRetry = page.locator('tbody tr').filter({ hasText: 'q6' }).getByRole('button', { name: /重练/ }).first()
+  const matRetryText = (await matRetry.count()) ? await matRetry.innerText() : ''
+  ok('材料题重练文案标注含 N 问', /重练整题（含 2 问）/.test(matRetryText), matRetryText || '(未找到材料题重练按钮)')
+
+  // 统计拉取失败不能让列表也挂（挡不住看错题）
+  await page.evaluate(() => { window.__wrongStatsFail = true })
+  await goto(page, '#/banks')
+  await goto(page, '#/wrong')
+  const failStatsBody = await page.locator('body').innerText()
+  ok('统计失败时仍能看到错题列表', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
+  ok('统计失败时不显示错乱统计条', !/错题 6/.test(failStatsBody))
+  await page.evaluate(() => { window.__wrongStatsFail = false })
 
   ok('全程无 pageerror', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
 } catch (e) {

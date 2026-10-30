@@ -481,39 +481,92 @@ streak AS (
 pub(crate) const WRONG_WHERE: &str = "streak.consec_correct < ?3
   AND streak.wrong_count > 0
   AND NOT EXISTS (SELECT 1 FROM wrong_dismiss d WHERE d.question_id = q.id AND d.is_dismissed = 1)
-  AND (?1 IS NULL OR q.bank_id = ?1) AND (?2 IS NULL OR q.type = ?2)";
+  AND (?1 IS NULL OR q.bank_id = ?1) AND (?2 IS NULL OR q.type = ?2)
+  AND (?6 IS NULL OR q.plain_text LIKE '%'||?6||'%')
+  AND (?7 IS NULL OR streak.wrong_count >= ?7)";
+
+/// 错题排序白名单（FE-P0-11）：映射到固定 SQL 片段，绝不拼接用户输入。
+/// 默认 last_wrong_desc（最近错的在上），与改造前行为一致。
+pub(crate) const WRONG_SORT_WHITELIST: &[(&str, &str)] = &[
+    ("last_wrong_desc", "streak.last_wrong_at DESC"),
+    ("last_wrong_asc", "streak.last_wrong_at ASC"),
+    ("wrong_count_desc", "streak.wrong_count DESC, streak.last_wrong_at DESC"),
+    ("wrong_count_asc", "streak.wrong_count ASC, streak.last_wrong_at DESC"),
+];
+
+pub(crate) fn wrong_order_by(sort: Option<&str>) -> Result<&'static str, String> {
+    let key = sort.map(str::trim).filter(|s| !s.is_empty());
+    let Some(key) = key else {
+        return Ok(WRONG_SORT_WHITELIST[0].1);
+    };
+    WRONG_SORT_WHITELIST
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, sql)| *sql)
+        .ok_or_else(|| {
+            let keys: Vec<&str> = WRONG_SORT_WHITELIST.iter().map(|(k, _)| *k).collect();
+            format!("invalid sort: {key} (allowed: {})", keys.join(" / "))
+        })
+}
+
+/// 错题本查询参数（FE-P0-11）。收进结构体避免 impl 超参。
+#[derive(Default)]
+pub(crate) struct WrongListQuery {
+    pub bank_id: Option<String>,
+    pub type_filter: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+    pub leave_after_correct: Option<u64>,
+    /// 关键词：题干 plain_text 模糊匹配
+    pub query: Option<String>,
+    /// 排序键（见 WRONG_SORT_WHITELIST）
+    pub sort: Option<String>,
+    /// 顽固错题筛选：只留 wrong_count >= 该值的（None = 不过滤）
+    pub min_wrong_count: Option<i64>,
+}
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // 命令签名即前端契约，参数必须平铺
 pub fn wrong_list(
     bank_id: Option<String>,
     type_filter: Option<String>,
     limit: Option<u64>,
     offset: Option<u64>,
     leave_after_correct: Option<u64>,
+    query: Option<String>,
+    sort: Option<String>,
+    min_wrong_count: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(wrong_list_impl(&conn, bank_id, type_filter, limit, offset, leave_after_correct)?)
+    let q = WrongListQuery {
+        bank_id,
+        type_filter,
+        limit,
+        offset,
+        leave_after_correct,
+        query,
+        sort,
+        min_wrong_count,
+    };
+    ok(wrong_list_impl(&conn, &q)?)
 }
 
 /// 错题本：连续答对次数 < leave_after_correct（默认1，即现状：最近一次对就移出）且错过，且未被手动移出
-pub(crate) fn wrong_list_impl(
-    conn: &Connection,
-    bank_id: Option<String>,
-    type_filter: Option<String>,
-    limit: Option<u64>,
-    offset: Option<u64>,
-    leave_after_correct: Option<u64>,
-) -> Result<Value, String> {
-    let bank_id = bank_id.filter(|s| !s.is_empty());
-    let type_filter = type_filter.filter(|s| !s.is_empty());
-    let limit = limit.unwrap_or(50).min(500) as i64;
-    let offset = offset.unwrap_or(0) as i64;
-    let leave_after = leave_after_correct.unwrap_or(1).clamp(1, 10) as i64;
+pub(crate) fn wrong_list_impl(conn: &Connection, q: &WrongListQuery) -> Result<Value, String> {
+    let bank_id = q.bank_id.clone().filter(|s| !s.is_empty());
+    let type_filter = q.type_filter.clone().filter(|s| !s.is_empty());
+    let query = q.query.clone().filter(|s| !s.trim().is_empty());
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let offset = q.offset.unwrap_or(0) as i64;
+    let leave_after = q.leave_after_correct.unwrap_or(1).clamp(1, 10) as i64;
+    // 顽固错题下限：<=1 视为不过滤（1 就是「所有错过」）
+    let min_wrong = q.min_wrong_count.filter(|n| *n > 1);
+    let order_by = wrong_order_by(q.sort.as_deref())?;
     let total: i64 = conn
         .query_row(
             &format!("{WRONG_RANKED_CTE} SELECT COUNT(*) FROM questions q JOIN streak ON streak.question_id = q.id WHERE {WRONG_WHERE}"),
-            params![bank_id, type_filter, leave_after],
+            params![bank_id, type_filter, leave_after, 0i64, 0i64, query, min_wrong],
             |r| r.get(0),
         )
         .map_err(to_str)?;
@@ -524,11 +577,13 @@ pub(crate) fn wrong_list_impl(
           WHERE p.question_id = q.id AND p.correct = 0 AND p.mode != 'exam' ORDER BY p.answered_at DESC, p.id DESC LIMIT 1) AS last_wrong_detail
          FROM questions q JOIN streak ON streak.question_id = q.id
          WHERE {WRONG_WHERE}
-         ORDER BY streak.last_wrong_at DESC
+         ORDER BY {order_by}
          LIMIT ?4 OFFSET ?5"
     );
     let mut stmt = conn.prepare(&sql).map_err(to_str)?;
-    let mut rows = stmt.query(params![bank_id, type_filter, leave_after, limit, offset]).map_err(to_str)?;
+    let mut rows = stmt
+        .query(params![bank_id, type_filter, leave_after, limit, offset, query, min_wrong])
+        .map_err(to_str)?;
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(to_str)? {
         let mut q = row_to_question(row).map_err(to_str)?;
@@ -538,6 +593,74 @@ pub(crate) fn wrong_list_impl(
         items.push(q);
     }
     Ok(json!({ "total": total, "items": items }))
+}
+
+/// 错题本统计（FE-P0-11）：总数 / 各库 / 各题型 / 顽固错题数。
+/// 口径与 wrong_list 一致（同一份 CTE + WHERE），否则统计与实际列表对不上。
+/// 不受 bank_id / type / query / min_wrong_count 筛选影响——它是「全库错题概览」，
+/// 否则筛完只剩 1 题时「共 12 题」会把人搞懵。
+#[tauri::command]
+pub fn wrong_stats(
+    leave_after_correct: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(wrong_stats_impl(&conn, leave_after_correct)?)
+}
+
+pub(crate) fn wrong_stats_impl(
+    conn: &Connection,
+    leave_after_correct: Option<u64>,
+) -> Result<Value, String> {
+    let leave_after = leave_after_correct.unwrap_or(1).clamp(1, 10) as i64;
+    let p = params![
+        Option::<String>::None,
+        Option::<String>::None,
+        leave_after,
+        0i64,
+        0i64,
+        Option::<String>::None,
+        Option::<i64>::None
+    ];
+    // CTE 必须在语句最外层（SQLite 不允许 WITH 嵌在子查询里），
+    // 所以「总数 + 顽固数」用一条条件聚合查询，「分组计数」再各查一次。
+    let (total, stubborn): (i64, i64) = conn
+        .query_row(
+            &format!(
+                "{WRONG_RANKED_CTE} SELECT COUNT(*),
+                   COALESCE(SUM(CASE WHEN streak.wrong_count >= 3 THEN 1 ELSE 0 END), 0)
+                 FROM questions q JOIN streak ON streak.question_id = q.id WHERE {WRONG_WHERE}"
+            ),
+            p,
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(to_str)?;
+    // 分组计数：先取明细再外层 GROUP BY，避免 COUNT(*) 与列值混在同一 SELECT
+    let counts = |col: &str| -> Result<Value, String> {
+        let sql = format!(
+            "{WRONG_RANKED_CTE}
+             SELECT {col}, COUNT(*) FROM (
+               SELECT q.bank_id AS bank_id, q.type AS type
+               FROM questions q JOIN streak ON streak.question_id = q.id
+               WHERE {WRONG_WHERE}
+             ) GROUP BY {col}"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+        let mut rows = stmt.query(p).map_err(to_str)?;
+        let mut map = serde_json::Map::new();
+        while let Some(row) = rows.next().map_err(to_str)? {
+            let k: Option<String> = row.get(0).map_err(to_str)?;
+            let c: i64 = row.get(1).map_err(to_str)?;
+            map.insert(k.unwrap_or_default(), json!(c));
+        }
+        Ok(Value::Object(map))
+    };
+    Ok(json!({
+        "total": total,
+        "stubborn": stubborn,
+        "by_bank": counts("bank_id")?,
+        "by_type": counts("type")?,
+    }))
 }
 
 /// 错题本手动移出（幂等；不删练习记录故不影响统计；之后再答错会自动重回）
@@ -1055,18 +1178,18 @@ mod tests {
         assert_eq!(ov["by_type"][0]["count"], 1);
 
         // 错题本：q_e_1（练习错）在册；q_e_2（仅模考错）不进册
-        let w = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        let w = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
         assert_eq!(w["total"], 1);
         assert_eq!(w["items"][0]["id"], "q_e_1");
 
         // 手动移出后模考再答错：不触发重回错题本（undismiss 仅 practice/review 触发）
         dismiss_wrong(&conn, "q_e_1").unwrap();
         answer(&mut conn, "q_e_1", "exam", "again", "2026-09-10T13:00:00.000Z");
-        let w2 = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        let w2 = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
         assert_eq!(w2["total"], 0);
         // 对比：练习答错仍会解除移出（软状态翻转回归，走 record_answer 真实入口）
         answer(&mut conn, "q_e_1", "practice", "again", "2026-09-10T14:00:00.000Z");
-        let w3 = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        let w3 = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
         assert_eq!(w3["total"], 1);
     }
 
@@ -1293,24 +1416,24 @@ mod tests {
         rec("q_w_2", 0, "2026-09-10T10:00:00.000Z"); // 错
         rec("q_w_2", 1, "2026-09-12T10:00:00.000Z"); // 后答对 → 移出
         rec("q_w_3", 1, "2026-09-10T10:00:00.000Z"); // 一直对 → 不进
-        let w = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        let w = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
         assert_eq!(w["total"], 1);
         assert_eq!(w["items"][0]["id"], "q_w_1");
         assert_eq!(w["items"][0]["wrong_count"], 2);
         assert_eq!(w["items"][0]["last_wrong_at"], "2026-09-11T10:00:00.000Z");
         // 分页：total 不变，页外为空
-        let p = wrong_list_impl(&conn, None, None, Some(1), Some(1), None).unwrap();
+        let p = wrong_list_impl(&conn, &WrongListQuery { limit: Some(1), offset: Some(1), ..Default::default() }).unwrap();
         assert_eq!(p["total"], 1);
         assert_eq!(p["items"].as_array().unwrap().len(), 0);
         // bank 过滤：错题在 bank_default，换库查不到
-        let other = wrong_list_impl(&conn, Some("bank_nope".to_string()), None, None, None, None).unwrap();
+        let other = wrong_list_impl(&conn, &WrongListQuery { bank_id: Some("bank_nope".to_string()), ..Default::default() }).unwrap();
         assert_eq!(other["total"], 0);
-        let mine = wrong_list_impl(&conn, Some("bank_default".to_string()), None, None, None, None).unwrap();
+        let mine = wrong_list_impl(&conn, &WrongListQuery { bank_id: Some("bank_default".to_string()), ..Default::default() }).unwrap();
         assert_eq!(mine["total"], 1);
         // type 过滤
-        let typed = wrong_list_impl(&conn, None, Some("single".to_string()), None, None, None).unwrap();
+        let typed = wrong_list_impl(&conn, &WrongListQuery { type_filter: Some("single".to_string()), ..Default::default() }).unwrap();
         assert_eq!(typed["total"], 1);
-        let typed_no = wrong_list_impl(&conn, None, Some("multi".to_string()), None, None, None).unwrap();
+        let typed_no = wrong_list_impl(&conn, &WrongListQuery { type_filter: Some("multi".to_string()), ..Default::default() }).unwrap();
         assert_eq!(typed_no["total"], 0);
     }
 
@@ -1328,9 +1451,9 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 1);
+        assert_eq!(wrong_list_impl(&conn, &WrongListQuery::default()).unwrap()["total"], 1);
         dismiss_wrong(&conn, "q_w_d").unwrap();
-        assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 0);
+        assert_eq!(wrong_list_impl(&conn, &WrongListQuery::default()).unwrap()["total"], 0);
         // 幂等 + 未知 id 忽略
         dismiss_wrong(&conn, "q_w_d").unwrap();
         dismiss_wrong(&conn, "q_nope").unwrap();
@@ -1341,7 +1464,7 @@ mod tests {
         assert_eq!(recs, 1);
         // 再答错 → 解除移出，重回错题本
         undismiss_wrong(&conn, "q_w_d", "2026-09-10T12:00:00.000Z", "2026-09-10T12:00:00.100Z").unwrap();
-        assert_eq!(wrong_list_impl(&conn, None, None, None, None, None).unwrap()["total"], 1);
+        assert_eq!(wrong_list_impl(&conn, &WrongListQuery::default()).unwrap()["total"], 1);
         // 删题经 FK 级联清掉移出记录
         conn.execute("DELETE FROM questions WHERE id='q_w_d'", []).unwrap();
         let left: i64 = conn
@@ -1366,7 +1489,7 @@ mod tests {
             .unwrap();
         };
         let total_with = |n: Option<u64>| {
-            wrong_list_impl(&conn, None, None, None, None, n).unwrap()["total"].as_i64().unwrap()
+            wrong_list_impl(&conn, &WrongListQuery { leave_after_correct: n, ..Default::default() }).unwrap()["total"].as_i64().unwrap()
         };
         rec(0, "2026-09-10T10:00:00.000Z"); // 错
         rec(1, "2026-09-11T10:00:00.000Z"); // 对（连对 1）
@@ -1377,7 +1500,7 @@ mod tests {
         assert_eq!(total_with(Some(2)), 0);
         rec(0, "2026-09-13T10:00:00.000Z"); // 又错（连对清零）
         assert_eq!(total_with(Some(3)), 1);
-        let w = wrong_list_impl(&conn, None, None, None, None, Some(3)).unwrap();
+        let w = wrong_list_impl(&conn, &WrongListQuery { leave_after_correct: Some(3), ..Default::default() }).unwrap();
         assert_eq!(w["items"][0]["wrong_count"], 2);
     }
 
@@ -1398,7 +1521,7 @@ mod tests {
         };
         rec(0, "2026-09-10T10:00:00.000Z", r#"{"selected":["o2"]}"#);
         rec(0, "2026-09-11T10:00:00.000Z", r#"{"selected":["o1"]}"#);
-        let w = wrong_list_impl(&conn, None, None, None, None, None).unwrap();
+        let w = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
         assert_eq!(w["total"], 1);
         assert_eq!(w["items"][0]["last_wrong_detail"]["selected"], json!(["o1"]));
         assert_eq!(w["items"][0]["last_wrong_at"], "2026-09-11T10:00:00.000Z");
@@ -1698,6 +1821,198 @@ mod tests {
             .unwrap();
         assert_eq!(recs, 0);
         assert_eq!(revs, 0);
+    }
+
+    /// 造一批错题：每题指定错次数与最近错时间（FE-P0-11 用）
+    fn seed_wrong(conn: &Connection, spec: &[(&str, i64, &str, &str, &str)]) {
+        // (id, wrong_count, last_wrong_at, type, bank_id)
+        for (id, n, last, ty, bank) in spec {
+            let mut q = sample_question();
+            q["id"] = json!(id);
+            q["type"] = json!(ty);
+            q["bank_id"] = json!(bank);
+            q["plain_text"] = json!(*id); // 关键词搜索用
+            insert_question(conn, &q).unwrap();
+            for i in 0..*n {
+                // 每日递增时间，最后一笔落在 last
+                conn.execute(
+                    "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at) VALUES (?1, ?2, 'practice', 'again', 0, ?3, ?3)",
+                    params![generate_id(), id, last],
+                )
+                .unwrap();
+                let _ = i;
+            }
+        }
+    }
+
+    /// 错题排序白名单：未知键 Err（列出允许项），默认回到 last_wrong_desc
+    #[test]
+    fn wrong_order_by_is_whitelisted() {
+        assert_eq!(wrong_order_by(None).unwrap(), "streak.last_wrong_at DESC");
+        assert_eq!(wrong_order_by(Some("")).unwrap(), "streak.last_wrong_at DESC");
+        assert_eq!(
+            wrong_order_by(Some("wrong_count_desc")).unwrap(),
+            "streak.wrong_count DESC, streak.last_wrong_at DESC"
+        );
+        for bad in [
+            "last_wrong_at DESC",
+            "plain_text; DROP TABLE questions",
+            "WRONG_COUNT_DESC",
+        ] {
+            let err = wrong_order_by(Some(bad)).unwrap_err();
+            assert!(err.contains("invalid sort"), "{bad} -> {err}");
+            assert!(err.contains("last_wrong_desc"), "应当列出允许项: {err}");
+        }
+    }
+
+    /// 关键词搜索 / 排序 / 顽固错题筛选 / 统计
+    #[test]
+    fn wrong_list_search_sort_and_stubborn_filter() {
+        let conn = test_conn();
+        seed_wrong(
+            &conn,
+            &[
+                ("q_a", 1, "2026-09-02T10:00:00.000Z", "single", "bank_default"),
+                ("q_b", 5, "2026-09-01T10:00:00.000Z", "multi", "bank_default"),
+                ("q_c", 3, "2026-09-03T10:00:00.000Z", "single", "bank_default"),
+            ],
+        );
+        let ids = |v: &Value| -> Vec<String> {
+            v["items"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect()
+        };
+
+        // 默认序：最近错在前
+        let d = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
+        assert_eq!(d["total"], 3);
+        assert_eq!(ids(&d), vec!["q_c", "q_a", "q_b"]);
+
+        // 错次数降序
+        let by_cnt = wrong_list_impl(
+            &conn,
+            &WrongListQuery { sort: Some("wrong_count_desc".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(ids(&by_cnt), vec!["q_b", "q_c", "q_a"]);
+
+        // 关键词搜索：命中的是题干 plain_text，total 也跟着变
+        let hit = wrong_list_impl(
+            &conn,
+            &WrongListQuery { query: Some("q_b".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(hit["total"], 1);
+        assert_eq!(ids(&hit), vec!["q_b"]);
+        // 搜不到 → 0，不报错
+        let miss = wrong_list_impl(
+            &conn,
+            &WrongListQuery { query: Some("zzz-none".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(miss["total"], 0);
+        // 空白关键词视为不过滤
+        let blank = wrong_list_impl(
+            &conn,
+            &WrongListQuery { query: Some("   ".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(blank["total"], 3);
+
+        // 顽固错题：>= 3 只剩 b(5) 与 c(3)
+        let stub = wrong_list_impl(
+            &conn,
+            &WrongListQuery { min_wrong_count: Some(3), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(stub["total"], 2);
+        assert_eq!(ids(&stub), vec!["q_c", "q_b"]);
+        // min_wrong_count=1 等于不过滤（1 就是「所有错过」）
+        let one = wrong_list_impl(
+            &conn,
+            &WrongListQuery { min_wrong_count: Some(1), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(one["total"], 3);
+
+        // 搜索 + 顽固 + 排序 叠加
+        let combo = wrong_list_impl(
+            &conn,
+            &WrongListQuery {
+                query: Some("q".into()),
+                min_wrong_count: Some(3),
+                sort: Some("wrong_count_desc".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(combo["total"], 2);
+        assert_eq!(ids(&combo), vec!["q_b", "q_c"]);
+
+        // 非法 sort → Err（先解析再查）
+        assert!(
+            wrong_list_impl(
+                &conn,
+                &WrongListQuery { sort: Some("bogus".into()), ..Default::default() },
+            )
+            .is_err()
+        );
+    }
+
+    /// 统计：总数 / 各库 / 各题型 / 顽固数；且不受筛选影响
+    #[test]
+    fn wrong_stats_counts_by_bank_and_type() {
+        let conn = test_conn();
+        let b2 = crate::db::banks_create_impl(&conn, "第二库", None).unwrap();
+        let bid = b2["id"].as_str().unwrap().to_string();
+        seed_wrong(
+            &conn,
+            &[
+                ("s1", 1, "2026-09-01T10:00:00.000Z", "single", "bank_default"),
+                ("s2", 4, "2026-09-02T10:00:00.000Z", "single", "bank_default"),
+                ("s3", 3, "2026-09-03T10:00:00.000Z", "multi", &bid),
+            ],
+        );
+        let st = wrong_stats_impl(&conn, None).unwrap();
+        assert_eq!(st["total"], 3);
+        // 顽固 = wrong_count >= 3 → s2(4) 与 s3(3)
+        assert_eq!(st["stubborn"], 2);
+        assert_eq!(st["by_type"]["single"], 2);
+        assert_eq!(st["by_type"]["multi"], 1);
+        assert_eq!(st["by_bank"]["bank_default"], 2);
+        assert_eq!(st["by_bank"][bid], 1);
+        // 空库也是合法结构，不能返回 null
+        let empty = wrong_stats_impl(&conn, Some(1)).unwrap();
+        assert!(empty["by_bank"].is_object());
+        assert!(empty["by_type"].is_object());
+    }
+
+    /// 统计口径必须与列表一致：leave_after_correct 变了，两边一起变
+    #[test]
+    fn wrong_stats_matches_list_under_leave_after_correct() {
+        let conn = test_conn();
+        // 2 次错 + 1 次对：默认 leave_after=1 → 移出；leave_after=2 → 仍在册
+        let mut q = sample_question();
+        q["id"] = json!("q_x");
+        insert_question(&conn, &q).unwrap();
+        for (correct, at) in [(0, "2026-09-01T10:00:00.000Z"), (0, "2026-09-02T10:00:00.000Z"), (1, "2026-09-03T10:00:00.000Z")] {
+            conn.execute(
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, synced_at) VALUES (?1, 'q_x', 'practice', 'good', ?2, ?3, ?3)",
+                params![generate_id(), correct, at],
+            )
+            .unwrap();
+        }
+        let list1 = wrong_list_impl(&conn, &WrongListQuery::default()).unwrap();
+        let st1 = wrong_stats_impl(&conn, None).unwrap();
+        assert_eq!(list1["total"], 0);
+        assert_eq!(st1["total"], 0, "列表与统计必须同口径");
+
+        let list2 = wrong_list_impl(
+            &conn,
+            &WrongListQuery { leave_after_correct: Some(2), ..Default::default() },
+        )
+        .unwrap();
+        let st2 = wrong_stats_impl(&conn, Some(2)).unwrap();
+        assert_eq!(list2["total"], 1);
+        assert_eq!(st2["total"], 1, "列表与统计必须同口径");
     }
 
 }
