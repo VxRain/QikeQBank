@@ -36,4 +36,24 @@ export function remove(id) {
   return cmd('questions_remove', { id }).then(unwrap)
 }
 
-export default { list, get, create, update, remove }
+/**
+ * 批量修正字段（FE-P0-10）。单次 IPC + 单事务。
+ * 白名单：bank_id / difficulty / status；其它字段后端会 Err。
+ * @returns {Promise<{updated:number, failed:{id:string,reason:string}[]}>}
+ */
+export function batchUpdate(ids, patch) {
+  return cmd('questions_batch_update', { ids, patch }).then(unwrap)
+}
+
+/**
+ * 批量删除（FE-P0-10）。语义与单条 remove 一致（硬删 + 墓碑）。
+ * 注意：恢复入口属于 FE-P0-02，尚未实现。
+ * @returns {Promise<{removed:number, failed:{id:string,reason:string}[]}>}
+ */
+export function batchRemove(ids, actor) {
+  const args = { ids }
+  if (actor) args.actor = actor
+  return cmd('questions_batch_remove', args).then(unwrap)
+}
+
+export default { list, get, create, update, remove, batchUpdate, batchRemove }

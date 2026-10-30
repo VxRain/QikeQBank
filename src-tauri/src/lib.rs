@@ -67,6 +67,8 @@ pub fn run() {
             db::questions_create,
             db::questions_update,
             db::questions_remove,
+            db::questions_batch_update,
+            db::questions_batch_remove,
             db::practice_pool,
             db::record_answer,
             db::wrong_dismiss,

@@ -76,11 +76,29 @@
       <div v-else-if="error" class="error-box mb-3">{{ error }}</div>
 
       <template v-else>
-      <div v-if="selected.size" class="flex flex-wrap items-center gap-2 px-3.5 py-2.5 mb-3 bg-primary-bg border border-primary-border rounded-[10px] text-[13px]">
+      <div v-if="selected.size" class="batch-bar flex flex-wrap items-center gap-2 px-3.5 py-2.5 mb-3 bg-primary-bg border border-primary-border rounded-[10px] text-[13px]">
         <span class="font-600 text-primary">已选 {{ selected.size }} 题</span>
         <button type="button" class="btn btn-small" :disabled="batchBusy" @click="onBatchMove"><i class="i-lucide-folder-input" />移动</button>
+        <button type="button" class="btn btn-small" :disabled="batchBusy" @click="onBatchDifficulty"><i class="i-lucide-signal" />难度</button>
+        <button type="button" class="btn btn-small" :disabled="batchBusy" @click="onBatchStatus"><i class="i-lucide-circle-check-big" />状态</button>
         <button type="button" class="btn btn-small btn-danger" :disabled="batchBusy" @click="onBatchDelete"><i class="i-lucide-trash-2" />删除</button>
         <button type="button" class="btn btn-small btn-ghost" @click="clearSelection">取消选择</button>
+        <span v-if="batchBusy" class="flex items-center gap-1.5 text-muted"><i class="i-lucide-loader-circle animate-spin" />处理中…</span>
+      </div>
+
+      <!-- 逐项失败汇总：失败项可重试（FE-P0-10 验收要求） -->
+      <div v-if="batchFailed.length" class="mb-3 px-3.5 py-2.5 bg-danger-bg border border-danger rounded-[10px] text-[13px]">
+        <div class="flex items-center gap-2 font-600 text-danger mb-1.5">
+          <i class="i-lucide-triangle-alert" />{{ batchFailed.length }} 项未成功
+        </div>
+        <ul class="m-0 pl-5 text-text-secondary">
+          <li v-for="f in batchFailed.slice(0, 5)" :key="f.id" class="truncate">{{ f.id }}：{{ f.reason }}</li>
+          <li v-if="batchFailed.length > 5" class="text-muted">…… 共 {{ batchFailed.length }} 项</li>
+        </ul>
+        <div class="flex gap-2 mt-2">
+          <button type="button" class="btn btn-small" :disabled="batchBusy" @click="retryBatchFailed"><i class="i-lucide-rotate-ccw" />重试失败项</button>
+          <button type="button" class="btn btn-small btn-ghost" @click="batchFailed = []">知道了</button>
+        </div>
       </div>
 
       <div class="overflow-x-auto border border-line rounded-[12px]">
@@ -167,7 +185,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { list, get, remove, update } from '@/api/questions.js'
+import { list, get, remove, batchUpdate, batchRemove } from '@/api/questions.js'
 import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
 import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
@@ -225,6 +243,10 @@ const filteredCount = computed(() => total.value)
 // 多选：勾选 + 批量删除/移库（翻页/筛选后清空）
 const selected = ref(new Set())
 const batchBusy = ref(false)
+// 逐项失败汇总（FE-P0-10）：失败项可重试，不再只报一个总数
+const batchFailed = ref([])
+// 记住上一次批量动作，供「重试失败项」使用
+let lastBatchAction = null
 const allChecked = computed(() => questions.value.length > 0 && questions.value.every((q) => selected.value.has(q.id)))
 const someChecked = computed(() => questions.value.some((q) => selected.value.has(q.id)))
 function toggleOne(id, checked) {
@@ -275,6 +297,7 @@ function displayScore(q) {
 }
 
 // 移动（单题/批量共用）：弹窗选目标库，确定后执行
+// FE-P0-10：批量走一次 questions_batch_update，不再逐条 IPC
 async function moveQuestions(ids) {
   if (!ids.length || batchBusy.value) return
   const options = bankStore.banks
@@ -292,28 +315,80 @@ async function moveQuestions(ids) {
   })
   if (!target) return
   const targetName = bankStore.banks.find((b) => b.id === target)?.name || target
+  await runBatch({ kind: 'update', ids, patch: { bank_id: target } }, `已将 ${ids.length} 道试题移到「${targetName}」`)
+}
+
+/**
+ * 批量动作统一入口：一次 IPC + 逐项失败汇总。
+ * @param {{kind:'update'|'remove', ids:string[], patch?:object}} action
+ * @param {string} okText 全部成功的提示文案
+ */
+async function runBatch(action, okText) {
+  if (!action.ids.length || batchBusy.value) return
   batchBusy.value = true
-  let fail = 0
+  batchFailed.value = []
+  lastBatchAction = action
   try {
-    for (const id of ids) {
-      try {
-        await update(id, { bank_id: target })
-      } catch (e) {
-        fail++
-        console.error('move failed', id, e)
-      }
-    }
+    const data = action.kind === 'remove'
+      ? await batchRemove(action.ids)
+      : await batchUpdate(action.ids, action.patch)
+    const failed = Array.isArray(data?.failed) ? data.failed : []
+    const done = action.kind === 'remove' ? Number(data?.removed) || 0 : Number(data?.updated) || 0
+    batchFailed.value = failed
     clearSelection()
     await fetchList()
     await loadBanks()
-    toast(fail ? `移动完成，${fail} 道失败` : `已将 ${ids.length} 道试题移到「${targetName}」`, fail ? 'error' : 'success')
+    if (failed.length) {
+      toast(`${done} 项成功，${failed.length} 项失败（详见下方列表）`, 'error')
+    } else {
+      toast(okText, 'success')
+    }
+  } catch (e) {
+    // 整批拒结（patch 非法 / 目标库不存在 / 空 ids）：错误必须让用户看到，不能吞
+    console.error(e)
+    toast(e?.message || '批量操作失败', 'error')
   } finally {
     batchBusy.value = false
   }
 }
 
+async function retryBatchFailed() {
+  if (!lastBatchAction || !batchFailed.value.length) return
+  const ids = batchFailed.value.map((f) => f.id)
+  await runBatch({ ...lastBatchAction, ids }, '重试项已全部成功')
+}
+
 function onMoveOne(id) {
   moveQuestions([id])
+}
+
+/** 批量改难度：选 1–5，走 questions_batch_update */
+async function onBatchDifficulty() {
+  const ids = [...selected.value]
+  if (!ids.length || batchBusy.value) return
+  const target = await selectDialog({
+    title: `修改 ${ids.length} 道试题的难度`,
+    message: '选择难度',
+    options: DIFFICULTY_CHOICES.map((d) => ({ value: String(d), label: `难度 ${d}` })),
+    okText: '应用'
+  })
+  if (!target) return
+  await runBatch({ kind: 'update', ids, patch: { difficulty: Number(target) } }, `已将 ${ids.length} 道试题难度改为 ${target}`)
+}
+
+/** 批量改状态 */
+async function onBatchStatus() {
+  const ids = [...selected.value]
+  if (!ids.length || batchBusy.value) return
+  const target = await selectDialog({
+    title: `修改 ${ids.length} 道试题的状态`,
+    message: '选择状态',
+    options: STATUS_OPTIONS.map((s) => ({ value: s.value, label: s.label })),
+    okText: '应用'
+  })
+  if (!target) return
+  const label = STATUS_OPTIONS.find((s) => s.value === target)?.label || target
+  await runBatch({ kind: 'update', ids, patch: { status: target } }, `已将 ${ids.length} 道试题标为「${label}」`)
 }
 
 async function onBatchDelete() {
@@ -321,29 +396,12 @@ async function onBatchDelete() {
   if (!ids.length || batchBusy.value) return
   const ok = await confirmDialog({
     title: '批量删除',
-    message: `确定删除选中的 ${ids.length} 道试题？此操作不可撤销。`,
+    message: `确定删除选中的 ${ids.length} 道试题？此操作不可撤销（回收站待 FE-P0-02）。`,
     okText: '删除',
     danger: true
   })
   if (!ok) return
-  batchBusy.value = true
-  let fail = 0
-  try {
-    for (const id of ids) {
-      try {
-        await remove(id)
-      } catch (e) {
-        fail++
-        console.error('batch delete failed', id, e)
-      }
-    }
-    clearSelection()
-    await fetchList()
-    await loadBanks()
-    toast(fail ? `删除完成，${fail} 道失败` : `已删除 ${ids.length} 道试题`, fail ? 'error' : 'success')
-  } finally {
-    batchBusy.value = false
-  }
+  await runBatch({ kind: 'remove', ids }, `已删除 ${ids.length} 道试题`)
 }
 
 async function onBatchMove() {

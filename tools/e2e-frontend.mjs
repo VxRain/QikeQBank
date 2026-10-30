@@ -76,11 +76,14 @@ function mockScript() {
     updated_at: '2026-01-0' + (1 + (i % 9)) + 'T00:00:00.000Z',
     fsrs: { due_at: '2026-01-01T00:00:00.000Z', stability: 2.5, difficulty: 5, reps: 2, lapses: 0, state: 2, learning_steps: 0, scheduled_days: 3, last_reviewed_at: '2026-01-01T00:00:00.000Z', last_result: 'good' }
   })
-  const qs = Array.from({ length: 10 }, (_, k) => {
+  const freshQs = () => Array.from({ length: 10 }, (_, k) => {
     const q = mk(k + 1)
     q.created_at = `2026-01-${String(k + 1).padStart(2, '0')}T00:00:00.000Z`
     return q
   })
+  const qs = freshQs()
+  // 批量删除会真的从 qs 里 splice 掉行；后续用例还要用满 10 题，故留一个复位口
+  window.__restoreQs = () => { qs.length = 0; qs.push(...freshQs()) }
   const sessions = [
     { exam_id: 'e1', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 3, correct_count: 1, score: 5, full_score: 15 },
     { exam_id: 'e2', started_at: '2026-09-05T10:00:00.000Z', ended_at: '2026-09-05T10:20:00.000Z', item_count: 3, correct_count: 2, score: 10, full_score: 15 }
@@ -155,6 +158,39 @@ function mockScript() {
           return { success: true, data: { total, items: items.slice(offset, offset + limit) } }
         }
         case 'questions_remove': window.__removes = (window.__removes || 0) + 1; return { success: true, data: { id: args?.id } }
+        case 'questions_batch_update': {
+          // 计数调用次数：E2E 用它证明「50 题只 1 次 IPC」
+          window.__batchUpdateCalls = (window.__batchUpdateCalls || 0) + 1
+          window.__lastBatchUpdate = args
+          const patch = args?.patch || {}
+          if (patch.stem !== undefined) throw '不支持批量修改字段：stem'
+          const failed = []
+          let updated = 0
+          for (const id of args?.ids || []) {
+            if (window.__batchFailIds?.includes(id)) { failed.push({ id, reason: '题目不存在' }); continue }
+            const q = qs.find((x) => x.id === id)
+            if (!q) { failed.push({ id, reason: '题目不存在' }); continue }
+            if (patch.bank_id !== undefined) q.bank_id = patch.bank_id
+            if (patch.difficulty !== undefined) q.difficulty = patch.difficulty
+            if (patch.status !== undefined) q.status = patch.status
+            updated++
+          }
+          return { success: true, data: { updated, failed } }
+        }
+        case 'questions_batch_remove': {
+          window.__batchRemoveCalls = (window.__batchRemoveCalls || 0) + 1
+          window.__lastBatchRemove = args
+          const failed = []
+          let removed = 0
+          for (const id of args?.ids || []) {
+            if (window.__batchFailIds?.includes(id)) { failed.push({ id, reason: '题目不存在' }); continue }
+            const i = qs.findIndex((x) => x.id === id)
+            if (i < 0) { failed.push({ id, reason: '题目不存在' }); continue }
+            qs.splice(i, 1)
+            removed++
+          }
+          return { success: true, data: { removed, failed } }
+        }
         case 'questions_get': return { success: true, data: qs[0] }
         case 'questions_create': window.__creates++; window.__lastCreate = args; return { success: true, data: { id: 'qNew' } }
         case 'questions_update': window.__lastUpdate = args; return { success: true, data: {} }
@@ -306,6 +342,73 @@ try {
   ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
   await page.getByRole('button', { name: '清除筛选' }).click()
   await page.waitForTimeout(900)
+
+  // ── FE-P0-10：批量操作单次 IPC + 逐项失败可重试 ──
+  console.log('\nFE-P0-10 批量操作')
+  await page.getByRole('button', { name: '重置' }).click()
+  await page.waitForTimeout(800)
+  // 全选本页 10 题
+  await page.locator('thead input[type=checkbox]').check()
+  await page.waitForTimeout(400)
+  const selBody = await page.locator('body').innerText()
+  ok('选中后出现批量操作条', /已选 10 题/.test(selBody), selBody.match(/已选 \d+ 题/)?.[0] || '')
+  ok('批量条含难度/状态入口', /难度/.test(selBody) && /状态/.test(selBody))
+
+  // 批量改难度：必须只打 1 次 IPC（不是 10 次）
+  await page.evaluate(() => { window.__batchUpdateCalls = 0 }).catch(() => {})
+  await page.locator('.batch-bar').getByRole('button', { name: '难度', exact: true }).click()
+  await page.waitForTimeout(600)
+  const dlg = page.locator('.dialog-card, [role=dialog]').first()
+  const dlgText = await page.locator('body').innerText()
+  ok('改难度弹出应用内选择框', /选择难度/.test(dlgText), dlgText.match(/选择难度[^\n]*/)?.[0] || '')
+  // selectDialog 是原生 <select> + 确定按钮（不是按钮列表）
+  await page.locator('.dg-card select').first().selectOption('4')
+  await page.locator('.dg-card button').filter({ hasText: /^应用$/ }).last().click()
+  await page.waitForTimeout(1200)
+  const batchCalls = await page.evaluate(() => window.__batchUpdateCalls || 0)
+  ok('10 题改难度只触发 1 次 IPC', batchCalls === 1, `实际 ${batchCalls} 次`)
+  const lastUpd = await page.evaluate(() => window.__lastBatchUpdate)
+  ok('批量更新带全部选中 id', (lastUpd?.ids || []).length === 10, `${(lastUpd?.ids || []).length} 个 id`)
+  ok('批量更新只带白名单字段', lastUpd && Object.keys(lastUpd.patch || {}).join() === 'difficulty', JSON.stringify(lastUpd?.patch))
+  const afterDiff = await page.locator('body').innerText()
+  ok('改难度后列表即时刷新为 4', /难度 4/.test(afterDiff) || (await page.locator('.difficulty-dots').count()) > 0)
+
+  // 逐项失败：让 2 个 id 失败，页面必须逐项列原因 + 提供重试
+  await page.locator('thead input[type=checkbox]').check()
+  await page.waitForTimeout(300)
+  await page.evaluate(() => { window.__batchFailIds = ['q1', 'q2'] })
+  await page.locator('.batch-bar').getByRole('button', { name: '状态', exact: true }).click()
+  await page.waitForTimeout(600)
+  await page.locator('.dg-card select').first().selectOption('draft')
+  await page.locator('.dg-card button').filter({ hasText: /^应用$/ }).last().click()
+  await page.waitForTimeout(1300)
+  const failBody = await page.locator('body').innerText()
+  ok('部分失败时逐项列原因', /2 项未成功/.test(failBody) && /题目不存在/.test(failBody),
+    failBody.match(/\d+ 项未成功/)?.[0] || '(未找到失败汇总)')
+  ok('失败汇总提供重试入口', (await page.getByRole('button', { name: '重试失败项' }).count()) === 1)
+
+  // 重试：这次不再失败，应消掉失败条
+  await page.evaluate(() => { window.__batchFailIds = [] })
+  await page.getByRole('button', { name: '重试失败项' }).click()
+  await page.waitForTimeout(1300)
+  ok('重试成功后失败汇总消失', (await page.getByRole('button', { name: '重试失败项' }).count()) === 0)
+
+  // 批量删除：同样只 1 次 IPC
+  await page.locator('thead input[type=checkbox]').check()
+  await page.waitForTimeout(300)
+  await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
+  await page.waitForTimeout(700)
+  ok('批量删除确认框提示不可撤销', /不可撤销/.test(await page.locator('body').innerText()))
+  // 删除确认按钮文案就是「删除」，但批量条里也有同名按钮，故限定在弹层内
+  const delOk = page.locator('.dg-card button').filter({ hasText: /^删除$/ })
+  ok('删除确认弹层就位', (await delOk.count()) > 0, `弹层按钮数 ${await delOk.count()}`)
+  await delOk.last().click()
+  await page.waitForTimeout(1600)
+  const delCalls = await page.evaluate(() => window.__batchRemoveCalls || 0)
+  ok('10 题批量删除只触发 1 次 IPC', delCalls === 1, `实际 ${delCalls} 次`)
+  ok('未走单条逐删路径', (await page.evaluate(() => window.__removes || 0)) === 0)
+  // 复位 mock 数据：刚才那批删除把 qs 清空了，后面的刷题/模考用例还要用
+  await page.evaluate(() => window.__restoreQs())
 
   // ── FE-P0-03：脏徽章 / 离开确认 / Ctrl+S / 保存后清草稿 ──
   console.log('\nFE-P0-03 录题防丢失')

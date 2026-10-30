@@ -682,6 +682,19 @@ pub fn questions_remove(id: String, actor: Option<String>, state: State<'_, AppS
     tx.commit().map_err(to_str)?;
     ok(json!({ "id": id }))
 }
+/// 批量修改字段白名单（FE-P0-10）。仅这三列允许批量改：
+///
+/// - bank_id：移库（需校验目标库存在）
+/// - difficulty：难度 1–5
+/// - status：发布状态
+///
+/// 其它字段（题干/答案/children 等）一律 Err：批量改结构体内容语义不清，
+/// 而且 render 需与 plain_text 重算、assets 需归一化，不适合走 patch 路径。
+pub(crate) const BATCH_PATCH_FIELDS: &[&str] = &["bank_id", "difficulty", "status"];
+
+/// 拆开的 patch 值（三段都是「没指定该字段」）
+type BatchPatch = (Option<String>, Option<i64>, Option<String>);
+
 pub(crate) fn ensure_child_ids(q: &mut Value, parent_id: &str) {
     if let Some(children) = q.get_mut("children").and_then(|c| c.as_array_mut()) {
         for (i, c) in children.iter_mut().enumerate() {
@@ -691,6 +704,168 @@ pub(crate) fn ensure_child_ids(q: &mut Value, parent_id: &str) {
             }
         }
     }
+}
+
+/// 校验并拆出 patch 值。非法字段名 / 类型不对 → Err（整批拒结，不做部分应用）。
+fn parse_batch_patch(patch: &Value) -> Result<BatchPatch, String> {
+    let obj = patch.as_object().ok_or("patch must be a JSON object")?;
+    if obj.is_empty() {
+        return Err("patch 不能为空".into());
+    }
+    let mut bank_id: Option<String> = None;
+    let mut difficulty: Option<i64> = None;
+    let mut status: Option<String> = None;
+    for (k, v) in obj {
+        if !BATCH_PATCH_FIELDS.contains(&k.as_str()) {
+            return Err(format!(
+                "不支持批量修改字段：{k}（允许：{}）",
+                BATCH_PATCH_FIELDS.join(" / ")
+            ));
+        }
+        match k.as_str() {
+            "bank_id" => {
+                let s = v.as_str().ok_or("bank_id 必须是字符串")?;
+                if s.trim().is_empty() {
+                    return Err("bank_id 不能为空".into());
+                }
+                bank_id = Some(s.to_string());
+            }
+            "difficulty" => {
+                let n = v.as_i64().ok_or("difficulty 必须是整数")?;
+                if !(1..=5).contains(&n) {
+                    return Err(format!("difficulty 越界：{n}（允许 1–5）"));
+                }
+                difficulty = Some(n);
+            }
+            "status" => {
+                let s = v.as_str().ok_or("status 必须是字符串")?;
+                if s.trim().is_empty() {
+                    return Err("status 不能为空".into());
+                }
+                status = Some(s.to_string());
+            }
+            _ => unreachable!("whitelist 已过滤"),
+        }
+    }
+    Ok((bank_id, difficulty, status))
+}
+
+/// 批量修正字段（FE-P0-10）。
+///
+/// 单事务：要么整批成功，要么一条都不改。逐项失败原因用于预检阶段——
+/// 「题不存在」这类问题不必让整批失败，可逐条跳过并报告。
+/// patch 本身非法（未知字段 / 越界值）则整批拒结，返回 Err。
+///
+/// 返回：```{ updated, failed: [{id, reason}] }```
+#[tauri::command]
+pub fn questions_batch_update(
+    ids: Vec<String>,
+    patch: Value,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let mut conn = state.0.lock().map_err(to_str)?;
+    ok(questions_batch_update_impl(&mut conn, &ids, &patch)?)
+}
+
+pub(crate) fn questions_batch_update_impl(
+    conn: &mut Connection,
+    ids: &[String],
+    patch: &Value,
+) -> Result<Value, String> {
+    let (bank_id, difficulty, status) = parse_batch_patch(patch)?;
+    if ids.is_empty() {
+        return Err("ids 不能为空".into());
+    }
+    // 预检：目标题库必须存在（否则事务会因 FK 报错，错误信息看不到是哪个 id）
+    if let Some(bid) = &bank_id {
+        let exists: bool = conn
+            .query_row("SELECT 1 FROM banks WHERE id = ?1", params![bid], |_| Ok(true))
+            .optional()
+            .map_err(to_str)?
+            .unwrap_or(false);
+        if !exists {
+            return Err(format!("目标题库不存在：{bid}"));
+        }
+    }
+
+    let tx = conn.transaction().map_err(to_str)?;
+    let now = now_iso();
+    let mut updated = 0i64;
+    let mut failed: Vec<Value> = Vec::new();
+    for id in ids {
+        // 每题单独发放 synced_at（单调递增），保证同步侧能按接收时钟推进
+        let stamp = next_sync_stamp(&tx)?;
+        let n = tx
+            .execute(
+                "UPDATE questions SET
+                   bank_id = COALESCE(?2, bank_id),
+                   difficulty = COALESCE(?3, difficulty),
+                   status = COALESCE(?4, status),
+                   updated_at = ?5,
+                   synced_at = ?6
+                 WHERE id = ?1",
+                params![id, bank_id, difficulty, status, now, stamp],
+            )
+            .map_err(to_str)?;
+        if n == 0 {
+            failed.push(json!({ "id": id, "reason": "题目不存在" }));
+        } else {
+            updated += 1;
+        }
+    }
+    tx.commit().map_err(to_str)?;
+    Ok(json!({ "updated": updated, "failed": failed }))
+}
+
+/// 批量删除（FE-P0-10）。
+///
+/// 语义与单条 `questions_remove` **完全一致**（硬删 + delete_log 墓碑），
+/// 只是包进一个事务并汇总逐项结果。
+/// 注意：恢复入口属于 FE-P0-02（尚未实现），所以这里除墓碑外不做额外保留。
+///
+/// 返回：```{ removed, failed: [{id, reason}] }```
+#[tauri::command]
+pub fn questions_batch_remove(
+    ids: Vec<String>,
+    actor: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let mut conn = state.0.lock().map_err(to_str)?;
+    ok(questions_batch_remove_impl(&mut conn, &ids, actor.as_deref())?)
+}
+
+pub(crate) fn questions_batch_remove_impl(
+    conn: &mut Connection,
+    ids: &[String],
+    actor: Option<&str>,
+) -> Result<Value, String> {
+    if ids.is_empty() {
+        return Err("ids 不能为空".into());
+    }
+    let tx = conn.transaction().map_err(to_str)?;
+    let now = now_iso();
+    let mut removed = 0i64;
+    let mut failed: Vec<Value> = Vec::new();
+    for id in ids {
+        let bank_id: Option<Option<String>> = tx
+            .query_row(
+                "SELECT bank_id FROM questions WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(to_str)?;
+        let Some(bank_id) = bank_id else {
+            failed.push(json!({ "id": id, "reason": "题目不存在" }));
+            continue;
+        };
+        write_tombstone(&tx, "question", id, bank_id.as_deref(), &now, actor)?;
+        tx.execute("DELETE FROM questions WHERE id = ?1", params![id])
+            .map_err(to_str)?;
+        removed += 1;
+    }
+    tx.commit().map_err(to_str)?;
+    Ok(json!({ "removed": removed, "failed": failed }))
 }
 #[tauri::command]
 pub fn import_questions(
@@ -1152,4 +1327,264 @@ mod tests {
         assert_eq!(eb["question_count"], 2);
     }
 
+    /// 批量改字段：白名单 / 类型 / 越界 全在预检拒掉，一条都不动
+    #[test]
+    fn batch_update_rejects_non_whitelisted_patch() {
+        let mut conn = test_conn();
+        let q = sample_question();
+        insert_question(&conn, &q).unwrap();
+        let ids = vec!["q_test_1".to_string()];
+
+        // 题干类字段不允许批量改（语义不清 + 需重算 plain_text）
+        for bad in ["stem", "answer", "plain_text", "children", "score", "id", "updated_at"] {
+            let patch = json!({ bad: "x" });
+            let err = questions_batch_update_impl(&mut conn, &ids, &patch).unwrap_err();
+            assert!(err.contains("不支持批量修改字段"), "{bad} -> {err}");
+        }
+        // 难度越界 / 类型不对
+        for patch in [json!({ "difficulty": 0 }), json!({ "difficulty": 6 }), json!({ "difficulty": "3" })] {
+            let err = questions_batch_update_impl(&mut conn, &ids, &patch).unwrap_err();
+            assert!(err.contains("difficulty"), "{patch} -> {err}");
+        }
+        // 空 patch / 非对象 / 空 bank_id / 空 status
+        assert!(questions_batch_update_impl(&mut conn, &ids, &json!({})).is_err());
+        assert!(questions_batch_update_impl(&mut conn, &ids, &json!("nope")).is_err());
+        assert!(questions_batch_update_impl(&mut conn, &ids, &json!({ "bank_id": "  " })).is_err());
+        assert!(questions_batch_update_impl(&mut conn, &ids, &json!({ "status": "" })).is_err());
+        // 目标题库不存在 → 整批拒结，错误能指出是哪个库
+        let err = questions_batch_update_impl(&mut conn, &ids, &json!({ "bank_id": "bank_nope" })).unwrap_err();
+        assert!(err.contains("目标题库不存在"), "{err}");
+        // 空 ids
+        assert!(questions_batch_update_impl(&mut conn, &[], &json!({ "difficulty": 3 })).is_err());
+
+        // 以上全部拒结：库里那题还是原样
+        let after = fetch_question(&conn, "q_test_1").unwrap().unwrap();
+        assert_eq!(after["difficulty"], 2);
+        assert_eq!(after["status"], "published");
+    }
+
+    /// 批量改字段：成功路径 + 逐项失败原因 + 不改其他列
+    #[test]
+    fn batch_update_applies_whitelist_and_reports_missing_ids() {
+        let mut conn = test_conn();
+        let b2 = banks_create_impl(&conn, "目标库", None).unwrap();
+        let bid = b2["id"].as_str().unwrap().to_string();
+        let mut q1 = sample_question();
+        insert_question(&conn, &q1).unwrap();
+        q1["id"] = json!("q2");
+        q1["updated_at"] = json!("2000-01-01T00:00:00.000Z");
+        insert_question(&conn, &q1).unwrap();
+
+        let before = fetch_question(&conn, "q_test_1").unwrap().unwrap();
+        let ids = vec!["q_test_1".to_string(), "q2".to_string(), "missing".to_string()];
+        let r = questions_batch_update_impl(
+            &mut conn,
+            &ids,
+            &json!({ "bank_id": bid, "difficulty": 4, "status": "draft" }),
+        )
+        .unwrap();
+        assert_eq!(r["updated"], 2);
+        let failed = r["failed"].as_array().unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0]["id"], "missing");
+        assert_eq!(failed[0]["reason"], "题目不存在");
+
+        for id in ["q_test_1", "q2"] {
+            let q = fetch_question(&conn, id).unwrap().unwrap();
+            assert_eq!(q["bank_id"], json!(bid));
+            assert_eq!(q["difficulty"], 4);
+            assert_eq!(q["status"], "draft");
+            // 只想改三个白名单列：内容与 plain_text 不能被动
+            assert_eq!(q["plain_text"], before["plain_text"]);
+            assert_eq!(q["stem"], before["stem"]);
+            // updated_at 刷新、created_at 保留（同步侧靠 updated_at 做 LWW）
+            assert_ne!(q["updated_at"], "2000-01-01T00:00:00.000Z");
+            assert_eq!(q["created_at"], before["created_at"]);
+        }
+        // synced_at 每题单调推进（否则同步会漏行）。
+        // fetch_question 走 SELECT_FIELDS，不包含 synced_at（既有契约），所以直查表
+        let synced_of = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT synced_at FROM questions WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let s1 = synced_of(&conn, "q_test_1");
+        let s2 = synced_of(&conn, "q2");
+        assert_ne!(s1, s2, "每题应各自发放接收时钟");
+    }
+
+    /// patch 里只给一个字段时，其它列保持原值（COALESCE 语义）
+    #[test]
+    fn batch_update_partial_patch_keeps_other_columns() {
+        let mut conn = test_conn();
+        let q = sample_question();
+        insert_question(&conn, &q).unwrap();
+        let ids = vec!["q_test_1".to_string()];
+        questions_batch_update_impl(&mut conn, &ids, &json!({ "difficulty": 5 })).unwrap();
+        let after = fetch_question(&conn, "q_test_1").unwrap().unwrap();
+        assert_eq!(after["difficulty"], 5);
+        assert_eq!(after["status"], "published", "未指定 status 不应被改成默认值");
+        assert_eq!(after["bank_id"], q["bank_id"]);
+    }
+
+    /// 批量删除：单事务 + 墓碑 + 逐项失败；不存在的 id 不影响其他条
+    #[test]
+    fn batch_remove_writes_tombstones_and_reports_missing() {
+        let mut conn = test_conn();
+        let mut q1 = sample_question();
+        insert_question(&conn, &q1).unwrap();
+        q1["id"] = json!("q2");
+        insert_question(&conn, &q1).unwrap();
+        q1["id"] = json!("q3");
+        insert_question(&conn, &q1).unwrap();
+
+        let ids = vec![
+            "q_test_1".to_string(),
+            "missing".to_string(),
+            "q2".to_string(),
+        ];
+        let r = questions_batch_remove_impl(&mut conn, &ids, Some("tester")).unwrap();
+        assert_eq!(r["removed"], 2);
+        let failed = r["failed"].as_array().unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0]["reason"], "题目不存在");
+
+        // 删掉的真的没了，没在名单里的留着
+        assert!(fetch_question(&conn, "q_test_1").unwrap().is_none());
+        assert!(fetch_question(&conn, "q2").unwrap().is_none());
+        assert!(fetch_question(&conn, "q3").unwrap().is_some());
+
+        // 每条删除都写了墓碑（同步侧靠它识别删除，否则远端会把题拉回来）
+        let tombstones: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM delete_log WHERE entity_type = 'question' AND entity_id IN ('q_test_1','q2')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 2);
+        // 不存在的 id 不该留墓碑
+        let ghost: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM delete_log WHERE entity_id = 'missing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ghost, 0);
+        // actor 透传
+        let actor: String = conn
+            .query_row(
+                "SELECT actor FROM delete_log WHERE entity_id = 'q_test_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actor, "tester");
+
+        // 空 ids 拒结
+        assert!(questions_batch_remove_impl(&mut conn, &[], None).is_err());
+    }
+
+    /// 事务回滚：中途一条失败时，前面已经改过的行必须一起回滚。
+    /// 用临时 TRIGGER 制造「写到第 2 条就报错」的真实场景——
+    /// 只测「参数校验失败不改库」是不够的，那只是预检，没有真的开启过写事务。
+    #[test]
+    fn batch_update_rolls_back_when_midway_write_fails() {
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        insert_question(&conn, &q).unwrap();
+        q["id"] = json!("q2");
+        insert_question(&conn, &q).unwrap();
+
+        // 只拦 q2 的 UPDATE：q_test_1 会先写入，然后 q2 报错 → 整批回滚
+        conn.execute_batch(
+            "CREATE TRIGGER boom BEFORE UPDATE ON questions
+             WHEN NEW.id = 'q2'
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let ids = vec!["q_test_1".to_string(), "q2".to_string()];
+        let err = questions_batch_update_impl(&mut conn, &ids, &json!({ "difficulty": 5 }))
+            .unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+
+        // 关键：q_test_1 在失败前已经被 UPDATE 过，但事务回滚必须把它改回去
+        for id in ["q_test_1", "q2"] {
+            let after = fetch_question(&conn, id).unwrap().unwrap();
+            assert_eq!(after["difficulty"], 2, "{id} 的修改未被回滚");
+        }
+
+        conn.execute_batch("DROP TRIGGER boom").unwrap();
+        // 去掉障碍后同一批能成，证明失败只因那个 trigger
+        let r = questions_batch_update_impl(&mut conn, &ids, &json!({ "difficulty": 5 })).unwrap();
+        assert_eq!(r["updated"], 2);
+    }
+
+    /// 批量删除回滚：同一个 trigger 手法的删除版
+    #[test]
+    fn batch_remove_rolls_back_when_midway_write_fails() {
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        insert_question(&conn, &q).unwrap();
+        q["id"] = json!("q2");
+        insert_question(&conn, &q).unwrap();
+
+        conn.execute_batch(
+            "CREATE TRIGGER boom_del BEFORE DELETE ON questions
+             WHEN OLD.id = 'q2'
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let ids = vec!["q_test_1".to_string(), "q2".to_string()];
+        let err = questions_batch_remove_impl(&mut conn, &ids, None).unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+
+        // q_test_1 先被删了，但整批回滚 → 行和墓碑都不该留下
+        assert!(fetch_question(&conn, "q_test_1").unwrap().is_some(), "删除未回滚");
+        let tomb: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM delete_log WHERE entity_type = 'question'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tomb, 0, "回滚后不应残留墓碑");
+
+        conn.execute_batch("DROP TRIGGER boom_del").unwrap();
+        let r = questions_batch_remove_impl(&mut conn, &ids, None).unwrap();
+        assert_eq!(r["removed"], 2);
+    }
+
+    /// 批量删除与单条删除语义一致：两者都只留墓碑 + 硬删
+    #[test]
+    fn batch_remove_matches_single_remove_semantics() {
+        let mut conn = test_conn();
+        let mut q = sample_question();
+        insert_question(&conn, &q).unwrap();
+        q["id"] = json!("q_single");
+        insert_question(&conn, &q).unwrap();
+
+        questions_batch_remove_impl(&mut conn, &["q_test_1".to_string()], None).unwrap();
+        // 单条路径走 questions_remove，这里直接验墓碑+行是否都不在
+        let row_left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM questions WHERE id = 'q_test_1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(row_left, 0);
+        let tomb: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM delete_log WHERE entity_type = 'question' AND entity_id = 'q_test_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tomb, 1);
+        // 另一题不受影响
+        assert!(fetch_question(&conn, "q_single").unwrap().is_some());
+    }
 }
