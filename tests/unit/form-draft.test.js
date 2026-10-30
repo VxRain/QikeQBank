@@ -24,6 +24,7 @@ const {
   loadDraft,
   clearDraft,
   ageText,
+  startDraftTimer,
   DRAFT_TTL_MS
 } = await import('../../src/stores/formDraft.js')
 
@@ -115,4 +116,41 @@ test('ageText 分档文案', () => {
   assert.equal(ageText(now - 5 * 60_000, now), '5 分钟前')
   assert.equal(ageText(now - 3 * 3600_000, now), '3 小时前')
   assert.equal(ageText(now - 50 * 3600_000, now), '2 天前')
+})
+
+test('定时器：默认只在 shouldSave 返回 true 时写草稿（无编辑不产草稿）', () => {
+  store.clear()
+  const key = draftKey({ isEdit: false, bankId: 'timer1' })
+  // 用极短间隔跑一轮：模拟「用户从未编辑」
+  let dirty = false
+  const stop = startDraftTimer(key, () => ({ type: 'single' }), { interval: 5, shouldSave: () => dirty })
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      assert.equal(store.getItem(key), null, '不脏时不应写草稿')
+      dirty = true
+      setTimeout(() => {
+        stop()
+        const got = store.getItem(key)
+        assert.ok(got, '变脏后应写入草稿')
+        assert.deepEqual(JSON.parse(got).form, { type: 'single' })
+        resolve()
+      }, 30)
+    }, 30)
+  })
+})
+
+test('定时器：shouldSave 抛错时跳过本次写入，不把异常抛给页面', () => {
+  store.clear()
+  const key = draftKey({ isEdit: false, bankId: 'timer2' })
+  const stop = startDraftTimer(key, () => ({ type: 'fill' }), {
+    interval: 5,
+    shouldSave: () => { throw new Error('boom') }
+  })
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      stop()
+      assert.equal(store.getItem(key), null)
+      resolve()
+    }, 30)
+  })
 })

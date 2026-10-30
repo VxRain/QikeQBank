@@ -265,7 +265,10 @@ const dueToday = ref(0)
 const learningDue = ref(0)
 const remainingDue = ref(null)
 // FE-P0-05：待复习 0 题时禁用开始（不让人点下去才报错）
-const noDue = computed(() => !dueLoading.value && dueTotal.value === 0)
+// 口径必须跟 review_due 一致：后端拉到的是 due_at <= 今天结束（due_today），
+// 不是 due_at <= now（due_total）。学习步卡片（state=1/3，1m/10m）就落在两者之间，
+// 用 due_total 会出现「今日到期 3 题」却禁用按钮的自相矛盾。
+const noDue = computed(() => !dueLoading.value && dueToday.value === 0)
 // FE-P0-06：本轮剩余未评分数（已复习 = 已评分的项）
 const retainCount = computed(() => Math.max(0, pool.value.length - reviewedCount.value))
 

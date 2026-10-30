@@ -144,10 +144,28 @@ export function ageText(since, now = Date.now()) {
   return `${Math.floor(hour / 24)} 天前`
 }
 
-/** 定时写草稿：返回 cancel()。interval 默认 30 秒（FE-P0-03）。 */
-export function startDraftTimer(key, getForm, { interval = 30_000 } = {}) {
+/**
+ * 定时写草稿：返回 cancel()。interval 默认 30 秒（FE-P0-03）。
+ *
+ * 默认只在「脏」时写：草稿是「用户改过但没保存」的兜底，
+ * 没动过的表单不需要备份——否则每 30 秒凭空造一份，下次进入还会弹
+ * 「恢复未保存的录入内容？」，用户从没编辑过却被告知有未保存内容。
+ *
+ * @param {string} key
+ * @param {object|(()=>object)} getForm
+ * @param {{interval?:number, shouldSave?:()=>boolean}} [opts]
+ *   shouldSave：额外门槛（Form.vue 传脏判定），返回 false 则本次跳过
+ */
+export function startDraftTimer(key, getForm, { interval = 30_000, shouldSave } = {}) {
   if (typeof setInterval !== 'function') return () => {}
   const id = setInterval(() => {
+    if (typeof shouldSave === 'function') {
+      try {
+        if (!shouldSave()) return
+      } catch {
+        return // 判定本身出错时宁可不写，也不要把不该存的内容写进去
+      }
+    }
     const form = typeof getForm === 'function' ? getForm() : getForm
     if (form) saveDraft(key, form)
   }, interval)

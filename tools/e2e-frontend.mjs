@@ -246,6 +246,23 @@ try {
   console.log('\nFE-P0-06 复习间隔预览与撤销')
   await goto(page, '#/review')
   ok('复习页显示待复习数', /待复习/.test(await page.locator('body').innerText()))
+
+  // 统计口径分歧回归：due_total（due_at<=now）为 0 但 due_today（<=今天结束）为 3
+  // 是学习步卡片的常态（state=1/3，1m/10m）。开始复习必须仍可用——
+  // review_due 的截止就是「今天结束」，用 due_total 判断会禁用掉本该能拉的题。
+  await page.evaluate(() => {
+    window.__stats = { ...window.__stats, due_total: 0, due_today: 3, learning_due: 3 }
+  })
+  await goto(page, '#/banks')
+  await goto(page, '#/review')
+  const startBtn = page.getByRole('button', { name: '开始复习' })
+  const reviewBody = await page.locator('body').innerText()
+  ok('due_total=0 但 due_today=3 时开始按钮仍可点',
+    (await startBtn.isEnabled()),
+    reviewBody.match(/当前待复习[^\n]*/)?.[0] || '')
+  ok('不出现「没有待复习」与「今日到期 N 题」自相矛盾',
+    !/当前没有待复习的题/.test(reviewBody),
+    reviewBody.match(/当前没有待复习[^\n]*/)?.[0] || '')
   await page.getByRole('button', { name: '开始复习' }).click()
   await page.waitForTimeout(1600)
   await page.locator('.option-btn').first().click()

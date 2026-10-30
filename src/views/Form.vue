@@ -224,7 +224,8 @@ onMounted(async ()=>{
   resetBaseline()
   await offerDraftRestore()
   // 进入后才开始脏检测与草稿定时器：加载期间的 programmatic 变更不能算用户改动
-  stopDraftTimer = startDraftTimer(dkey.value, ()=> form.value)
+  // 只在脏时写：没编辑过的表单不该产出草稿，否则重进会误报「未保存」
+  stopDraftTimer = startDraftTimer(dkey.value, ()=> form.value, { shouldSave: ()=> dirty.value })
   window.addEventListener('beforeunload', onBeforeUnload)
   // capture 阶段：编辑器（TipTap）拿到键事件之前先拦，保证 Ctrl+S 到得了保存
   window.addEventListener('keydown', onKeydown, true)
@@ -246,7 +247,11 @@ watch(
     dirty.value = isDirty(baseline, v)
     if(!dirty.value) return
     if(draftDebounce) clearTimeout(draftDebounce)
-    draftDebounce = setTimeout(()=> { draftDebounce = null; saveDraft(dkey.value, form.value) }, 2000)
+    draftDebounce = setTimeout(()=> {
+      draftDebounce = null
+      // 防抖窗口内用户可能已撤销改动/已保存，落盘前再确认一次
+      if (dirty.value) saveDraft(dkey.value, form.value)
+    }, 2000)
   },
   { deep: true }
 )
