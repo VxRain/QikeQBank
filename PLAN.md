@@ -74,9 +74,11 @@ QikeQBank/
 └── tests/unit/  fsrs grading parseDocx auto-sync settings-store
                 api-contract（信封拆包） question-constants（题型常量） grade-question（注册表/统一判分）
                 session（会话快照） render-perf（懒加载/content-visibility）
-                form-draft（录题娇判定/草稿） run-config（配置归一/可用题量）
+                form-draft（录题娇判定/草稿） form-wiring（Form.vue 接线守卫）
+                run-config（配置归一/可用题量）
                 review-preview（间隔预览/撤销载荷） exam-sheet（答题卡分组） exam-trend（趋势坐标/回看行）
                 （node:test，零依赖）
+└── tools/e2e-frontend.mjs   浏览器端到端回归（Playwright + 注入 mock IPC，33 项断言）
 ```
 
 **存储**：`banks` + `questions`（JSON 列）+ `practice_records` + `review_state`。DB 默认在 app_data_dir（`QKEBANK_DB` 环境变量可覆盖）。
@@ -514,7 +516,9 @@ export function persistBankFilter(page, id)
 - **W2**：`node --check` 新增/改动 js；`pnpm test:unit` 全绿（解析器改动必须同步加回归用例；`tests/unit/fsrs.test.js`：四键映射/round-trip/toLog 字段/retention 真算影响/scheduler 缓存/withDefaults；`tests/unit/parseDocx.test.js`：docx 章节题号解析回归）；无 axios 残留。
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
-- **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、debug EXE 启动建库冒烟、git commit。
+- **前端接线守卫**：`tests/unit/*-wiring.test.js` 静态校验视图对 store 的调用（典型缺陷：把 `computed` 对象直接传给需要字符串 key 的函数，类型上能跑、功能上失效）。凡新增「视图 ↔ 纯逻辑模块」调用，都补一条守卫。
+- **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。需先起 dev server（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
+- **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、`pnpm test:e2e`、debug EXE 启动建库冒烟、git commit。
 
 **升级条件**（同 v1）：失败 ≥2 次或计划假设失真 → 停止如实汇报，禁止臆造。
 

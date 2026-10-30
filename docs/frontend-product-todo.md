@@ -256,7 +256,7 @@
 
 ### [x] FE-P0-06 练习导航 + 复习间隔预览 / 撤销
 
-> ✅ 已完成。落地：Practice 加「上一题 / 标记 / 跳过」与「已答 N / 剩余 M」，跳过题在本轮末尾回卷补做；Review 四键显示下次间隔（`src/utils/reviewPreview.js`，只计算不写库），评分后 5 秒可撤销。后端新增 `review_revert`（删流水 + 写回评分前卡片快照，不改 schema）。守卫：`tests/unit/review-preview.test.js` + `practice.rs` 撤销三例。
+> ✅ 已完成。落地：Practice 加「上一题 / 标记 / 跳过」与「已答 N / 剩余 M」，跳过题在本轮末尾回卷补做；Review 四键显示下次间隔（`src/utils/reviewPreview.js`，只计算不写库），评分后 5 秒可撤销，卡片顶部显示「已复习 N / 剩 M」。后端新增 `review_revert`（删流水 + 写回评分前卡片快照，不改 schema）。守卫：`tests/unit/review-preview.test.js` + `practice.rs` 撤销三例。
 
 **问题**
 - 练习模式没有上一题、跳过、标记；只有背题模式有上一题。
@@ -806,3 +806,4 @@
 | v1 | 2026-10-29 | 初版：基于前端功能设计评审拆解 P0/P1/P2 与架构任务 |
 | v2 | 2026-10-30 | FE-ARCH-01~06、08 完成并勾选（题型常量/QuestionRunner/注册表统一判分/路由 meta/统一会话 store/API 契约收敛/渲染性能）；FE-ARCH-07 按决策推迟 |
 | v3 | 2026-10-30 | FE-P0-03~07 完成并勾选（录题防丢失/会话离开提示/配置记忆与可用题量/练习导航与复习间隔撤销/模考答题卡与历史回看）；后端新增 `review_revert` 与 `exam_detail`，未改 schema |
+| v3.1 | 2026-10-30 | 审计修复：①`Form.vue` 保存后清草稿传了 `computed` 对象而非 `.value`（导致保存后重进仍弹恢复框，恢复旧草稿会覆盖刚保存的内容）；②`exam_detail` 漏选 `options_json`（回看把作答显示成 `o1/o2` 而非 `A/B`）；③补 Review 的可用题量禁用与「已复习 N / 剩 M」。新增 `tests/unit/form-wiring.test.js` 与 `tools/e2e-frontend.mjs`（`pnpm test:e2e`，33 项断言），避免同类接线错误再次穿过门禁 |

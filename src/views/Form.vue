@@ -275,7 +275,7 @@ async function onSave(){
     payload.plain_text = getAggregatedPlainText(payload)
     if(isEdit.value){
       await update(route.params.id, payload)
-      clearDraft(dkey) // 保存成功即清草稿，离开时不再提示
+      clearDraft(dkey.value) // 保存成功即清草稿，离开时不再提示
       dirty.value = false
       allowLeave = true
       toast('已保存', 'success')
@@ -285,7 +285,7 @@ async function onSave(){
       toast(`已保存到「${bankStore.banks.find(b=> b.id === newBankId.value)?.name || ''}」，可继续录入`, 'success')
       // 留页连续录入：走编辑器正规重置通道（各题型答案结构不同，不能直接改 type）
       // 连续录入：草稿归零、基线重设为重置后的新表单，页面保持干净
-      clearDraft(dkey)
+      clearDraft(dkey.value)
       editorRef.value?.resetTo(form.value.type, { difficulty: form.value.difficulty, score: form.value.score })
       resetBaseline()
       window.scrollTo(0, 0)

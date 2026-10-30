@@ -702,7 +702,7 @@ pub(crate) fn exam_detail_impl(conn: &Connection, exam_id: &str) -> Result<Value
     let mut stmt = conn
         .prepare(
             "SELECT p.id, p.question_id, p.grade, p.correct, p.answered_at, p.elapsed_ms,
-                    p.detail_json, q.id, q.type, q.stem_json, q.answer_json, q.analysis_json, q.score
+                    p.detail_json, q.id, q.type, q.stem_json, q.answer_json, q.analysis_json, q.score, q.options_json
              FROM practice_records p
              LEFT JOIN questions q ON q.id = p.question_id
              WHERE p.mode = 'exam'
@@ -728,6 +728,9 @@ pub(crate) fn exam_detail_impl(conn: &Connection, exam_id: &str) -> Result<Value
                 "answer": parse_json_opt(row.get::<_, Option<String>>(10).map_err(to_str)?),
                 "analysis": parse_json_opt(row.get::<_, Option<String>>(11).map_err(to_str)?),
                 "score": row.get::<_, Option<f64>>(12).map_err(to_str)?,
+                // options 必带回：前端要把选项 id 映射回字母（o1 → A），
+                // 缺了就只能显示内部 id，用户看不出选的是哪个
+                "options": parse_json_opt(row.get::<_, Option<String>>(13).map_err(to_str)?),
             })
         } else {
             Value::Null
@@ -1146,6 +1149,11 @@ mod tests {
         assert_eq!(items[0]["question"]["type"], "single");
         assert!(items[0]["question"]["stem"].is_object());
         assert!(items[0]["question"]["answer"].is_object());
+        // options 必须带回：前端靠它把选项 id 映射回字母（o1 → A）
+        let opts = items[0]["question"]["options"].as_array().expect("options 应为数组");
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["id"], "o1");
+        assert_eq!(opts[1]["id"], "o2");
         // 作答详情原样带回
         assert_eq!(items[0]["detail"]["selected"][0], "o1");
         assert_eq!(items[0]["detail"]["exam_seq"], 1);

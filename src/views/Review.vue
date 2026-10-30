@@ -52,11 +52,20 @@
         <button
           type="button"
           class="btn btn-primary btn-big"
-          :disabled="dueLoading"
+          :disabled="dueLoading || noDue"
           @click="start"
         >
           <i class="i-lucide-play" />{{ dueLoading ? '正在拉取复习题目…' : '开始复习' }}
         </button>
+        <div v-if="noDue" class="mt-3 p-3 bg-bg-accent border border-line rounded-[12px] flex items-center justify-between gap-3 flex-wrap">
+          <span class="text-[13px] text-text-secondary">
+            <i class="i-lucide-info text-primary mr-1" />当前没有待复习的题，可用题量 0。
+          </span>
+          <div class="flex gap-2">
+            <button type="button" class="btn" @click="router.push('/practice')"><i class="i-lucide-zap" />去刷题</button>
+            <button type="button" class="btn" @click="router.push('/create')"><i class="i-lucide-plus" />去录题</button>
+          </div>
+        </div>
         <div class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
           <i class="i-lucide-keyboard" />键盘：A–F 选题，Enter 判分，判分后 1–4 自评
         </div>
@@ -75,7 +84,10 @@
           <span class="badge badge-type">{{ curBadge }}</span>
           <span v-if="curFsrsState === 1 || curFsrsState === 3" class="badge shrink-0"><i class="i-lucide-book-open" />学习中</span>
         </div>
-        <span class="text-[13px] text-muted font-500 shrink-0">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
+        <span class="text-[13px] text-muted font-500 shrink-0">
+          第 {{ curIdx + 1 }} / {{ pool.length }} 题
+          <span class="ml-1.5 text-muted-light">· 已复习 {{ reviewedCount }} / 剩 {{ retainCount }}</span>
+        </span>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
@@ -196,6 +208,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { reviewDue, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
@@ -242,6 +255,7 @@ function commitCount() {
   }
 }
 const reviewLimit = computed(() => lastCount.value)
+const router = useRouter()
 const bankName = computed(() => bankStore.banks.find((b) => b.id === bankId.value)?.name || '')
 const error = ref('')
 const recordError = ref('')
@@ -250,6 +264,10 @@ const dueTotal = ref(0)
 const dueToday = ref(0)
 const learningDue = ref(0)
 const remainingDue = ref(null)
+// FE-P0-05：待复习 0 题时禁用开始（不让人点下去才报错）
+const noDue = computed(() => !dueLoading.value && dueTotal.value === 0)
+// FE-P0-06：本轮剩余未评分数（已复习 = 已评分的项）
+const retainCount = computed(() => Math.max(0, pool.value.length - reviewedCount.value))
 
 const pool = ref([])
 const curIdx = ref(0)
