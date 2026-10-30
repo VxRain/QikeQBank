@@ -50,7 +50,8 @@ QikeQBank/
 │   │           questions.js  practice.js  banks.js  exam.js  settings.js  sync.js  assets.js
 │   ├── stores/ bank.js（题库筛选） settings.js（FSRS 参数/记忆开关等） ui.js（弹层服务）
 │   │           session.js（练习/复习/模考统一会话快照） autoSync.js
-│   │           formDraft.js（录题娇判定 + 草稿兜底）  runConfig.js（三入口题型/题量记忆 + 可用题量）
+│   │           formDraft.js（录题脏判定 + 草稿兜底）  runConfig.js（三入口题型/题量记忆 + 可用题量）
+│   │           listFilter.js（列表筛选记忆 + 排序白名单 + 页码收敛 clampPage）
 │   ├── composables/ sessionResume.js（全应用唯一的「继续上次/放弃」交互）
 │   │                sessionLeaveNotice.js（全应用唯一的「离开时告知进度已存」提示）
 │   ├── styles/ perf.css（content-visibility 等渲染性能辅助类）
@@ -252,10 +253,12 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}` |
+| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?, sort?, difficulty?, status?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}`。**FE-P0-09 新增**：`sort` 走白名单 `SORT_WHITELIST`（`created_desc`默认 / `created_asc` / `updated_desc` / `difficulty_desc` / `difficulty_asc` / `score_desc`），未知名 **Err**（不静默回退，否则前端拼错参数会以为排序生效）；`difficulty`（1–5）与 `status` 进 WHERE，`total` 跟随筛选；排序在 COUNT 之前解析，非法值不白跑查询 |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；本地编辑刷新 `updated_at` **和** `synced_at`；其余不变（**apply 路径禁止复用此函数**，走原生 gated upsert，防来源戳被洗） |
 | `questions_get` / `questions_remove` | `questions_remove(id, actor?)`：单题墓碑 UPSERT + `DELETE` 同事务；不存在 Err("Not Found") | 不变 |
+| `questions_batch_update` | `ids, patch` | **FE-P0-10 新增**。单事务批量改字段：patch 白名单仅 `bank_id` / `difficulty`(1–5) / `status`，其它字段 → Err；类型不对、难度越界、空 ids、目标库不存在 → 整批拒结 Err。逐项失败（题不存在）跳过并报告，不拖垮整批。用 `COALESCE` 保证未指定列保持原值。每题单独发放 `synced_at`（单调递增，否则同步漏行）。返回 `{updated, failed:[{id,reason}]}` |
+| `questions_batch_remove` | `ids, actor?` | **FE-P0-10 新增**。语义与 `questions_remove` **完全一致**（硬删 + `delete_log` 墓碑），只是包进一个事务并汇总逐项结果。返回 `{removed, failed:[{id,reason}]}`。**恢复入口属于 FE-P0-02，尚未实现** |
 
 **设置与同步（v3 新增 5 个 + 全量重建 1 个 + 资产通道 3 个）**
 
@@ -299,7 +302,8 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | command | 参数 | 变更 |
 |---|---|---|
 | `practice_pool` | `limit?, type_filter?, bank_id?, ids?` | 有 bank_id 时过滤；ids 非空时按传入顺序返回存在的题（上限 500），忽略题型/随机逻辑（错题重练用） |
-| `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500 |
+| `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?, query?, sort?, min_wrong_count?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500。**FE-P0-11 新增**：`query` 匹配 `plain_text`（空白视为不过滤）；`sort` 走白名单 `WRONG_SORT_WHITELIST`（`last_wrong_desc` 默认，保持改造前行为 / `last_wrong_asc` / `wrong_count_desc` / `wrong_count_asc`），未知名 Err；`min_wrong_count` ≤ 1 视为不过滤（1 即「所有错过」）|
+| `wrong_stats` | `leave_after_correct?` | **FE-P0-11 新增**。返回 `{total, stubborn, by_bank, by_type}`，口径与 `wrong_list` 同一份 CTE + WHERE（否则统计与列表对不上）；`stubborn` 固定 `wrong_count >= 3`。**刻意不受 bank/type/query/stubborn 筛选影响**：它是全库概览，否则筛完只剩 1 题时统计条写「共 12 题」会自相矛盾 |
 | `wrong_dismiss` | `question_id` | 软状态：UPSERT `is_dismissed=1, updated_at=now`（不删练习记录）；答错时翻转为 0（重回错题本）；`wrong_list` 谓词改为 `is_dismissed=1` 才隐藏 |
 | `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤；每题附加 `fsrs` 对象（无状态行为 null） |
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期） |
@@ -422,11 +426,20 @@ export function persistBankFilter(page, id)
 
 题库筛选规则（List/Practice/Review/Wrong/Form 新建共用）：默认全部；设置开启记忆时按页记住上次选择；关闭记忆时切换开关即清掉各页记忆。新建试题必须显式归属（?bank= 或顶部下拉二选一，不再静默回退首库）。
 
-### api/questions.js（W2 改）
-`list({query, type, bankId, limit, offset, summary})` → args 带 `bank_id`（bankId falsy 时不传=全部）；`summary=true` 透传为摘要模式；分页透传 `limit/offset`；返回信封，`data={total, items}`。其余不变。
+### api/questions.js（W2 改；FE-P0-09/10 再改）
+`list({query, type, bankId, limit, offset, summary, sort, difficulty, status})` → args 带 `bank_id`（bankId falsy 时不传=全部）；`summary=true` 透传为摘要模式；分页透传 `limit/offset`；`sort/difficulty/status` 有值才传（difficulty 为 0/空串时不传）；返回信封，`data={total, items}`。
+`batchUpdate(ids, patch)` → `questions_batch_update`、`batchRemove(ids, actor?)` → `questions_batch_remove`，两者均单次 IPC。其余不变。
 
-### api/practice.js（W2 改）
-`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect})` → `cmd('wrong_list',…)` 取 `.data`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
+### stores/listFilter.js（FE-P0-09 新建）
+列表筛选记忆。导出 `SORT_OPTIONS` / `SORT_KEYS` / `DEFAULT_SORT` / `DIFFICULTY_CHOICES` / `STATUS_OPTIONS` / `PAGE_SIZE_CHOICES` / `DEFAULT_PAGE_SIZE`，以及 `emptyFilter` / `normalizeFilter` / `filterKey` / `loadFilter` / `saveFilter` / `clearFilter` / `clampPage`。
+- 排序键必须与后端 `SORT_WHITELIST` 同源（`tests/unit/list-filter.test.js` 有跨语言逐字校对守卫）。
+- 持久化按 `页:题库` 分键（`qbank.listFilter.v1.<page>:<bankId>`）：A 库的筛选不串到 B 库；全默认不落键。
+- 归一化：非法排序键/越界难度/不在档位的 pageSize 逐字段回落默认，坏 JSON 与版本不符一律忽略。写失败（隐私模式/配额）静默，不阻断看图。
+- `clampPage(page, total, pageSize)`：页码收敛（`total=0` → 1；pageSize 非法回退 50，不除 0）。
+- TODO 原文写的「记住各页筛选」设置**并不存在**，此处按 FE-P0-05 的既有做法用 localStorage 记住，不新增设置开关。
+
+### api/practice.js（W2 改；FE-P0-11 再改）
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect,query,sort,minWrongCount})` → `cmd('wrong_list',…)` 取 `.data`（`query` 空白时不传）、`wrongStats({leaveAfterCorrect})` → `cmd('wrong_stats',…)`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
 ### App.vue（W2 改；设置弹窗已抽出）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏保留**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）。
@@ -476,9 +489,20 @@ export function persistBankFilter(page, id)
 - LaTeX 浮层：实时预览（空输入显示占位文案）、Enter 确认/Esc 取消、块级弹窗加宽（420px）；图片浮层：URL/标题/重新上传（走 assets 入库）。
 - 剪贴板图片 `Ctrl+V` 直接粘贴：`editorProps.handlePaste` 拦截 → `uploadFileToAsset`（压缩→assets 入库）后以块级图插入，多图串行保序；含 `text/html` 的图文混排走默认粘贴保排版。
 
-### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」）
-- 筛选条：题库下拉（默认全部，按上规则记忆）+ 题型下拉 + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页）。
-- 「重练全部」：按当前筛选取最多 500 个 id → sessionStorage['qbank.retryIds'] → `/practice?retry=1`；Practice 绕过 setup 直接组卷（`practicePool({ids})`），读完即清 storage；空结果回 setup 并提示。
+### List.vue（FE-P0-09/10 再改）
+- 筛选条：搜索框、题型、**难度（1–5）**、**状态（published/draft）**、**排序**四个下拉 + 每页条数（20/50/100）；条件经 `stores/listFilter.js` 按 `页:题库` 记忆，刷新/返回后恢复；任一筛选变更回第 1 页。
+- `pageSize` 真正参与 `limit/offset`（旧实现写死 `PAGE_SIZE` 常量，换条数会算错 offset）。
+- 页码收敛：拿到 `total` 后用 `clampPage` 判断越界并重查，修掉「删完末页最后一题显示第 3 / 2 页」。
+- 表格新增难度点阵列（纯 CSS，复用 `:root` 变量）。
+- 空态分流：有筛选 → 「没有符合当前筛选条件」+ 清除筛选；无筛选 → 「这个题库还没有试题」+ 新增/导入 CTA。
+- 批量操作（FE-P0-10）：移动 / 改难度 / 改状态 / 删除均走**单次 IPC**（`batchUpdate` / `batchRemove`），不再逐条 invoke；逐项失败汇总条列出 `id:原因`（超 5 条折叠）并提供「重试失败项」；整批拒结的后端错误原文 toast 出来，不吞。
+
+### Wrong.vue（v0.2 新建，路由 /wrong，导航「错题本」；FE-P0-11 再改）
+- 筛选条：**搜索框（题干关键词）+** 题库下拉（默认全部，按上规则记忆）+ 题型下拉 + **排序下拉** + 搜索/重置；表格列：类型、题干、题库、错次数、最近错时间、操作（重练/编辑）；分页与 List 同语言（50/页，`clampPage` 收敛）。
+- **统计条**（FE-P0-11）：总错题数 / 顽固错题数（可点击切换 `min_wrong_count>=3` 筛选）/ 按题型 / 按题库。口径是**全库概览**，不随下方筛选变化；`wrong_stats` 拉取失败只是不显示统计条，列表照常可读。
+- 「重练全部（N 题）」：`N = min(total, MAX_RETRY=500)`；**超 500 显式提示**「本轮先练 500 题，还剩 M 题可再开一轮」，不再静默截断。按当前筛选（含搜索/排序/顽固）取 id → sessionStorage['qbank.retryIds'] → `/practice?retry=1`；Practice 绕过 setup 直接组卷（`practicePool({ids})`），读完即清 storage；空结果回 setup 并提示。
+- 材料题重练按钮文案为「重练整题（含 N 问）」——实际重练范围是整题（全部子问），旧文案「重练」会让人以为是单子问。
+- **错题暂不支持导出**（本批明确不做：导出涉及格式选择与字段口径，留待后续单独评估）。
 - 收录规则：连续答对次数 < 设置阈值（默认 1）且错过才在册，中断重计；手动移除（单题/批量）：`wrong_dismiss` 记入 wrong_dismiss 表，不删练习记录故统计不受影响；之后再答错自动重回；删题经 FK 级联清掉移出记录。
 - 查看：展开行显示上次答错记录（选择类：你的选择 vs 正确答案；填空：每空你的答案 vs 正确答案；简答：作答原文/自评 + 参考答案；材料子题自动定位）+ 整题渲染预览。刷题模式简答作答原文已补入 detail.my_answer。
 
@@ -517,6 +541,9 @@ export function persistBankFilter(page, id)
 - **W3a/b/c**：vue/compiler-sfc 编译 0 错误；逻辑对照 §7。
 - **W4**：两脚本的 DDL+MIGRATE 与 PLAN §3 逐字符一致（含 M1/M2/M3/M4）；migrate 真实跑源 DB.json → 断言默认库存在 + 题 bank_id='bank_default'；smoke 新增：banks 种子、bank_id FK、按库过滤、删库级联题+流水+复习态、最后一个库保护（SQL 层断言）、FSRS 列/fsrs_log 写读/M4 旧库重建。输出 SMOKE PASS / 迁移统计。
 - **前端接线守卫**：`tests/unit/*-wiring.test.js` 静态校验视图对 store 的调用（典型缺陷：把 `computed` 对象直接传给需要字符串 key 的函数，类型上能跑、功能上失效）。凡新增「视图 ↔ 纯逻辑模块」调用，都补一条守卫。
+- **跨语言常量校对**：前后端各有一份「排序白名单」时（`SORT_WHITELIST` / `WRONG_SORT_WHITELIST` ↔ `SORT_KEYS` / `WRONG_SORT_OPTIONS`），单测必须逐字比对两侧键集合，否则会出现「前端写入、后端 Err」的死角。
+- **事务回滚守卫**：批量写命令的测试用临时 `TRIGGER` 制造「写到第 N 条才报错」，断言前 N-1 条的修改被回滚。只测参数校验不改库是不够的——那只验证了预检，没真的开过写事务。
+- **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。需先起 dev server（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、`pnpm test:e2e`、debug EXE 启动建库冒烟、git commit。
 
