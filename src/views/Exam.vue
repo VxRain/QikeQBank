@@ -151,6 +151,18 @@
             <i class="i-lucide-timer" />{{ clockStr }}
           </span>
           <span class="text-[13px] text-muted font-500">第 {{ curIdx + 1 }} / {{ items.length }} 题</span>
+          <button
+            type="button"
+            class="btn"
+            :class="flagged[cur?.uid] && '!bg-danger-bg !border-[#e3c9c5] !text-danger'"
+            :title="flagged[cur?.uid] ? '取消标记' : '标记待定，交卷前再确认'"
+            @click="toggleFlag(cur?.uid)"
+          >
+            <i class="i-lucide-flag" />{{ flagged[cur?.uid] ? '取消标记' : '标记' }}
+          </button>
+          <button type="button" class="btn" title="答题卡" @click="sheetOpen = true">
+            <i class="i-lucide-layout-grid" />答题卡<span v-if="flaggedCount" class="ml-1 text-danger">{{ flaggedCount }}</span>
+          </button>
         </div>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
@@ -186,7 +198,7 @@
           <button type="button" class="btn" :disabled="curIdx === 0" @click="go(curIdx - 1)">
             <i class="i-lucide-arrow-left" />上一题
           </button>
-          <span class="text-[13px] text-muted">已答 {{ answeredCount }} / {{ items.length }}</span>
+          <span class="text-[13px] text-muted">已答 {{ answeredCount }} / {{ items.length }}<span v-if="flaggedCount" class="ml-2 text-danger">标记 {{ flaggedCount }}</span></span>
           <div class="flex gap-2">
             <button v-if="curIdx < items.length - 1" type="button" class="btn btn-primary" @click="go(curIdx + 1)">
               下一题<i class="i-lucide-arrow-right" />
@@ -293,6 +305,19 @@
         </button>
       </div>
     </section>
+
+    <!-- 答题卡抽屉（材料题按母题分组，子题作为组内小组件） -->
+    <ExamSheet
+      :open="sheetOpen"
+      :items="items"
+      :answers="answers"
+      :flagged="flagged"
+      :current-idx="curIdx"
+      @close="sheetOpen = false"
+      @jump="jumpFromSheet"
+      @jump-first-unanswered="jumpFirstUnanswered"
+      @submit="sheetOpen = false; confirmSubmit()"
+    />
   </div>
 </template>
 
@@ -311,6 +336,8 @@ import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { buildExamDetail, summarizePaper, ratioToGrade } from '@/utils/grading.js'
 import { gradeQuestion } from '@/utils/gradeQuestion.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
+import ExamSheet from '@/components/exam/ExamSheet.vue'
+import { hasAnswerEntry, remapFlaggedUids, firstUnansweredIndex } from '@/utils/examSheet.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
 
@@ -403,6 +430,26 @@ const rowOpen = reactive(new Set())
 const materialOpen = ref(true)
 const cardRef = ref(null)
 
+// FE-P0-07a 答题卡：标记状态按 uid 记，抽屉开合只影响展示
+const sheetOpen = ref(false)
+const flagged = reactive({}) // uid -> true
+
+function toggleFlag(uid) {
+  if (flagged[uid]) delete flagged[uid]
+  else flagged[uid] = true
+}
+const flaggedCount = computed(() => items.value.filter((it) => flagged[it.uid]).length)
+
+function jumpFromSheet(idx) {
+  sheetOpen.value = false
+  go(idx)
+}
+function jumpFirstUnanswered() {
+  const idx = firstUnansweredIndex(items.value, answers)
+  if (idx < 0) { toast('全部题目都已作答', 'info'); return }
+  jumpFromSheet(idx)
+}
+
 const isChoice = computed(() => cur.value && ['single', 'judge'].includes(cur.value.q.type))
 const curAns = computed(() => (cur.value ? answers[cur.value.uid] : null))
 const curBadge = computed(() => {
@@ -425,13 +472,7 @@ const clockStr = computed(() => {
 })
 
 function hasAnswer(it) {
-  const a = answers[it.uid]
-  if (!a) return false
-  if (a.selected) return true
-  if (a.picked?.length) return true
-  if (Object.values(a.fillValues || {}).some((v) => String(v || '').trim())) return true
-  if (a.shortSelf) return true
-  return false
+  return hasAnswerEntry(answers[it.uid])
 }
 
 // 条目与索引：与 Practice 同构（材料拆子题），uid 确定性（同题序可重建，草稿可恢复）
@@ -460,6 +501,8 @@ function initAnswers() {
   }
   for (const k of Object.keys(itemElapsed)) delete itemElapsed[k]
   for (const it of items.value) itemElapsed[it.uid] = 0
+  // 新一轮必须清掉标记；同一轮内重算 answers 不应抹掉标记
+  for (const k of Object.keys(flagged)) delete flagged[k]
 }
 
 function dedupeShuffle(list) {
@@ -596,7 +639,9 @@ function draftSnapshot() {
       durationMin: durationMin.value,
       multiRule: multiRule.value,
       itemElapsed: { ...itemElapsed },
-      questionIds: paperRaw.value.map((q) => q.id)
+      questionIds: paperRaw.value.map((q) => q.id),
+      // FE-P0-07a：标记状态也要恢复（只存 uid 列表，不存题面）
+      flaggedUids: Object.keys(flagged)
     }
   }
 }
@@ -642,6 +687,8 @@ async function restoreDraft(d) {
       if (e !== undefined && itemElapsed[it.uid] !== undefined) itemElapsed[it.uid] = e
     }
     if (missing.length) toast(`有 ${missing.length} 项题目已被删除，已按未作答处理`, 'info')
+    // 标记按题目 id 重映射（uid 的序号会随被删题目前移）
+    Object.assign(flagged, remapFlaggedUids(d.extra?.flaggedUids, items.value))
     curIdx.value = Math.min(Math.max(0, d.curIdx || 0), items.value.length - 1)
     if (remainingMs.value <= 0 && durationMin.value > 0) {
       toast('草稿已超时，按到时交卷处理', 'info')
@@ -686,11 +733,17 @@ function ansPlain(a) {
 
 async function confirmSubmit() {
   const unanswered = items.value.length - answeredCount.value
+  const flaggedN = flaggedCount.value
+  // 未答与标记都要在交卷前说清楚（标记是用户自己下的「待定」，不能默默带走）
+  const parts = []
+  if (unanswered > 0) parts.push(`还有 ${unanswered} 题未作答，交卷后按 0 分计`)
+  if (flaggedN > 0) parts.push(`有 ${flaggedN} 题被标记为待定`)
+  const message = parts.length
+    ? `${parts.join('；')}。确定交卷？`
+    : `共 ${items.value.length} 题已作答完毕，确定交卷？`
   const ok = await confirmDialog({
     title: '交卷判分',
-    message: unanswered > 0
-      ? `还有 ${unanswered} 题未作答，交卷后按 0 分计。确定交卷？`
-      : `共 ${items.value.length} 题已作答完毕，确定交卷？`,
+    message,
     okText: '交卷',
     cancelText: '继续作答'
   })
