@@ -50,15 +50,20 @@ QikeQBank/
 │   │           questions.js  practice.js  banks.js  exam.js  settings.js  sync.js  assets.js
 │   ├── stores/ bank.js（题库筛选） settings.js（FSRS 参数/记忆开关等） ui.js（弹层服务）
 │   │           session.js（练习/复习/模考统一会话快照） autoSync.js
+│   │           formDraft.js（录题娇判定 + 草稿兜底）  runConfig.js（三入口题型/题量记忆 + 可用题量）
 │   ├── composables/ sessionResume.js（全应用唯一的「继续上次/放弃」交互）
+│   │                sessionLeaveNotice.js（全应用唯一的「离开时告知进度已存」提示）
 │   ├── styles/ perf.css（content-visibility 等渲染性能辅助类）
 │   ├── utils/  gradeQuestion.js（题型注册表 + 统一判分入口）
 │   │           grading.js（判分基元，零依赖） fsrs.js image.js
+│   │           reviewPreview.js（复习四键间隔预览，只计算不写库）
+│   │           examSheet.js（答题卡分组/三态/标记重映射） examTrend.js（趋势坐标 + 回看行）
 │   │           parseTemplate.js parseDocxTemplate.js parseSheet.js render.js validate.js
 │   │           normalize.js parsePureText.js stripMarkdown.js device.js
 │   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
 │   │               question/QuestionRunner.vue（练习/复习/模考/背题共用的答题渲染层）
+│   │               exam/ExamSheet.vue（答题卡抽屉） ExamHistory.vue（逐题回看） ExamTrend.vue（纯 SVG 趋势）
 │   │               settings/（SettingsDialog 弹窗外壳 + registry.js 设置项注册表 + SettingRow 通用行 + AboutPanel）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
 │               ↳ Practice/Review/Exam 已收敛为「薄编排层」：题干/选项/填空/材料/键盘流在 QuestionRunner，
@@ -68,7 +73,10 @@ QikeQBank/
 ├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
 └── tests/unit/  fsrs grading parseDocx auto-sync settings-store
                 api-contract（信封拆包） question-constants（题型常量） grade-question（注册表/统一判分）
-                session（会话快照） render-perf（懒加载/content-visibility）（node:test，零依赖）
+                session（会话快照） render-perf（懒加载/content-visibility）
+                form-draft（录题娇判定/草稿） run-config（配置归一/可用题量）
+                review-preview（间隔预览/撤销载荷） exam-sheet（答题卡分组） exam-trend（趋势坐标/回看行）
+                （node:test，零依赖）
 ```
 
 **存储**：`banks` + `questions`（JSON 列）+ `practice_records` + `review_state`。DB 默认在 app_data_dir（`QKEBANK_DB` 环境变量可覆盖）。
@@ -295,6 +303,9 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期） |
 | `record_answer` | `items[]`：`{id?, question_id, mode, grade?, answered_at?, elapsed_ms?, detail?, card?, fsrs_log?}` | `id` 合法 UUID 采用（离线幂等，缺省生成；非法 Err）；`answered_at` 合法 ISO 采用 + 未来钳制（缺省 now）；`INSERT OR IGNORE`，同 ID 同内容跳过、异内容整批 Err；题目不存在/有墓碑则该项跳过（`skipped`）；**仅实际插入才 upsert `review_state`**；`review_state.updated_at = last_reviewed_at = answered_at`（发生时间），gated 比较防补退。返回 `{inserted, skipped}` |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
+| `review_revert` | `items[]`：`{record_id, question_id, card?}` | 撤销上一条复习评分（FE-P0-06）：只接受 `mode='review'` 流水（否则整批 Err）；删 `practice_records` 后按 `card` 写回 `review_state`（`card=null` 则整行删除，回到「从没复习过」）；重复撤销同 ID 返回 `reverted:0/skipped:1`（幂等）。返回 `{reverted, skipped}` |
+| `exam_sessions` | `limit?` | 模考场次摘要：`mode='exam'` 按 `detail.exam_id` 聚合，默认 10 条、上限 50；`{items:[{exam_id,started_at,ended_at,item_count,correct_count,score,full_score}]}` 按开始时间倒序 |
+| `exam_detail` | `exam_id: String` | 单场模考逐题明细（FE-P0-07b）：复用 `detail_json`，按 `answered_at` 升序；`LEFT JOIN questions` 带出 `{id,type,stem,answer,analysis,score}`（题被删时 `question=null`）；`exam_id` 空白 Err，未知场次返回空列表。返回 `{exam_id,item_count,score,full_score,items:[{record_id,question_id,grade,correct,answered_at,elapsed_ms,detail,question}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 | `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
 | `open_data_dir` | — | 打开数据根目录（app_data_dir 或便携 data/，后端直调 opener），返回 `{"path"}`；供查看 / 应急取数，**不是数据保全手段**（见下） |
@@ -477,9 +488,19 @@ export function persistBankFilter(page, id)
 - 键盘流：未判分 A–F 选题 / M 切材料 / 简答看答案后 1-2 自评 / Enter 提交；判分后 Enter 下一题，Esc 取消自动下一题；背题模式 ←/→ 或 Enter 翻题；输入区/组词/弹窗/修饰键不劫持。
 
 ### Review.vue（W3b）
-- 顶部设置同 Practice（题库下拉 + 题量输入框默认 20/全部按钮）；`reviewDue({limit, bankId})`；徽章 SM-2→FSRS；待复习文案拆“其中学习中 N 题”（`stats.learning_due`，>0 才显示）；卡片 Learning/Relearning 态打“学习中”徽标。
+- 顶部设置同 Practice（题库下拉 + 题量输入框默认 20/全部按钮，题量按 `stores/runConfig.js` 记忆）；`reviewDue({limit, bankId})`；徽章 SM-2→FSRS；待复习文案拆“其中学习中 N 题”（`stats.learning_due`，>0 才显示）；卡片 Learning/Relearning 态打“学习中”徽标。
 - `reviewGrade` 四键 1:1 映射 FSRS Rating，前端算卡（`cardFromRow(it.parent?.fsrs ?? it.q.fsrs)`）后 `card` + `fsrs_log` 并入 recordAnswer；其余（自评统计、材料记父题 id）不动。
+- 四键显示下次间隔：`utils/reviewPreview.js` 预计算四个 rating 的 due，**只计算不写库**（不得为了预览先落记录）。
+- 评分后 5 秒可撤销：前端自生成流水 UUID 随 `record_answer` 提交，撤销时调 `review_revert` 写回评分前的卡片快照；撤销后丢弃该题临时 UUID（重评产生新流水，不复用旧 ID）。
 - 键盘流：未判分 A–F 选题 / M 切材料 / Enter 判分；判分后 1-4 自评（Enter 无动作）；规则同 Practice。
+
+### Exam.vue（模考，FE-P0-07）
+- 准备页：题库 + 题型 + 题量 + 多选计分规则（partial/strict）+ 限时；题型/题量与多选规则/限时均按 localStorage 记忆（题型题量走 `stores/runConfig.js`）；题量旁显示「可用 N 题」，0 题禁用开始并给录题/导入入口；「最近模考」带得分率趋势（`components/exam/ExamTrend.vue`，纯 SVG，不引图表库）。
+- 作答页：`QuestionRunner` 渲染；顶部「标记」与「答题卡」；底部上一题/下一题/交卷 + 已答与标记计数。
+  - `components/exam/ExamSheet.vue` 抽屉：已答/未答/标记三态，点击跳题，材料题按母题分组（组标题用首个子题位置）；分组与计数逻辑在 `utils/examSheet.js`（纯函数）。
+  - 标记按 uid 记入草稿 `extra.flaggedUids`，恢复时经 `remapFlaggedUids` 按题目 id 重映射（uid 的序号会随被删题目前移）。
+- 交卷：全卷统一判分落库（`mode='exam'`，**不建 FSRS 卡**，不进错题本与复习统计）；材料题拆子题，一子题一条流水，`detail` 带 `exam_id/exam_seq/score_earned/full_score`；确认对话框同时报告未答数与标记数。
+- 历史回看：`components/exam/ExamHistory.vue` + `exam_detail(exam_id)`，**不依赖内存 sheet**（重启后仍可回看）；题目被删时展示占位；选项 id 映射回字母。
 
 ### Home.vue（W3c）
 - 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。
@@ -502,6 +523,6 @@ export function persistBankFilter(page, id)
 | 事项 | 现状（代码事实） | 卡点 / 需要决策的内容 |
 |---|---|---|
 | **数据保全**（备份 / 恢复） | JSON 导出导入 + S3 云同步（**支持自动定时同步**，开关 + 间隔 10～60 分钟，默认关；含增量日志与全量基线）。**仍无本地时间点快照**（无保留份数、无按时间点回滚）；云同步只有冲突计数提示，无逐行冲突可视化/逐行取舍 | 剩余决策：本地时间点快照（频率 / 保留份数 / 落盘位置 / 便携模式差异）、编辑后 debounce 触发（当前仅定时 + 启动后 60 秒）、桶内日志的压缩（compaction）与生命周期策略、便携模式（数据落包内）与安装模式是否分离 |
-| **模考（exam）** | `practice_records.mode` CHECK 已放行 `'exam'`（`schema.rs:53`、`practice.rs:232`、`sync.rs:813` 均兼容），题面已有 `score` 分值字段；但 UI 无入口、**全库无一处把分值聚合成总分** | 未立项；组卷形态（即时规则组卷 vs 持久化「试卷」实体）、判分口径（多选漏选 / 部分给分）、是否进 FSRS 复习、成绩单与场次历史是否入库同步——实现方案待规划后写入本文件 |
+| **模考（exam）** | 已落地：规则组卷（题型 + 题量 + 限时 + 多选计分规则）→ 逐题作答 → 交卷统一判分落库（`mode='exam'`，不建 FSRS 卡）；答题卡三态与标记、成绩单、场次历史与逐题回看（`exam_sessions` / `exam_detail`）、得分率趋势（前端纯 SVG）均已可用。**仍未做**：持久化「试卷」实体（同一套题不可重考）、暂停计时、跨场次错题趋势 | 剩余决策：是否需要持久化试卷实体与题库级模考模板；模考错题是否入错题本（当前只服务成绩单，`wrong_list` CTE 已排除 exam） |
 | **图片同步（资源通道）** | 实测（`docs/asset_sync_bench.md`，100 万题 / 10 万图）：全库 JSON 扫描 8.0 s、升级 seed 10.6 s（每设备仅一次），而串行下载 10 万图 ≈100 min、逐图 autocommit ≈95 s、下载待办 JSON 46 ms/包（200 包 ≈1.23 GB 写放大）、1M base 逐题回读 57 s。故 **否决 `question_assets` 派生索引的增量维护版**（只省一次性 7.7 s；GC 依赖它会不可恢复删图） | v2 方案见 `docs/asset_sync_redesign.md`（图片定位为内容寻址缓存）。待拍板：① 是否接受「不默认全量下图」（首屏按需 + 窗口预热）② 待办表 `asset_jobs` 取代 `db_meta` JSON ③ 并发度策略 ④ base 分片按库还是按行。落地顺序见 §4（P0-1 待办落表 / P0-2 批量入库 / P0-3 header manifest / P1 并发 / P2 首屏按需 / P3 base 分片），P0 三项尚未开工 |
 | **平台化方向**（本体模型 / 块笔记 / 增量阅读 / AI） | 当前仍是 `question` 中心的题库客户端：`review_state.question_id` 为 PK（卡片只能绑定题目）、`delete_log.entity_type` CHECK 只放行 `bank/question`、`practice_records.question_id NOT NULL`（阅读/摘录进不了流水）；另 `sync.rs` 的 `review_state` 推送已改为增量（PE-A-01：补 `synced_at` + 按接收时钟游标过滤） | 未立项。方向与取舍见 `docs/platform-evolution.md`（本体从 `question` 改为 `block → card`，AI 只做内容加工层）。该文 §10 列了 6 项待决（blocks 存真表 vs 索引表、embedding 落地方式（云/本地/并存）、IR 优先级公式、事件流是否合流、今日队列是否跳库、AI 产物是否入同步包）。**Schema v4（该文附录 A）为草案，未启用、不得被代码引用**；启用前必须先并入 §3 |

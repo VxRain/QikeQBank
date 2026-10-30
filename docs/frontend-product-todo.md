@@ -55,11 +55,11 @@
 |---|---|---|---|---|---|
 | FE-P0-01 | JSON 备份导出 / 导入入口 | P0 | S–M | 部分已有 | 1 |
 | FE-P0-02 | 删除可恢复（回收站 / 撤销） | P0 | L–XL | 是 | 2–3 |
-| FE-P0-03 | 录题表单防丢失 + Ctrl+S | P0 | S–M | 否 | 1 |
-| FE-P0-04 | 练习 / 复习会话恢复 + 离开提示 | P0 | M | 否 | 2 |
-| FE-P0-05 | 刷题/复习配置记忆 + 可用题量预览 | P0 | S | 否 | 1 |
-| FE-P0-06 | 练习导航 + 复习间隔预览/撤销 | P0 | M | 部分 | 1–2 |
-| FE-P0-07 | 模考答题卡 + 历史回看 | P0 | M–L | 是 | 2 |
+| FE-P0-03 | 录题表单防丢失 + Ctrl+S | P0 | S–M | 否 | 1 | ✅
+| FE-P0-04 | 练习 / 复习会话恢复 + 离开提示 | P0 | M | 否 | 2 | ✅
+| FE-P0-05 | 刷题/复习配置记忆 + 可用题量预览 | P0 | S | 否 | 1 | ✅
+| FE-P0-06 | 练习导航 + 复习间隔预览/撤销 | P0 | M | 部分 | 1–2 | ✅
+| FE-P0-07 | 模考答题卡 + 历史回看 | P0 | M–L | 是 | 2 | ✅ |
 | FE-P0-08 | 全局搜索升级为命令面板 | P0 | M | 否 | 1 |
 | FE-P0-09 | 列表排序/筛选/页码收敛 | P0 | M | 是 | 1–2 |
 | FE-P0-10 | 批量操作接口 + 批量编辑 | P0 | M | 是 | 2 |
@@ -170,7 +170,9 @@
 
 ---
 
-### [ ] FE-P0-03 录题表单防丢失 + Ctrl+S
+### [x] FE-P0-03 录题表单防丢失 + Ctrl+S
+
+> ✅ 已完成。落地：`src/stores/formDraft.js`（脏判定 + 草稿兜底，纯逻辑，缺键序无关的稳定序列化、12h TTL、按编辑态/题库分槽位）；`src/views/Form.vue` 接入脏徽章、`onBeforeRouteLeave` 应用内确认、capture 阶段 Ctrl/Cmd+S、`beforeunload`、30s 定期 + 脏变化 2s 防抖写草稿、进入时提示恢复草稿。守卫：`tests/unit/form-draft.test.js`。
 
 **问题**
 - `Form.vue` 编辑/新增过程中切换导航、点返回、关闭窗口会直接丢失内容。
@@ -197,7 +199,9 @@
 
 ---
 
-### [ ] FE-P0-04 练习 / 复习会话恢复 + 离开提示
+### [x] FE-P0-04 练习 / 复习会话恢复 + 离开提示
+
+> ✅ 已完成（会话快照在上一批架构重构，本批补离开提示）。落地：`src/composables/sessionLeaveNotice.js` 是全应用唯一的「离开时告知进度已存」交互（**只提示、不拦路**，进度已落 sessionStorage）；Practice / Review / Exam 三处接入；Exam 交卷前确认同时给出未答与标记数。
 
 **问题**
 - `Practice.vue` / `Review.vue` 的 `pool / curIdx / answers / round` 都在组件内，路由一离开本轮消失。
@@ -223,7 +227,9 @@
 
 ---
 
-### [ ] FE-P0-05 刷题 / 复习配置记忆 + 可用题量预览
+### [x] FE-P0-05 刷题 / 复习配置记忆 + 可用题量预览
+
+> ✅ 已完成。落地：`src/stores/runConfig.js`（三入口共享的题型/题量记忆，带版本号 + 归一化，脏数据回落默认、写失败静默）+ `availableCountOf`/`plannedCountOf`；Practice / Exam / Review 接入，题量标签右侧显示「可用 N 题」并随题库/题型实时刷新，0 题时禁用开始并给「去录题/去导入」入口，「全部」超 500 时给上限提示。守卫：`tests/unit/run-config.test.js`。
 
 **问题**
 - 刷题只记忆 `mode`；`selectedTypes` 每次全选，`count` 每次 5。
@@ -248,7 +254,9 @@
 
 ---
 
-### [ ] FE-P0-06 练习导航 + 复习间隔预览 / 撤销
+### [x] FE-P0-06 练习导航 + 复习间隔预览 / 撤销
+
+> ✅ 已完成。落地：Practice 加「上一题 / 标记 / 跳过」与「已答 N / 剩余 M」，跳过题在本轮末尾回卷补做；Review 四键显示下次间隔（`src/utils/reviewPreview.js`，只计算不写库），评分后 5 秒可撤销。后端新增 `review_revert`（删流水 + 写回评分前卡片快照，不改 schema）。守卫：`tests/unit/review-preview.test.js` + `practice.rs` 撤销三例。
 
 **问题**
 - 练习模式没有上一题、跳过、标记；只有背题模式有上一题。
@@ -278,7 +286,9 @@
 
 ---
 
-### [ ] FE-P0-07 模考答题卡 + 历史回看
+### [x] FE-P0-07 模考答题卡 + 历史回看
+
+> ✅ 已完成。落地：`src/components/exam/ExamSheet.vue`（三态答题卡，材料题按母题分组）+ `src/utils/examSheet.js`（分组/计数/标记重映射纯逻辑）+ `src/components/exam/ExamHistory.vue`（历史回看）+ `src/components/exam/ExamTrend.vue`（纯 SVG 趋势图，不引图表库）+ `src/utils/examTrend.js`；后端新增 `exam_detail(exam_id)`（复用 detail_json，LEFT JOIN 容忍删题，不改 schema）。守卫：`tests/unit/exam-sheet.test.js`、`tests/unit/exam-trend.test.js` + `practice.rs` exam_detail 两例。
 
 **问题**
 - 只有上一题/下一题，没有答题卡、标记、跳题；交卷前无法总览未答分布。
@@ -795,3 +805,4 @@
 |---|---|---|
 | v1 | 2026-10-29 | 初版：基于前端功能设计评审拆解 P0/P1/P2 与架构任务 |
 | v2 | 2026-10-30 | FE-ARCH-01~06、08 完成并勾选（题型常量/QuestionRunner/注册表统一判分/路由 meta/统一会话 store/API 契约收敛/渲染性能）；FE-ARCH-07 按决策推迟 |
+| v3 | 2026-10-30 | FE-P0-03~07 完成并勾选（录题防丢失/会话离开提示/配置记忆与可用题量/练习导航与复习间隔撤销/模考答题卡与历史回看）；后端新增 `review_revert` 与 `exam_detail`，未改 schema |
