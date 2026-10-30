@@ -300,26 +300,26 @@ mod tests {
         insert_question(&conn, &qb).unwrap();
 
         // questions_list（分页形状 {total, items}）
-        let all = questions_list_impl(&conn, None, None, None, None, None, false).unwrap();
+        let all = questions_list_impl(&conn, &QuestionListQuery::default()).unwrap();
         assert_eq!(all["total"], 2);
         assert_eq!(all["items"].as_array().unwrap().len(), 2);
-        let in_b = questions_list_impl(&conn, None, None, Some(bid.clone()), None, None, false).unwrap();
+        let in_b = questions_list_impl(&conn, &QuestionListQuery { bank_id: Some(bid.clone()), ..Default::default() }).unwrap();
         assert_eq!(in_b["total"], 1);
         assert_eq!(in_b["items"][0]["id"], "q_b_1");
         assert_eq!(in_b["items"][0]["bank_id"], bid);
-        let in_default = questions_list_impl(&conn, None, None, Some("bank_default".to_string()), None, None, false).unwrap();
+        let in_default = questions_list_impl(&conn, &QuestionListQuery { bank_id: Some("bank_default".to_string()), ..Default::default() }).unwrap();
         assert_eq!(in_default["total"], 1);
         assert_eq!(in_default["items"][0]["id"], "q_test_1");
-        let as_all = questions_list_impl(&conn, None, None, Some(String::new()), None, None, false).unwrap();
+        let as_all = questions_list_impl(&conn, &QuestionListQuery { bank_id: Some(String::new()), ..Default::default() }).unwrap();
         assert_eq!(as_all["total"], 2);
         // 分页：limit 1 取两页，total 不变
-        let p1 = questions_list_impl(&conn, None, None, None, Some(1), Some(0), false).unwrap();
-        let p2 = questions_list_impl(&conn, None, None, None, Some(1), Some(1), false).unwrap();
+        let p1 = questions_list_impl(&conn, &QuestionListQuery { limit: Some(1), offset: Some(0), ..Default::default() }).unwrap();
+        let p2 = questions_list_impl(&conn, &QuestionListQuery { limit: Some(1), offset: Some(1), ..Default::default() }).unwrap();
         assert_eq!(p1["total"], 2);
         assert_eq!(p1["items"].as_array().unwrap().len(), 1);
         assert_eq!(p2["items"].as_array().unwrap().len(), 1);
         assert_ne!(p1["items"][0]["id"], p2["items"][0]["id"]);
-        let p3 = questions_list_impl(&conn, None, None, None, Some(1), Some(2), false).unwrap();
+        let p3 = questions_list_impl(&conn, &QuestionListQuery { limit: Some(1), offset: Some(2), ..Default::default() }).unwrap();
         assert_eq!(p3["total"], 2);
         assert_eq!(p3["items"].as_array().unwrap().len(), 0);
 

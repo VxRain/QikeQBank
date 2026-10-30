@@ -12,6 +12,10 @@ export function list(params = {}) {
   if (params.limit != null) args.limit = params.limit
   if (params.offset != null) args.offset = params.offset
   if (params.summary != null) args.summary = params.summary
+  if (params.sort) args.sort = params.sort
+  // 难度/状态为 0 或空串时视为不过滤，不正交下去
+  if (params.difficulty != null && params.difficulty !== '') args.difficulty = Number(params.difficulty)
+  if (params.status) args.status = params.status
   return cmd('questions_list', args).then(unwrap)
 }
 

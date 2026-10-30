@@ -410,7 +410,35 @@ pub(crate) fn upsert_question(conn: &Connection, q: &Value) -> Result<(), String
     .map_err(|e| format!("upsert question failed: {e}"))?;
     Ok(())
 }
+// 排序白名单：只允许下面这些键映射到固定 SQL 片段，绝不拼接用户输入。
+// 未知键直接返回 Err（而不是静默回退），避免前端拼错参数后以为排序生效。
+pub(crate) const SORT_WHITELIST: &[(&str, &str)] = &[
+    ("created_desc", "created_at DESC"),
+    ("created_asc", "created_at ASC"),
+    ("updated_desc", "updated_at DESC"),
+    ("difficulty_desc", "difficulty DESC, created_at DESC"),
+    ("difficulty_asc", "difficulty ASC, created_at DESC"),
+    ("score_desc", "score DESC, created_at DESC"),
+];
+
+/// 把前端排序键翻成固定 SQL 片段。None/空串 → 默认 created_desc。
+pub(crate) fn order_by_clause(sort: Option<&str>) -> Result<&'static str, String> {
+    let key = sort.map(str::trim).filter(|s| !s.is_empty());
+    let Some(key) = key else {
+        return Ok(SORT_WHITELIST[0].1);
+    };
+    SORT_WHITELIST
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, sql)| *sql)
+        .ok_or_else(|| {
+            let keys: Vec<&str> = SORT_WHITELIST.iter().map(|(k, _)| *k).collect();
+            format!("invalid sort: {key} (allowed: {})", keys.join(" / "))
+        })
+}
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri 命令签名即前端契约，不能包结构体（前端要传平铺参数）
 pub fn questions_list(
     query: Option<String>,
     type_filter: Option<String>,
@@ -418,55 +446,86 @@ pub fn questions_list(
     limit: Option<u64>,
     offset: Option<u64>,
     summary: Option<bool>,
+    sort: Option<String>,
+    difficulty: Option<i64>,
+    status: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(questions_list_impl(&conn, query, type_filter, bank_id, limit, offset, summary.unwrap_or(false))?)
+    let q = QuestionListQuery {
+        query,
+        type_filter,
+        bank_id,
+        limit,
+        offset,
+        summary: summary.unwrap_or(false),
+        sort,
+        difficulty,
+        status,
+    };
+    ok(questions_list_impl(&conn, &q)?)
+}
+
+/// 列表查询参数。集中在此，避免 impl 函数长到 lint 报 too_many_arguments，
+/// 也让测试不用每次都数 9 个 None。
+#[derive(Default)]
+pub(crate) struct QuestionListQuery {
+    pub query: Option<String>,
+    pub type_filter: Option<String>,
+    pub bank_id: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+    pub summary: bool,
+    pub sort: Option<String>,
+    pub difficulty: Option<i64>,
+    pub status: Option<String>,
 }
 
 pub(crate) fn questions_list_impl(
     conn: &Connection,
-    query: Option<String>,
-    type_filter: Option<String>,
-    bank_id: Option<String>,
-    limit: Option<u64>,
-    offset: Option<u64>,
-    summary: bool,
+    q: &QuestionListQuery,
 ) -> Result<Value, String> {
-    let query = query.filter(|s| !s.trim().is_empty());
-    let type_filter = type_filter.filter(|s| !s.is_empty());
-    let bank_id = bank_id.filter(|s| !s.is_empty());
-    let limit = limit.unwrap_or(50).min(500) as i64;
-    let offset = offset.unwrap_or(0) as i64;
+    let query = q.query.clone().filter(|s| !s.trim().is_empty());
+    let type_filter = q.type_filter.clone().filter(|s| !s.is_empty());
+    let bank_id = q.bank_id.clone().filter(|s| !s.is_empty());
+    let status = q.status.clone().filter(|s| !s.trim().is_empty());
+    let difficulty = q.difficulty;
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let offset = q.offset.unwrap_or(0) as i64;
+    let summary = q.summary;
+    // 排序先解析：非法键直接报错，不要先查 COUNT 白跑一趟
+    let order_by = order_by_clause(q.sort.as_deref())?;
     let where_sql = "(?1 IS NULL OR plain_text LIKE '%'||?1||'%')
            AND (?2 IS NULL OR type = ?2)
-           AND (?3 IS NULL OR bank_id = ?3)";
+           AND (?3 IS NULL OR bank_id = ?3)
+           AND (?4 IS NULL OR difficulty = ?4)
+           AND (?5 IS NULL OR status = ?5)";
     let total: i64 = conn
         .query_row(
             &format!("SELECT COUNT(*) FROM questions WHERE {where_sql}"),
-            params![query, type_filter, bank_id],
+            params![query, type_filter, bank_id, difficulty, status],
             |r| r.get(0),
         )
         .map_err(to_str)?;
-    let sql = if summary {
+    let base_sql = if summary {
         format!(
             "SELECT {SELECT_FIELDS_SUMMARY} FROM questions
              WHERE {where_sql}
-             ORDER BY created_at DESC
-             LIMIT ?4 OFFSET ?5"
+             ORDER BY {order_by}"
         )
     } else {
         format!(
             "SELECT {SELECT_FIELDS} FROM questions
              WHERE {where_sql}
-             ORDER BY created_at DESC
-             LIMIT ?4 OFFSET ?5"
+             ORDER BY {order_by}"
         )
     };
+    let sql = format!("{base_sql} LIMIT ?6 OFFSET ?7");
+    let p = params![query, type_filter, bank_id, difficulty, status, limit, offset];
     let items = if summary {
-        query_question_summaries(conn, &sql, params![query, type_filter, bank_id, limit, offset])?
+        query_question_summaries(conn, &sql, p)?
     } else {
-        query_questions(conn, &sql, params![query, type_filter, bank_id, limit, offset])?
+        query_questions(conn, &sql, p)?
     };
     Ok(json!({ "total": total, "items": items }))
 }
@@ -899,14 +958,14 @@ mod tests {
         insert_question(&conn, &mat).unwrap();
 
         // 全量模式：重字段都在
-        let full = questions_list_impl(&conn, None, None, None, None, None, false).unwrap();
+        let full = questions_list_impl(&conn, &QuestionListQuery::default()).unwrap();
         assert_eq!(full["total"], 2);
         let full_single = full["items"].as_array().unwrap().iter().find(|x| x["id"] == "q_test_1").unwrap();
         assert!(full_single.get("stem").is_some());
         assert!(full_single.get("analysis").is_some());
 
         // 摘要模式：total 一致，重字段省略，派生字段正确
-        let sum = questions_list_impl(&conn, None, None, None, None, None, true).unwrap();
+        let sum = questions_list_impl(&conn, &QuestionListQuery { summary: true, ..Default::default() }).unwrap();
         assert_eq!(sum["total"], 2);
         let items = sum["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
@@ -923,6 +982,142 @@ mod tests {
         let s_mat = items.iter().find(|x| x["id"] == "q_mat_1").unwrap();
         assert_eq!(s_mat["children_count"], 2);
         assert!((s_mat["children_score"].as_f64().unwrap() - 5.0).abs() < 1e-9);
+    }
+
+    /// 排序白名单：未知键必须报错（不能静默回退成默认序），已知键与空值才给 SQL
+    #[test]
+    fn order_by_clause_is_whitelisted() {
+        // 默认与空串都回到 created_desc
+        assert_eq!(order_by_clause(None).unwrap(), "created_at DESC");
+        assert_eq!(order_by_clause(Some("")).unwrap(), "created_at DESC");
+        assert_eq!(order_by_clause(Some("   ")).unwrap(), "created_at DESC");
+        // 已知键各自映射到固定片段
+        assert_eq!(order_by_clause(Some("updated_desc")).unwrap(), "updated_at DESC");
+        assert_eq!(
+            order_by_clause(Some("difficulty_desc")).unwrap(),
+            "difficulty DESC, created_at DESC"
+        );
+        assert_eq!(order_by_clause(Some("score_desc")).unwrap(), "score DESC, created_at DESC");
+        // 越界/注入类输入一律 Err，错误里要列出非法键与允许列表
+        for bad in [
+            "created_at; DROP TABLE questions",
+            "id",
+            "updated_at DESC",
+            "CREATED_DESC",
+        ] {
+            let err = order_by_clause(Some(bad)).unwrap_err();
+            assert!(err.contains("invalid sort"), "bad key {bad:?} -> {err}");
+            assert!(err.contains("created_desc"), "err should list allowed keys: {err}");
+        }
+    }
+
+    /// 难度 / 状态筛选 + 排序在真实 SQL 上生效；非法 sort 时 list_impl 直接报错
+    #[test]
+    fn questions_list_filters_by_difficulty_status_and_sorts() {
+        let conn = test_conn();
+        // 三题：难度 1/3/5，状态 published/draft/published，created_at 递增
+        for (i, (diff, status, score)) in
+            [(1, "published", 2), (3, "draft", 5), (5, "published", 1)].iter().enumerate()
+        {
+            let mut q = sample_question();
+            q["id"] = json!(format!("q{i}"));
+            q["difficulty"] = json!(diff);
+            q["status"] = json!(status);
+            q["score"] = json!(score);
+            q["created_at"] = json!(format!("2026-09-1{i}T00:00:00.000Z"));
+            q["updated_at"] = json!(format!("2026-09-1{i}T00:00:00.000Z"));
+            insert_question(&conn, &q).unwrap();
+        }
+        let ids = |v: &Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // 默认序：created_at DESC
+        let d = questions_list_impl(&conn, &QuestionListQuery { summary: true, ..Default::default() }).unwrap();
+        assert_eq!(ids(&d), vec!["q2", "q1", "q0"]);
+        // created_asc 反转
+        let a = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, sort: Some("created_asc".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(ids(&a), vec!["q0", "q1", "q2"]);
+        // difficulty_desc
+        let dd = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, sort: Some("difficulty_desc".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(ids(&dd), vec!["q2", "q1", "q0"]);
+        // score_desc：score 1/5/2 -> q1, q0, q2
+        let sd = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, sort: Some("score_desc".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(ids(&sd), vec!["q1", "q0", "q2"]);
+
+        // 难度筛选：total 跟着筛选走，不是全表数
+        let by_diff = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, difficulty: Some(3), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(by_diff["total"], 1);
+        assert_eq!(ids(&by_diff), vec!["q1"]);
+        // 状态筛选
+        let by_status = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, status: Some("draft".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(by_status["total"], 1);
+        assert_eq!(ids(&by_status), vec!["q1"]);
+        // 难度 + 状态叠加：无交集时 total=0
+        let both = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, difficulty: Some(1), status: Some("draft".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(both["total"], 0);
+        assert!(ids(&both).is_empty());
+        // 空串状态视为不过滤
+        let blank = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, status: Some("  ".into()), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(blank["total"], 3);
+
+        // 非法 sort：list_impl 也必须 Err（先解析再查 COUNT）
+        let err = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, sort: Some("bogus".into()), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(err.contains("invalid sort"), "{err}");
+
+        // 筛选 + 排序 + 分页 同时生效
+        let page = questions_list_impl(
+            &conn,
+            &QuestionListQuery {
+                limit: Some(1),
+                offset: Some(1),
+                summary: true,
+                sort: Some("created_asc".into()),
+                status: Some("published".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // published = q0, q2 -> asc 第 2 页第 1 条是 q2；total 反映筛选后总数
+        assert_eq!(page["total"], 2);
+        assert_eq!(ids(&page), vec!["q2"]);
     }
 
     #[test]

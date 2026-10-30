@@ -30,9 +30,20 @@
             @keyup.enter="search"
           />
         </div>
-        <select v-model="type" class="select min-w-[130px]" @change="search">
+        <select v-model="type" class="select min-w-[130px]" @change="onFilterChange">
           <option value="">全部类型</option>
           <option v-for="t in QUESTION_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+        </select>
+        <select v-model="difficulty" class="select min-w-[110px]" @change="onFilterChange">
+          <option value="">全部难度</option>
+          <option v-for="d in DIFFICULTY_CHOICES" :key="d" :value="String(d)">难度 {{ d }}</option>
+        </select>
+        <select v-model="status" class="select min-w-[110px]" @change="onFilterChange">
+          <option value="">全部状态</option>
+          <option v-for="s in STATUS_OPTIONS" :key="s.value" :value="s.value">{{ s.label }}</option>
+        </select>
+        <select v-model="sort" class="select min-w-[120px]" @change="onFilterChange">
+          <option v-for="s in SORT_OPTIONS" :key="s.value" :value="s.value">{{ s.label }}</option>
         </select>
         <button class="btn btn-primary" @click="search">
           <i class="i-lucide-search" />搜索
@@ -81,13 +92,28 @@
               </th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 80px">类型</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">难度</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">分值</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 240px">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="questions.length === 0">
-              <td colspan="5" class="text-center py-6 text-muted">暂无数据</td>
+              <td colspan="6" class="text-center py-6 text-muted">
+                <div v-if="isFiltered" class="flex flex-col items-center gap-3 py-2">
+                  <i class="i-lucide-search-x text-[24px]" />
+                  <div>没有符合当前筛选条件的试题</div>
+                  <button type="button" class="btn btn-small" @click="reset"><i class="i-lucide-rotate-ccw" />清除筛选</button>
+                </div>
+                <div v-else class="flex flex-col items-center gap-3 py-2">
+                  <i class="i-lucide-folder-open text-[24px]" />
+                  <div>这个题库还没有试题</div>
+                  <div class="flex gap-2">
+                    <button type="button" class="btn btn-primary btn-small" @click="onAdd"><i class="i-lucide-plus" />新增试题</button>
+                    <button type="button" class="btn btn-small" @click="showImport = true"><i class="i-lucide-file-up" />导入试题</button>
+                  </div>
+                </div>
+              </td>
             </tr>
             <template v-for="q in questions" :key="q.id">
             <tr class="transition-[background-color] duration-100 hover:bg-card-hover" :class="selected.has(q.id) && 'bg-primary-bg'">
@@ -96,6 +122,7 @@
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
               <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
+              <td class="px-3.5 py-3 border-b border-line"><span class="difficulty-dots" :title="'难度 ' + (q.difficulty ?? 2) + ' / 5'"><i v-for="n in 5" :key="n" :class="['dot', n <= (q.difficulty ?? 2) && 'on']" /></span></td>
               <td class="px-3.5 py-3 border-b border-line">{{ displayScore(q) }}</td>
               <td class="px-3.5 py-3 border-b border-line">
                 <div class="flex gap-1.5 flex-wrap">
@@ -107,7 +134,7 @@
               </td>
             </tr>
             <tr v-if="previewId === q.id" :key="q.id + '_preview'">
-              <td colspan="5" class="px-3.5 py-3 border-b border-line bg-bg-accent">
+              <td colspan="6" class="px-3.5 py-3 border-b border-line bg-bg-accent">
                 <div v-if="previewLoading && !previewCache[q.id]" class="text-muted py-4 flex items-center gap-2">
                   <i class="i-lucide-loader-circle animate-spin" />加载中...
                 </div>
@@ -119,7 +146,7 @@
         </table>
       </div>
 
-      <div v-if="!loading && !error && total > 0" class="flex items-center justify-center gap-3 py-4">
+      <div v-if="!loading && !error && total > 0" class="flex items-center justify-center gap-3 py-4 flex-wrap">
         <button type="button" class="btn btn-small" :disabled="page <= 1" @click="gotoPage(page - 1)">
           <i class="i-lucide-chevron-left" />上一页
         </button>
@@ -127,6 +154,9 @@
         <button type="button" class="btn btn-small" :disabled="page >= pageCount" @click="gotoPage(page + 1)">
           下一页<i class="i-lucide-chevron-right" />
         </button>
+        <select v-model.number="pageSize" class="select w-[110px] text-[13px]" title="每页条数" @change="onPageSizeChange">
+          <option v-for="n in PAGE_SIZE_CHOICES" :key="n" :value="n">{{ n }} 条/页</option>
+        </select>
       </div>
       </template>
       </template>
@@ -143,21 +173,41 @@ import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
+import {
+  SORT_OPTIONS,
+  DIFFICULTY_CHOICES,
+  STATUS_OPTIONS,
+  PAGE_SIZE_CHOICES,
+  DEFAULT_PAGE_SIZE,
+  emptyFilter,
+  normalizeFilter,
+  loadFilter,
+  saveFilter,
+  clampPage
+} from '@/stores/listFilter.js'
 
 const route = useRoute()
 const router = useRouter()
 const query = ref('')
 const type = ref('')
+const difficulty = ref('')
+const status = ref('')
+const sort = ref(emptyFilter().sort)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
 const questions = ref([])
 const showImport = ref(false)
-const PAGE_SIZE = 50
 const page = ref(1)
 const total = ref(0)
 const previewId = ref(null)
 // 摘要列表不含题面详情，预览时按需拉全量并缓存
 const previewCache = ref({})
 const previewLoading = ref(false)
-const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+// pageSize 可改，所以页数必须跟它联动（旧实现写死 PAGE_SIZE）
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / (pageSize.value || DEFAULT_PAGE_SIZE))))
+// 当前是否有筛选（用于区分「库里没题」与「筛没了」两种空态）
+const isFiltered = computed(
+  () => !!(query.value.trim() || type.value || difficulty.value || status.value)
+)
 // 本页题库上下文：只从 ?bank= 来（从题库页进入），无选择器；直访无 bank 则提示去挑库
 const bankId = ref('')
 const bankName = computed(() => bankStore.banks.find((x) => x.id === bankId.value)?.name || '')
@@ -361,17 +411,33 @@ async function fetchList() {
     const params = {}
     if (query.value.trim()) params.query = query.value.trim()
     if (type.value) params.type = type.value
+    if (difficulty.value) params.difficulty = difficulty.value
+    if (status.value) params.status = status.value
     params.bankId = bankId.value
-    params.limit = PAGE_SIZE
-    params.offset = (page.value - 1) * PAGE_SIZE
+    params.limit = pageSize.value
+    params.offset = (page.value - 1) * pageSize.value
     params.summary = true
+    params.sort = sort.value
     // 契约：questions_list 经 bridge.unwrap 拆包后固定为 {total, items}
     const data = await list(params)
     total.value = Number(data?.total) || 0
+
+    // 页码收敛：删掉末页最后一题 / 换窄筛选后，page 可能已越界（「第 3 / 2 页」）
+    const safe = clampPage(page.value, total.value, pageSize.value)
+    if (safe !== page.value) {
+      page.value = safe
+      loading.value = false
+      // 递归重查一次真实数据；若再次越界说明总数据在变，clampPage 会一路收敛到 1
+      return fetchList()
+    }
+
     questions.value = Array.isArray(data?.items) ? data.items : []
+    persistFilter()
   } catch (e) {
     console.error(e)
     error.value = e?.message || '加载失败'
+    // 排序参数被后端拒绝时不隐藏问题：提示出来，避免用户以为排序生效了
+    if (/invalid sort/i.test(error.value)) toast(error.value, 'error')
   } finally {
     loading.value = false
     clearSelection()
@@ -381,8 +447,32 @@ async function fetchList() {
   }
 }
 
+/** 把当前筛选条件写进 localStorage（按 页:题库 分键） */
+function persistFilter() {
+  if (!bankId.value) return
+  saveFilter('list', bankId.value, {
+    query: query.value,
+    type: type.value,
+    difficulty: difficulty.value,
+    status: status.value,
+    sort: sort.value,
+    pageSize: pageSize.value
+  })
+}
+
+/** 筛选条件变更：一律回到第 1 页（否则会停在无效页） */
+function onFilterChange() {
+  page.value = 1
+  fetchList()
+}
+
+function onPageSizeChange() {
+  page.value = 1
+  fetchList()
+}
+
 function gotoPage(p) {
-  const next = Math.min(Math.max(1, p), pageCount.value)
+  const next = clampPage(p, total.value, pageSize.value)
   if (next === page.value && questions.value.length) return
   page.value = next
   fetchList().then(() => window.scrollTo(0, 0))
@@ -399,8 +489,13 @@ function onAdd() {
 }
 
 function reset() {
-  query.value = ''
-  type.value = ''
+  const def = emptyFilter()
+  query.value = def.query
+  type.value = def.type
+  difficulty.value = def.difficulty
+  status.value = def.status
+  sort.value = def.sort
+  pageSize.value = def.pageSize
   page.value = 1
   fetchList()
 }
@@ -434,6 +529,14 @@ onMounted(async () => {
   // 题库上下文只认 ?bank=（须仍存在），直访无 bank 则提示去题库页挑库
   const qb = route.query.bank
   bankId.value = typeof qb === 'string' && bankExists(qb) ? qb : ''
+  // 刷新/返回后恢复上次筛选（按 页:题库 分键，不同题库互不影响）
+  const saved = normalizeFilter(loadFilter('list', bankId.value))
+  query.value = saved.query
+  type.value = saved.type
+  difficulty.value = saved.difficulty
+  status.value = saved.status
+  sort.value = saved.sort
+  pageSize.value = saved.pageSize
   await fetchList()
 })
 
@@ -442,4 +545,22 @@ watch(type, () => {
   // already triggered by @change, keep for programmatic changes
 })
 </script>
+
+<style scoped>
+/* 难度点阵：5 个点，亮起数 = difficulty（复用全局 CSS 变量，不另起色板） */
+.difficulty-dots {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+.difficulty-dots .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.difficulty-dots .dot.on {
+  background: var(--primary);
+}
+</style>
 

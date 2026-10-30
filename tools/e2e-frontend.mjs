@@ -64,14 +64,23 @@ function mockScript() {
   const doc = (t) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] })
   const bank = { id: 'bank_default', name: '默认题库', description: '', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
   const mk = (i, t) => ({
-    id: 'q' + i, bank_id: 'bank_default', type: t || 'single', version: 2, difficulty: 2, score: 5,
-    status: 'published', stem: doc('第' + i + '题'),
+    id: 'q' + i, bank_id: 'bank_default', type: t || 'single', version: 2,
+    // 难度/状态各不同，供 FE-P0-09 的筛选与排序验证（q1..q3 难度 1..3，q4.. 循环）
+    difficulty: ((i - 1) % 5) + 1,
+    score: 5,
+    status: i % 3 === 0 ? 'draft' : 'published', stem: doc('第' + i + '题'),
     options: [{ id: 'o1', content: doc('A') }, { id: 'o2', content: doc('B') }],
     answer: { ids: ['o1'] }, analysis: doc('解析' + i), plain_text: '第' + i + '题',
     created_at: '2026-01-01T00:00:00.000Z',
+    // created_at 递增，让 created_asc/desc 排序结果确定可断言
+    updated_at: '2026-01-0' + (1 + (i % 9)) + 'T00:00:00.000Z',
     fsrs: { due_at: '2026-01-01T00:00:00.000Z', stability: 2.5, difficulty: 5, reps: 2, lapses: 0, state: 2, learning_steps: 0, scheduled_days: 3, last_reviewed_at: '2026-01-01T00:00:00.000Z', last_result: 'good' }
   })
-  const qs = Array.from({ length: 10 }, (_, k) => mk(k + 1))
+  const qs = Array.from({ length: 10 }, (_, k) => {
+    const q = mk(k + 1)
+    q.created_at = `2026-01-${String(k + 1).padStart(2, '0')}T00:00:00.000Z`
+    return q
+  })
   const sessions = [
     { exam_id: 'e1', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 3, correct_count: 1, score: 5, full_score: 15 },
     { exam_id: 'e2', started_at: '2026-09-05T10:00:00.000Z', ended_at: '2026-09-05T10:20:00.000Z', item_count: 3, correct_count: 2, score: 10, full_score: 15 }
@@ -123,6 +132,29 @@ function mockScript() {
       window.__calls.push(cmd)
       switch (cmd) {
         case 'banks_list': return { success: true, data: [bank] }
+        case 'questions_list': {
+          // 真实实现一遍筛选/排序/分页，E2E 才能验「参数真的生效」而不是只看请求发出去了
+          window.__listArgs = args
+          let items = qs.slice()
+          if (args?.query) items = items.filter((q) => String(q.plain_text).includes(args.query))
+          if (args?.typeFilter) items = items.filter((q) => q.type === args.typeFilter)
+          if (args?.difficulty != null) items = items.filter((q) => q.difficulty === args.difficulty)
+          if (args?.status) items = items.filter((q) => q.status === args.status)
+          const by = {
+            created_desc: (a, b) => (a.created_at < b.created_at ? 1 : -1),
+            created_asc: (a, b) => (a.created_at > b.created_at ? 1 : -1),
+            updated_desc: (a, b) => (a.updated_at < b.updated_at ? 1 : -1),
+            difficulty_desc: (a, b) => b.difficulty - a.difficulty,
+            difficulty_asc: (a, b) => a.difficulty - b.difficulty,
+            score_desc: (a, b) => (b.score || 0) - (a.score || 0)
+          }
+          items.sort(by[args?.sort] || by.created_desc)
+          const total = items.length
+          const limit = args?.limit ?? 50
+          const offset = args?.offset ?? 0
+          return { success: true, data: { total, items: items.slice(offset, offset + limit) } }
+        }
+        case 'questions_remove': window.__removes = (window.__removes || 0) + 1; return { success: true, data: { id: args?.id } }
         case 'questions_get': return { success: true, data: qs[0] }
         case 'questions_create': window.__creates++; window.__lastCreate = args; return { success: true, data: { id: 'qNew' } }
         case 'questions_update': window.__lastUpdate = args; return { success: true, data: {} }
@@ -199,6 +231,81 @@ try {
   await page.goto(`${BASE}/#/banks`)
   await page.waitForTimeout(1500)
   await page.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
+
+  // ── FE-P0-09：列表排序 / 筛选 / 页码收敛 ──
+  console.log('\nFE-P0-09 列表排序与筛选')
+  await goto(page, '#/banks')
+  await goto(page, '#/library?bank=bank_default')
+  const listBody = await page.locator('body').innerText()
+  ok('列表显示每页条数选择', /条\/页/.test(listBody))
+  ok('排序下拉默认为「最新创建」', /最新创建/.test(listBody))
+
+  // 排序：改 created_asc 后首行应是第 1 题（created_at 最早）
+  const sortSel = page.locator('select').filter({ hasText: '最新创建' }).first()
+  if (await sortSel.count()) {
+    await sortSel.selectOption('created_asc')
+    await page.waitForTimeout(900)
+  }
+  const ascArgs = await page.evaluate(() => window.__listArgs)
+  ok('排序参数下发 created_asc', ascArgs?.sort === 'created_asc', JSON.stringify(ascArgs?.sort))
+  const firstRowAsc = await page.locator('tbody tr').first().innerText()
+  ok('created_asc 首行为第 1 题', /第1题/.test(firstRowAsc), firstRowAsc.slice(0, 40))
+
+  // 难度筛选：只应剩下难度 3 的题（q3/q8），且参数真的下发了
+  const diffSel = page.locator('select').filter({ hasText: '全部难度' }).first()
+  if (await diffSel.count()) {
+    await diffSel.selectOption('3')
+    await page.waitForTimeout(900)
+  }
+  const diffArgs = await page.evaluate(() => window.__listArgs)
+  ok('难度参数下发为数字 3', diffArgs?.difficulty === 3, String(diffArgs?.difficulty))
+  const rowsAfterDiff = await page.locator('tbody tr').count()
+  ok('难度 3 筛选后只剩 2 题', rowsAfterDiff === 2, `实际 ${rowsAfterDiff} 行`)
+
+  // 状态筛选叠加：难度 3 且 draft（q3 是 draft，q8 不是）
+  const statusSel = page.locator('select').filter({ hasText: '全部状态' }).first()
+  if (await statusSel.count()) {
+    await statusSel.selectOption('draft')
+    await page.waitForTimeout(900)
+  }
+  const bothArgs = await page.evaluate(() => window.__listArgs)
+  ok('状态参数下发', bothArgs?.status === 'draft', String(bothArgs?.status))
+  const rowsBoth = await page.locator('tbody tr').count()
+  ok('难度+状态叠加后只剩 1 题', rowsBoth === 1, `实际 ${rowsBoth} 行`)
+
+  // 页码收敛：总数 1 条而当前页 > 总页数时须自动回退（这里验 clampPage 已接线）
+  const pageInfo = await page.locator('body').innerText()
+  ok('页码不出现「第 2 / 1 页」这种越界值', !/第 \d+ \/ [1-9]\d* 页/.test(pageInfo) || /第 1 \/ 1 页/.test(pageInfo),
+    pageInfo.match(/第 \d+ \/ \d+ 页[^\n]*/)?.[0] || '')
+
+  // 筛选持久化：重新进入列表页后筛选条件应保留
+  await goto(page, '#/banks')
+  await goto(page, '#/library?bank=bank_default')
+  const restoredDiff = await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()
+  const restoredStatus = await page.locator('select').filter({ hasText: '全部状态' }).first().inputValue()
+  ok('刷新后难度筛选保留', restoredDiff === '3', `实际 ${restoredDiff}`)
+  ok('刷新后状态筛选保留', restoredStatus === 'draft', `实际 ${restoredStatus}`)
+  const persisted = await page.evaluate(() => localStorage.getItem('qbank.listFilter.v1.list:bank_default'))
+  ok('筛选已写入 localStorage', !!persisted && /difficulty/.test(persisted), String(persisted).slice(0, 60))
+
+  // 重置后回到默认
+  await page.getByRole('button', { name: '重置' }).click()
+  await page.waitForTimeout(900)
+  const afterReset = await page.locator('body').innerText()
+  ok('重置后回到全部难度', (await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()) === '')
+  ok('重置后列表恢复 10 题', (await page.locator('tbody tr').count()) === 10, afterReset.match(/\d+ 题/)?.[0] || '')
+
+  // 空态 CTA：筛选不到时给「清除筛选」，而非硬说「暂无数据」
+  await page.locator('select').filter({ hasText: '全部难度' }).first().selectOption('1')
+  await page.waitForTimeout(400)
+  await page.locator('input[placeholder="搜索题干..."]').fill('不存在的关键词')
+  await page.getByRole('button', { name: '搜索' }).first().click()
+  await page.waitForTimeout(900)
+  const emptyBody = await page.locator('body').innerText()
+  ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件/.test(emptyBody))
+  ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
+  await page.getByRole('button', { name: '清除筛选' }).click()
+  await page.waitForTimeout(900)
 
   // ── FE-P0-03：脏徽章 / 离开确认 / Ctrl+S / 保存后清草稿 ──
   console.log('\nFE-P0-03 录题防丢失')
