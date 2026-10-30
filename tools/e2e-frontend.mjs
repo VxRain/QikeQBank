@@ -476,8 +476,10 @@ const flush = async (page, budget = 1000) => {
   } catch {
     /* 本轮没等到：交给外层 waitUntil 继续轮询，超时判定权不外借 */
   }
-  // 两帧：一帧给 Vue 的 patch，一帧给随之触发的样式/布局
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0)))))
+  // 一帧给 Vue 的 patch。
+  // 实测：waitForFunction 本身已隐含一个轮询周期，再叠「两帧」会让每次 flush 从 16.7ms
+  // 变成 33.3ms（77 次调用 = +1.3s，全量实测 +3s）。1 帧已足够：延迟矩阵 5/50/200ms 全绿。
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))))
 }
 
 /**
