@@ -125,6 +125,25 @@
 
 /** records_overview @typedef {{days:Array<Object>, by_type:Array<Object>}} RecordsOverview */
 
+/** exam_detail 逐题回看 @typedef {Object} ExamDetailItem
+ * @property {string} record_id
+ * @property {string} question_id
+ * @property {string} grade
+ * @property {number} correct
+ * @property {string} answered_at
+ * @property {number|null} elapsed_ms
+ * @property {Object|null} detail 作答详情（selected/blanks/self_grade/score_earned…）
+ * @property {Object|null} question 题目摘要（id/type/stem/answer/analysis/score）；题被删时为 null
+ */
+
+/** exam_detail @typedef {Object} ExamDetail
+ * @property {string} exam_id
+ * @property {number} item_count
+ * @property {number} score
+ * @property {number} full_score
+ * @property {ExamDetailItem[]} items
+ */
+
 /** S3 配置（sync_s3_config_get / sync_s3_config_set；secret_key 只写不回传）
  * @typedef {Object} S3Settings
  * @property {string} endpoint

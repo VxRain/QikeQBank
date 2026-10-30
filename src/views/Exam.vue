@@ -125,15 +125,24 @@
       <div class="card-head">
         <h2 class="section-title flex items-center gap-2"><i class="i-lucide-history text-primary" />最近模考</h2>
       </div>
+
+      <!-- FE-P0-07b：成绩趋势（纯 SVG） -->
+      <ExamTrend v-if="history.length" :sessions="history" class="mb-4" />
+
       <div class="flex flex-col divide-y divide-line">
         <div v-for="h in history" :key="h.exam_id" class="flex items-center justify-between gap-3 py-2.5">
           <div class="min-w-0">
             <div class="text-[14px] font-500 text-text">{{ fmtDate(h.started_at) }}</div>
             <div class="text-[12px] text-muted mt-0.5">{{ h.item_count }} 条作答 · {{ fmtDur(h) }}</div>
           </div>
-          <div class="shrink-0 text-right">
-            <div class="text-[15px] font-700 text-text">{{ fmtScore(h.score) }} <span class="text-[12px] font-500 text-muted">/ {{ fmtScore(h.full_score) }}</span></div>
-            <div class="text-[12px] text-muted mt-0.5">得分率 {{ h.full_score > 0 ? Math.round((h.score / h.full_score) * 1000) / 10 : 0 }}%</div>
+          <div class="shrink-0 flex items-center gap-3">
+            <div class="text-right">
+              <div class="text-[15px] font-700 text-text">{{ fmtScore(h.score) }} <span class="text-[12px] font-500 text-muted">/ {{ fmtScore(h.full_score) }}</span></div>
+              <div class="text-[12px] text-muted mt-0.5">得分率 {{ h.full_score > 0 ? Math.round((h.score / h.full_score) * 1000) / 10 : 0 }}%</div>
+            </div>
+            <button type="button" class="btn" title="展开逐题回看" @click="openHistory(h.exam_id)">
+              <i class="i-lucide-search" />回看
+            </button>
           </div>
         </div>
       </div>
@@ -318,6 +327,13 @@
       @jump-first-unanswered="jumpFirstUnanswered"
       @submit="sheetOpen = false; confirmSubmit()"
     />
+
+    <!-- 历史回看（只吃 exam_detail，不依赖内存 sheet） -->
+    <ExamHistory
+      :open="historyOpen"
+      :exam-id="historyExamId"
+      @close="historyOpen = false"
+    />
   </div>
 </template>
 
@@ -337,6 +353,8 @@ import { buildExamDetail, summarizePaper, ratioToGrade } from '@/utils/grading.j
 import { gradeQuestion } from '@/utils/gradeQuestion.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import ExamSheet from '@/components/exam/ExamSheet.vue'
+import ExamTrend from '@/components/exam/ExamTrend.vue'
+import ExamHistory from '@/components/exam/ExamHistory.vue'
 import { hasAnswerEntry, remapFlaggedUids, firstUnansweredIndex } from '@/utils/examSheet.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
@@ -426,6 +444,13 @@ const startedAt = ref(0)
 const remainingMs = ref(0)
 const sheet = ref(null)
 const history = ref([])
+// FE-P0-07b：历史回看抽屉
+const historyOpen = ref(false)
+const historyExamId = ref('')
+function openHistory(examId) {
+  historyExamId.value = examId
+  historyOpen.value = true
+}
 const rowOpen = reactive(new Set())
 const materialOpen = ref(true)
 const cardRef = ref(null)

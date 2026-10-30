@@ -8,3 +8,13 @@ import { cmd, unwrap } from './bridge.js'
 export async function examSessions(limit = 10) {
   return unwrap(await cmd('exam_sessions', { limit }))
 }
+
+/**
+ * 单场模考逐题明细（FE-P0-07b 历史回看）
+ * 题目被删时 question 为 null，前端展示占位。
+ * @param {string} examId
+ * @returns {Promise<import('./types.js').ExamDetail>}
+ */
+export async function examDetail(examId) {
+  return unwrap(await cmd('exam_detail', { examId }))
+}

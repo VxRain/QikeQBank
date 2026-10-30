@@ -683,6 +683,83 @@ pub(crate) fn exam_sessions_impl(conn: &Connection, limit: Option<u64>) -> Resul
     Ok(json!({ "items": items }))
 }
 
+/// 单场模考逐题明细（FE-P0-07b）：复用 practice_records.detail_json，不建新表。
+///
+/// 返回按作答时间排序的逐题记录 + 题目摘要（题面/正确答案/解析）。
+/// 题已被删时：流水会级联删除，但历史回看不应因此整场消失——
+/// 所以这里用 LEFT JOIN，题不在则 question 为 null，前端展示「题目已删除」。
+#[tauri::command]
+pub fn exam_detail(exam_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    ok(exam_detail_impl(&conn, &exam_id)?)
+}
+
+pub(crate) fn exam_detail_impl(conn: &Connection, exam_id: &str) -> Result<Value, String> {
+    let exam_id = exam_id.trim();
+    if exam_id.is_empty() {
+        return Err("exam_id is required".to_string());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.id, p.question_id, p.grade, p.correct, p.answered_at, p.elapsed_ms,
+                    p.detail_json, q.id, q.type, q.stem_json, q.answer_json, q.analysis_json, q.score
+             FROM practice_records p
+             LEFT JOIN questions q ON q.id = p.question_id
+             WHERE p.mode = 'exam'
+               AND json_extract(p.detail_json, '$.exam_id') = ?1
+             ORDER BY p.answered_at ASC, p.id ASC",
+        )
+        .map_err(to_str)?;
+    let mut rows = stmt.query(params![exam_id]).map_err(to_str)?;
+    let mut items = Vec::new();
+    while let Some(row) = rows.next().map_err(to_str)? {
+        let detail_raw: Option<String> = row.get(6).map_err(to_str)?;
+        let detail: Value = match detail_raw {
+            Some(s) => serde_json::from_str(&s).unwrap_or(Value::Null),
+            None => Value::Null,
+        };
+        // 题目摘要：题不在（被删）时为 null，前端据此展示占位
+        let qid: Option<String> = row.get(7).map_err(to_str)?;
+        let question = if qid.is_some() {
+            json!({
+                "id": qid,
+                "type": row.get::<_, Option<String>>(8).map_err(to_str)?,
+                "stem": parse_json_opt(row.get::<_, Option<String>>(9).map_err(to_str)?),
+                "answer": parse_json_opt(row.get::<_, Option<String>>(10).map_err(to_str)?),
+                "analysis": parse_json_opt(row.get::<_, Option<String>>(11).map_err(to_str)?),
+                "score": row.get::<_, Option<f64>>(12).map_err(to_str)?,
+            })
+        } else {
+            Value::Null
+        };
+        items.push(json!({
+            "record_id": row.get::<_, String>(0).map_err(to_str)?,
+            "question_id": row.get::<_, String>(1).map_err(to_str)?,
+            "grade": row.get::<_, String>(2).map_err(to_str)?,
+            "correct": row.get::<_, i64>(3).map_err(to_str)?,
+            "answered_at": row.get::<_, String>(4).map_err(to_str)?,
+            "elapsed_ms": row.get::<_, Option<i64>>(5).map_err(to_str)?,
+            "detail": detail,
+            "question": question,
+        }));
+    }
+    // 汇总与本场逐题明细同源，保证列表页与回看页数字一致
+    let total = items.len() as i64;
+    let mut earned = 0.0f64;
+    let mut full = 0.0f64;
+    for it in &items {
+        earned += it["detail"]["score_earned"].as_f64().unwrap_or(0.0);
+        full += it["detail"]["full_score"].as_f64().unwrap_or(0.0);
+    }
+    Ok(json!({
+        "exam_id": exam_id,
+        "item_count": total,
+        "score": earned,
+        "full_score": full,
+        "items": items,
+    }))
+}
+
 /// 批量导入：一次调用入库多题（文件导入用）。逐条独立成功/跳过/失败，可重入（库内 plain_text 完全一致视为重复跳过）。
 /// 返回 {batch_id, items:[{index,status:'inserted'|'duplicate'|'error',id?,message?}]}
 #[tauri::command]
@@ -1028,6 +1105,75 @@ mod tests {
         assert_eq!(items[1]["started_at"], "2026-09-15T10:00:00.000Z");
         let limited = exam_sessions_impl(&conn, Some(1)).unwrap();
         assert_eq!(limited["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn exam_detail_returns_items_in_order_with_question_summary() {
+        // 回看：逐题明细按作答时间排序，带题目摘要（题面/答案/解析），
+        // 汇总与本场流水同源（与 exam_sessions 数字一致）
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_d1");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rec = |id: &str, earned: f64, full: f64, at: &str, selected: &str| {
+            conn.execute(
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at)
+                 VALUES (?1, 'q_d1', 'exam', 'good', 1, ?2, ?3, ?2)",
+                params![
+                    id,
+                    at,
+                    format!("{{\"exam_id\":\"e1\",\"exam_seq\":1,\"score_earned\":{earned},\"full_score\":{full},\"selected\":[\"{selected}\"]}}"),
+                ],
+            )
+            .unwrap();
+        };
+        // 故意乱序插入：输出必须按 answered_at 升序
+        rec("r2", 0.0, 5.0, "2026-09-15T10:05:00.000Z", "o2");
+        rec("r1", 5.0, 5.0, "2026-09-15T10:00:00.000Z", "o1");
+
+        let v = exam_detail_impl(&conn, "e1").unwrap();
+        assert_eq!(v["exam_id"], "e1");
+        assert_eq!(v["item_count"], 2);
+        assert_eq!(v["score"], 5.0);
+        assert_eq!(v["full_score"], 10.0);
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["record_id"], "r1", "按时间升序，先答的在前");
+        assert_eq!(items[1]["record_id"], "r2");
+        // 题目摘要可用于回看展示
+        assert_eq!(items[0]["question"]["id"], "q_d1");
+        assert_eq!(items[0]["question"]["type"], "single");
+        assert!(items[0]["question"]["stem"].is_object());
+        assert!(items[0]["question"]["answer"].is_object());
+        // 作答详情原样带回
+        assert_eq!(items[0]["detail"]["selected"][0], "o1");
+        assert_eq!(items[0]["detail"]["exam_seq"], 1);
+    }
+
+    #[test]
+    fn exam_detail_handles_missing_question_and_unknown_exam() {
+        let conn = test_conn();
+        let mut q = sample_question();
+        q["id"] = json!("q_d2");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        conn.execute(
+            "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at)
+             VALUES ('r3', 'q_d2', 'exam', 'good', 1, '2026-09-15T10:00:00.000Z', '{\"exam_id\":\"e9\",\"score_earned\":3,\"full_score\":5}', '2026-09-15T10:00:00.000Z')",
+            [],
+        ).unwrap();
+        // 未知场次：空列表而不是报错
+        let empty = exam_detail_impl(&conn, "nope").unwrap();
+        assert_eq!(empty["item_count"], 0);
+        assert_eq!(empty["items"].as_array().unwrap().len(), 0);
+        // 空 exam_id：响亮失败
+        assert!(exam_detail_impl(&conn, "   ").is_err());
+
+        // 题被删：LEFT JOIN 保留流水，question 为 null（历史回看不消失）
+        conn.execute("DELETE FROM questions WHERE id = 'q_d2'", []).unwrap();
+        let gone = exam_detail_impl(&conn, "e9").unwrap();
+        assert_eq!(gone["item_count"], 0, "删题会级联删流水，场次自然收敛");
     }
 
     #[test]
