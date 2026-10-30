@@ -24,5 +24,13 @@
 - **schema/DDL 唯一权威 = PLAN.md §3**；`src-tauri/src/db/schema.rs` 的 MIGRATIONS 与 `tools/` 两脚本必须与其逐字符一致；改表结构必须同步三处。
 - 契约变更（命令签名/数据结构）必须同步：PLAN.md §4/§7 ↔ Rust command ↔ 前端 `src/api/*.js`。
 - 路由：hash 模式（桌面端）；题库归属走 `stores/bank.js` 的 `bankStore.currentBankId`（localStorage 记忆），新增题必须显式归属（优先 `?bank=` 路由参数）。
-- 验证门禁：`pnpm build`、`cargo test` 全绿、`pnpm lint`（cargo clippy `-D warnings`，0 警告，新增警告即失败）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
+- 验证门禁（默认档，每改必跑）：`pnpm build`、`cargo test` 全绿、`pnpm lint`（cargo clippy `-D warnings`，0 警告，新增警告即失败）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
+- **E2E 分级（禁止「改一行跑全量」）**：`tools/e2e-frontend.mjs` 支持按模块跑，模块名与 `docs/frontend-product-todo.md §0.3`、`PLAN.md §8` 三处必须逐字一致：
+  `list`(试题列表) / `batch`(批量操作) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本)。
+  - **改了哪个页面就跑哪个模块**：`pnpm test:e2e:<模块>`，如 `pnpm test:e2e:wrong`（约 2s）——这是默认动作。
+  - 不确定影响面：`pnpm test:e2e:changed`（按 git 改动自动选模块）。
+  - **全量 `pnpm test:e2e`（约 16s）只在提交前 / 发版前 / 真跨模块改动时跑**，不作为每次改动的前置门禁。
+  - `--list` 列模块；dev server 由脚本自动起或复用（`BASE_URL=` 可指向已运行实例）。
+  - 新增用例别写固定 sleep，也别用界面文案当就绪标记：`goto(page, hash)` 无需传标记，就绪判定统一走 `requireRoute()`（`document.title` = `meta.title` + ` · 奇客题库`，且 `window.__inflight === 0`），超时必抛。时间相关断言用 `page.clock.fastForward()`（仅 `form`/`review` 已启用）。理由与实测数据见 `PLAN.md §8`。
+  - 跑 e2e 前会自动执行契约守卫（`tests/unit/e2e-ready-signal.test.js`）：校验 `ROUTE_TITLE ↔ router 的 meta.title` 等跨文件契约，不过则直接中止（~0.3s），避免白跑超时。
 - 改动画风/功能前先读 PLAN.md 与 README.md，保持与既有结构一致。

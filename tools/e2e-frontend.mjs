@@ -7,17 +7,41 @@
  * mock IPC（window.__TAURI_INTERNALS__.invoke）跑真实 Vue 页面，
  * 断言关键行为，任一失败 exit 1。
  *
+ * ── 模块化（方案 A）────────────────────────────────────────────────
+ * 原来是一个 769 行的哑顺序脚本：改一行 Wrong.vue 也要跑完 list/batch/form/
+ * practice/review/exam，90 多秒；还必须手动先起 dev server，忘了就白跑。
+ *
+ * 现在每个页面对应一个模块，各模块自带导航、独立 browser context（状态互不污染），
+ * 模块名三处文档必须逐字一致（AGENTS.md / docs/frontend-product-todo.md §0.3 / PLAN.md §8）：
+ *   list     试题列表：排序 / 筛选 / 页码收敛
+ *   batch    批量操作：单次 IPC / 逐项失败重试
+ *   form     录题：脏徽章 / 离开确认 / Ctrl+S / 草稿
+ *   practice 刷题：可用题量 / 导航 / 跳过 / 离开提示
+ *   review   复习：间隔预览 / 撤销 / 最后一题
+ *   exam     模考：答题卡 / 交卷 / 历史回看
+ *   wrong    错题本：搜索 / 排序 / 统计
+ *
  * 用法：
- *   pnpm dev --port 5299 &            # 先起 dev server
- *   node tools/e2e-frontend.mjs       # 默认 http://127.0.0.1:5299
- *   BASE_URL=http://127.0.0.1:5200 node tools/e2e-frontend.mjs
+ *   pnpm test:e2e                      全量（提交前 / 发版前）
+ *   pnpm test:e2e:wrong                只跑错题本（默认动作）
+ *   pnpm test:e2e:changed              按 git 改动自动选模块
+ *   node tools/e2e-frontend.mjs --list 列模块
+ *   node tools/e2e-frontend.mjs list wrong
+ *   BASE_URL=http://127.0.0.1:5200 node tools/e2e-frontend.mjs   # 指向已运行实例
+ *
+ * dev server：脚本自动起（默认 5299）或复用已在跑的；PORT / BASE_URL 可覆盖。
  *
  * 依赖：playwright（项目未安装时脚本会到 npx 缓存里找；实在没有就明确报错并给出装法）
  */
 import { createRequire } from 'node:module'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// 项目根（本文件在 tools/ 下）
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * 解析 playwright：优先项目 node_modules，其次 npx 缓存。
@@ -47,16 +71,25 @@ async function loadPlaywright() {
   process.exit(2)
 }
 
-const { chromium } = await loadPlaywright()
+const argv = process.argv.slice(2)
+const FLAGS = new Set(argv.filter((a) => a.startsWith('--')))
+const PICKED = argv.filter((a) => !a.startsWith('--'))
 
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:5299'
-let failures = 0
-const results = []
+const PORT = Number(process.env.PORT || 5299)
+const BASE = process.env.BASE_URL || `http://127.0.0.1:${PORT}`
 
-function ok(name, cond, detail = '') {
-  results.push({ name, pass: !!cond, detail })
-  if (!cond) failures++
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${detail && !cond ? ` — ${detail}` : ''}`)
+/* ══════════════════════════════════════════════════════════════════
+ * 断言记录器：每个模块独立记账，汇总时才合并
+ * ══════════════════════════════════════════════════════════════════ */
+
+function makeRecorder() {
+  const results = []
+  const ok = (name, cond, detail = '') => {
+    results.push({ name, pass: !!cond, detail })
+    if (!cond) console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`)
+    return !!cond
+  }
+  return { results, ok }
 }
 
 /** 注入 mock IPC：覆盖本批功能涉及的全部命令 */
@@ -130,12 +163,17 @@ function mockScript() {
     ]
   }
   window.__calls = []
+  // P2 就绪信号：在飞的 IPC 数量。7 个视图的 onMounted 都经 bridge.js 发 IPC，
+  // 因此「归零」等价于「首屏数据到齐」。零 src/ 改动。
+  window.__inflight = 0
   window.__recorded = []
   window.__reverted = []
   window.__creates = 0
   window.__stats = { total: 10, by_type: { single: 10, multi: 0, judge: 0, fill: 0, short: 0, material: 0 }, due_total: 5, due_today: 5, learning_due: 1, practiced_total: 0, practiced_today: 0, correct_rate: null, records_7d: [] }
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args) => {
+      window.__inflight++
+      try {
       window.__calls.push(cmd)
       switch (cmd) {
         case 'banks_list': return { success: true, data: [bank, bank2] }
@@ -257,6 +295,9 @@ function mockScript() {
           return { success: true, data: window.__stats }
         default: return { success: true, data: null }
       }
+      } finally {
+        window.__inflight--
+      }
     },
     transformCallback: (cb) => { const id = Math.floor(Math.random() * 1e9); window['_cb' + id] = cb; return id },
     unregisterCallback: () => {},
@@ -264,12 +305,723 @@ function mockScript() {
   }
 }
 
+/** 轮询评估：等到 predicate 为真，或超时返回 false（不抛异常，由断言报） */
+async function waitUntil(page, fn, timeout = 4000) {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (await fn()) return true
+    await flush(page)
+  }
+  return false
+}
+
+/** 等到页面上出现指定文本（比固定 sleep 快一个数量级，且失败时能直接暴露真问题） */
+const waitText = (page, re, timeout = 4000) =>
+  waitUntil(page, () => page.evaluate((src) => new RegExp(src).test(document.body.innerText), re.source), timeout)
+
+/**
+ * P0 硬约束：等文本出现，**超时必须抛**。
+ *
+ * 为什么不能像旧版那样 `.catch(() => {})` 静默吞掉：
+ * 标记失效时 goto 不报错、继续往下跑，后续断言就会在**错误的页面上**求值，
+ * 报出来的是「列表没渲染」「按钮找不到」这类误导性失败，甚至可能假绿。
+ * 这里把「等待超时」立刻变成一个指向真实原因的异常。
+ *
+ * @throws Error 超时
+ */
+async function requireText(page, re, what, timeout = 6000) {
+  const okText = await waitText(page, re, timeout)
+  if (!okText) {
+    const body = await page.evaluate(() => document.body.innerText.slice(0, 300).replace(/\n/g, ' | '))
+    throw new Error(`等待就绪超时（${timeout}ms）：期望 ${what}，实际页面：${body}`)
+  }
+}
+
+/** 等待层渲染完成（Vue 更新 flush + 一次宏任务，远小于固定 sleep 且不会提前） */
+const flush = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))))
+
+/**
+ * 路由跳转（事件驱动）。
+ *
+ * 关键：不能只等「IPC 静默」——App.vue 挂载时 loadBanks() 先发 IPC，
+ * 此时 __settle 立即返回，但 vue-router 首次导航（异步 component chunk）尚未完成，
+ * 紧接着改 hash 会被 router 抿掉（实测 4/8 失败）。
+ * 必须先等真实挂载标记（页面标题/表格等 DOM），再等一次拉取完成。
+ *
+ * @param {string} hash 目标 hash
+ * @param {RegExp|string} [marker] 目标页面的真实挂载标记（必需，除非显式传 null）
+ */
+/**
+ * P2：路由 hash → 页面标题（镜像 src/router/index.js 的 meta.title）。
+ *
+ * 为什么用这个当就绪信号：
+ *   meta.title 是**路由元数据**，写在 router 表里，属于「本来就该稳定」的东西；
+ *   而旧的 /新建题库/ 之类是**界面文案**，产品改一句话就废。
+ * 值与 src/router/index.js 一一对应，test 里有一致性守卫（见 tests/unit/e2e-ready-signal.test.js）。
+ */
+const ROUTE_TITLE = {
+  '#/banks': '题库',
+  '#/library?bank=bank_default': '试题列表',
+  '#/create?bank=bank_default': '新增试题',
+  '#/practice': '刷题',
+  '#/review': '复习',
+  '#/exam': '模考',
+  '#/wrong': '错题本'
+}
+const APP_SUFFIX = '奇客题库'
+
+/**
+ * 等到「路由已切换 且 首屏 IPC 已归零」。
+ *
+ * 两个信号都不可少：
+ *   title  —— 证明 vue-router 已切到目标路由（解决「改 hash 被 router 吞掉」的 flaky）
+ *   inflight —— 证明 onMounted 里的 loadBanks/fetchList/fetchStats 已全部返回
+ * 且两者都与界面文案/布局解耦。
+ *
+ * @throws Error 超时（不静默吞，见 P0 说明）
+ */
+async function requireRoute(page, hash, timeout = 6000) {
+  const title = ROUTE_TITLE[hash]
+  if (!title) throw new Error(`ROUTE_TITLE 缺少路由映射：${hash}`)
+  const expect = `${title} · ${APP_SUFFIX}`
+  try {
+    await page.waitForFunction(
+      (t) => document.title === t && (window.__inflight || 0) === 0,
+      expect,
+      { timeout, polling: 25 }
+    )
+  } catch {
+    const st = await page.evaluate(() => ({
+      title: document.title,
+      inflight: window.__inflight,
+      hash: location.hash,
+      body: document.body.innerText.slice(0, 200).replace(/\n/g, ' | ')
+    }))
+    throw new Error(
+      `等待路由就绪超时（${timeout}ms）：期望 title="${expect}" 且 inflight=0；` +
+      `实际 title="${st.title}" inflight=${st.inflight} hash=${st.hash}；页面：${st.body}`
+    )
+  }
+}
+
 async function goto(page, hash) {
   await page.evaluate((h) => { location.hash = h }, hash)
-  await page.waitForTimeout(1600)
+  await requireRoute(page, hash)
+  await flush(page)
   // 会话恢复弹窗可能挡住后续操作：先关掉
   const drop = page.getByRole('button', { name: '放弃' })
-  if (await drop.count()) { await drop.first().click(); await page.waitForTimeout(600) }
+  if (await drop.count()) {
+    await drop.first().click()
+    await flush(page)
+    await flush(page)
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 模块定义：每个模块自带导航，独立 context 运行，断言语句与拆分前逐条一致
+ * owns：命中这些源文件改动就跑它（--changed 用）
+ * ══════════════════════════════════════════════════════════════════ */
+
+const MODULES = [
+  {
+    id: 'list',
+    label: '试题列表：排序 / 筛选 / 页码收敛',
+    owns: ['src/views/List.vue', 'src/stores/listFilter.js'],
+    async run({ page, ok }) {
+      // ── FE-P0-09：列表排序 / 筛选 / 页码收敛 ──
+      await goto(page, '#/banks')
+      await goto(page, '#/library?bank=bank_default')
+      const listBody = await page.locator('body').innerText()
+      ok('列表显示每页条数选择', /条\/页/.test(listBody))
+      ok('排序下拉默认为「最新创建」', /最新创建/.test(listBody))
+
+      // 排序：改 created_asc 后首行应是第 1 题（created_at 最早）
+      const sortSel = page.locator('select').filter({ hasText: '最新创建' }).first()
+      if (await sortSel.count()) {
+        await sortSel.selectOption('created_asc')
+        await flush(page)
+      }
+      const ascArgs = await page.evaluate(() => window.__listArgs)
+      ok('排序参数下发 created_asc', ascArgs?.sort === 'created_asc', JSON.stringify(ascArgs?.sort))
+      const firstRowAsc = await page.locator('tbody tr').first().innerText()
+      ok('created_asc 首行为第 1 题', /第1题/.test(firstRowAsc), firstRowAsc.slice(0, 40))
+
+      // 难度筛选：只应剩下难度 3 的题（q3/q8），且参数真的下发了
+      const diffSel = page.locator('select').filter({ hasText: '全部难度' }).first()
+      if (await diffSel.count()) {
+        await diffSel.selectOption('3')
+        await flush(page)
+      }
+      const diffArgs = await page.evaluate(() => window.__listArgs)
+      ok('难度参数下发为数字 3', diffArgs?.difficulty === 3, String(diffArgs?.difficulty))
+      const rowsAfterDiff = await page.locator('tbody tr').count()
+      ok('难度 3 筛选后只剩 2 题', rowsAfterDiff === 2, `实际 ${rowsAfterDiff} 行`)
+
+      // 状态筛选叠加：难度 3 且 draft（q3 是 draft，q8 不是）
+      const statusSel = page.locator('select').filter({ hasText: '全部状态' }).first()
+      if (await statusSel.count()) {
+        await statusSel.selectOption('draft')
+        await flush(page)
+      }
+      const bothArgs = await page.evaluate(() => window.__listArgs)
+      ok('状态参数下发', bothArgs?.status === 'draft', String(bothArgs?.status))
+      const rowsBoth = await page.locator('tbody tr').count()
+      ok('难度+状态叠加后只剩 1 题', rowsBoth === 1, `实际 ${rowsBoth} 行`)
+
+      // 页码收敛：总数 1 条而当前页 > 总页数时须自动回退（这里验 clampPage 已接线）
+      const pageInfo = await page.locator('body').innerText()
+      ok('页码不出现「第 2 / 1 页」这种越界值', !/第 \d+ \/ [1-9]\d* 页/.test(pageInfo) || /第 1 \/ 1 页/.test(pageInfo),
+        pageInfo.match(/第 \d+ \/ \d+ 页[^\n]*/)?.[0] || '')
+
+      // 筛选持久化：重新进入列表页后筛选条件应保留
+      await goto(page, '#/banks')
+      await goto(page, '#/library?bank=bank_default')
+      const restoredDiff = await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()
+      const restoredStatus = await page.locator('select').filter({ hasText: '全部状态' }).first().inputValue()
+      ok('刷新后难度筛选保留', restoredDiff === '3', `实际 ${restoredDiff}`)
+      ok('刷新后状态筛选保留', restoredStatus === 'draft', `实际 ${restoredStatus}`)
+      const persisted = await page.evaluate(() => localStorage.getItem('qbank.listFilter.v1.list:bank_default'))
+      ok('筛选已写入 localStorage', !!persisted && /difficulty/.test(persisted), String(persisted).slice(0, 60))
+
+      // 重置后回到默认
+      await page.getByRole('button', { name: '重置' }).click()
+      await flush(page)
+      const afterReset = await page.locator('body').innerText()
+      ok('重置后回到全部难度', (await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()) === '')
+      ok('重置后列表恢复 10 题', (await page.locator('tbody tr').count()) === 10, afterReset.match(/\d+ 题/)?.[0] || '')
+
+      // 页码收敛（真实场景，不是只测 clampPage 函数）：
+      // 造 60 题 @20/页 = 3 页 → 翻到第 3 页 → 把第 3 页的 20 题全选删除 → 必须回到第 2 页
+      await page.evaluate(() => window.__setCount(60))
+      await page.locator('select').filter({ hasText: /条\/页/ }).first().selectOption('20')
+      await flush(page)
+      const pageInfo3 = await page.locator('body').innerText()
+      ok('60 题 @20/页 显示 3 页', /第 1 \/ 3 页/.test(pageInfo3), pageInfo3.match(/第 \d+ \/ \d+ 页/)?.[0] || '')
+      await page.getByRole('button', { name: /下一页/ }).click()
+      await flush(page)
+      await page.getByRole('button', { name: /下一页/ }).click()
+      await flush(page)
+      ok('翻到第 3 页', /第 3 \/ 3 页/.test(await page.locator('body').innerText()))
+      // 全选并删除本页 20 题 → 只剩 40 题 = 2 页，当前页 3 已越界
+      await page.locator('.batch-bar').count().catch(() => 0)
+      await page.locator('thead input[type=checkbox]').check()
+      await flush(page)
+      await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
+      await flush(page)
+      await page.locator('.dg-card button').filter({ hasText: /^删除$/ }).last().click()
+      await flush(page)
+      const afterDelPage = await page.locator('body').innerText()
+      ok('删完末页后自动回到第 2 页（不出现「第 3 / 2 页」）',
+        /第 2 \/ 2 页/.test(afterDelPage),
+        afterDelPage.match(/第 \d+ \/ \d+ 页/)?.[0] || '(未找到页码)')
+      ok('收敛后不是空页', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
+      await page.evaluate(() => window.__restoreQs())
+      await flush(page)
+
+      // 空态 CTA：筛选不到时给「清除筛选」，而非硬说「暂无数据」
+      await page.locator('select').filter({ hasText: '全部难度' }).first().selectOption('1')
+      await flush(page)
+      await page.locator('input[placeholder="搜索题干..."]').fill('不存在的关键词')
+      await page.getByRole('button', { name: '搜索' }).first().click()
+      await flush(page)
+      const emptyBody = await page.locator('body').innerText()
+      ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件/.test(emptyBody))
+      ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
+      await page.getByRole('button', { name: '清除筛选' }).click()
+      await flush(page)
+    }
+  },
+
+  {
+    id: 'batch',
+    label: '批量操作：单次 IPC / 逐项失败重试',
+    owns: ['src/views/List.vue'],
+    async run({ page, ok }) {
+      // 独立 context：先自己进列表页并把筛选归零（原来靠上一段遗留状态）
+      await goto(page, '#/banks')
+      await goto(page, '#/library?bank=bank_default')
+      await page.getByRole('button', { name: '重置' }).click()
+      await flush(page)
+
+      // ── FE-P0-10：批量操作单次 IPC + 逐项失败可重试 ──
+      // 全选本页 10 题
+      await page.locator('thead input[type=checkbox]').check()
+      await flush(page)
+      const selBody = await page.locator('body').innerText()
+      ok('选中后出现批量操作条', /已选 10 题/.test(selBody), selBody.match(/已选 \d+ 题/)?.[0] || '')
+      ok('批量条含难度/状态入口', /难度/.test(selBody) && /状态/.test(selBody))
+
+      // 批量改难度：必须只打 1 次 IPC（不是 10 次）
+      await page.evaluate(() => { window.__batchUpdateCalls = 0 }).catch(() => {})
+      await page.locator('.batch-bar').getByRole('button', { name: '难度', exact: true }).click()
+      await flush(page)
+      const dlgText = await page.locator('body').innerText()
+      ok('改难度弹出应用内选择框', /选择难度/.test(dlgText), dlgText.match(/选择难度[^\n]*/)?.[0] || '')
+      // selectDialog 是原生 <select> + 确定按钮（不是按钮列表）
+      await page.locator('.dg-card select').first().selectOption('4')
+      await page.locator('.dg-card button').filter({ hasText: /^应用$/ }).last().click()
+      await flush(page)
+      const batchCalls = await page.evaluate(() => window.__batchUpdateCalls || 0)
+      ok('10 题改难度只触发 1 次 IPC', batchCalls === 1, `实际 ${batchCalls} 次`)
+      const lastUpd = await page.evaluate(() => window.__lastBatchUpdate)
+      ok('批量更新带全部选中 id', (lastUpd?.ids || []).length === 10, `${(lastUpd?.ids || []).length} 个 id`)
+      ok('批量更新只带白名单字段', lastUpd && Object.keys(lastUpd.patch || {}).join() === 'difficulty', JSON.stringify(lastUpd?.patch))
+      const afterDiff = await page.locator('body').innerText()
+      ok('改难度后列表即时刷新为 4', /难度 4/.test(afterDiff) || (await page.locator('.difficulty-dots').count()) > 0)
+
+      // 逐项失败：让 2 个 id 失败，页面必须逐项列原因 + 提供重试
+      await page.locator('thead input[type=checkbox]').check()
+      await flush(page)
+      await page.evaluate(() => { window.__batchFailIds = ['q1', 'q2'] })
+      await page.locator('.batch-bar').getByRole('button', { name: '状态', exact: true }).click()
+      await flush(page)
+      await page.locator('.dg-card select').first().selectOption('draft')
+      await page.locator('.dg-card button').filter({ hasText: /^应用$/ }).last().click()
+      await flush(page)
+      const failBody = await page.locator('body').innerText()
+      ok('部分失败时逐项列原因', /2 项未成功/.test(failBody) && /题目不存在/.test(failBody),
+        failBody.match(/\d+ 项未成功/)?.[0] || '(未找到失败汇总)')
+      ok('失败汇总提供重试入口', (await page.getByRole('button', { name: '重试失败项' }).count()) === 1)
+
+      // 重试：这次不再失败，应消掉失败条
+      await page.evaluate(() => { window.__batchFailIds = [] })
+      await page.getByRole('button', { name: '重试失败项' }).click()
+      await flush(page)
+      ok('重试成功后失败汇总消失', (await page.getByRole('button', { name: '重试失败项' }).count()) === 0)
+
+      // 批量删除：同样只 1 次 IPC
+      // 计数器清零：前面「页码收敛」用例也做过一次批量删除，不清零会累加成 2
+      await page.evaluate(() => { window.__batchRemoveCalls = 0; window.__removes = 0 })
+      await page.locator('thead input[type=checkbox]').check()
+      await flush(page)
+      await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
+      await flush(page)
+      ok('批量删除确认框提示不可撤销', /不可撤销/.test(await page.locator('body').innerText()))
+      // 删除确认按钮文案就是「删除」，但批量条里也有同名按钮，故限定在弹层内
+      const delOk = page.locator('.dg-card button').filter({ hasText: /^删除$/ })
+      ok('删除确认弹层就位', (await delOk.count()) > 0, `弹层按钮数 ${await delOk.count()}`)
+      await delOk.last().click()
+      await flush(page)
+      const delCalls = await page.evaluate(() => window.__batchRemoveCalls || 0)
+      ok('10 题批量删除只触发 1 次 IPC', delCalls === 1, `实际 ${delCalls} 次`)
+      ok('未走单条逐删路径', (await page.evaluate(() => window.__removes || 0)) === 0)
+    }
+  },
+
+  {
+    id: 'form',
+    // P1：本模块要验 2000ms 草稿防抖。用 clock 快进而非真实等待（无 Date.now() 业务计算，无副作用）
+    usesClock: true,
+    label: '录题：脏徽章 / 离开确认 / Ctrl+S / 草稿',
+    owns: ['src/views/Form.vue', 'src/stores/formDraft.js', 'src/components/QuestionForm.vue', 'src/components/QuestionEditor.vue', 'src/components/TiptapDocEditor.vue'],
+    async run({ page, ok }) {
+      // ── FE-P0-03：脏徽章 / 离开确认 / Ctrl+S / 保存后清草稿 ──
+      await goto(page, '#/create?bank=bank_default')
+      await page.locator('.ProseMirror').first().click()
+      await page.keyboard.type('E2E题干')
+      await flush(page)
+      ok('改题干后出现「未保存」徽章', (await page.locator('.badge', { hasText: '未保存' }).count()) === 1)
+
+      await page.locator('a').filter({ hasText: '题库' }).first().click()
+      await flush(page)
+      ok('脏离开弹出应用内确认', /放弃未保存的修改？/.test(await page.locator('body').innerText()))
+      await page.getByRole('button', { name: '继续编辑' }).click()
+      await flush(page)
+      ok('取消后内容不丢', /E2E题干/.test(await page.locator('.ProseMirror').first().innerText()))
+
+      // P1：草稿防抖是 2000ms（Form.vue）。用 clock 快进而不是真实等待（2s → ~0ms）。
+      // 注意：快进后定时器立即执行，因此“等键盘真的写入”仍然显式断言。
+      await page.clock.fastForward(2100)
+      const draftBefore = await waitUntil(
+        page,
+        () => page.evaluate(() => Object.keys(sessionStorage).some((k) => k.startsWith('qbank.formDraft.v1'))),
+        2000
+      )
+      ok('脏状态会写入草稿', draftBefore)
+
+      const createsBefore = await page.evaluate(() => window.__creates)
+      await page.keyboard.press('Control+s')
+      await flush(page)
+      ok('Ctrl+S 触发保存', (await page.evaluate(() => window.__creates)) > createsBefore)
+      ok('保存后走 create 分支并带题干', /E2E题干/.test(JSON.stringify(await page.evaluate(() => window.__lastCreate))))
+
+      // 关键回归：保存成功后草稿必须被清掉（曾因传 computed 对象而残留）
+      const draftAfter = await page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('qbank.formDraft.v1')))
+      ok('保存成功后草稿被清除', draftAfter.length === 0, `残留：${JSON.stringify(draftAfter)}`)
+
+      // 保存后离开应静默
+      await page.locator('a').filter({ hasText: '题库' }).first().click()
+      await flush(page)
+      ok('保存后离开不弹确认', !/放弃未保存的修改？/.test(await page.locator('body').innerText()))
+    }
+  },
+
+  {
+    id: 'practice',
+    label: '刷题：可用题量 / 导航 / 跳过 / 离开提示',
+    owns: ['src/views/Practice.vue', 'src/stores/runConfig.js', 'src/composables/'],
+    async run({ page, ok }) {
+      // ── FE-P0-05：可用题量 ──
+      await goto(page, '#/practice')
+      ok('刷题页显示可用题量', /可用 \d+ 题/.test(await page.locator('body').innerText()))
+      await page.getByRole('button', { name: '全部', exact: true }).click()
+      await flush(page)
+      ok('配置写入 localStorage', !!(await page.evaluate(() => localStorage.getItem('qbank.runConfig.v1.practice'))))
+
+      // ── FE-P0-06：练习导航 + 跳过回卷 ──
+      await page.getByRole('button', { name: '开始刷题' }).click()
+      await flush(page)
+      const navText = await page.locator('body').innerText()
+      ok('导航三项就位', /上一题/.test(navText) && /标记/.test(navText) && /跳过/.test(navText))
+      ok('已答/剩余计数', /已答 0 \/ 剩余 10/.test(navText))
+      await page.getByRole('button', { name: '标记', exact: true }).click()
+      await flush(page)
+      ok('标记后按钮变「取消标记」', (await page.getByRole('button', { name: '取消标记' }).count()) === 1)
+
+      await page.getByRole('button', { name: '跳过' }).click()
+      await flush(page)
+      ok('跳过后已答仍为 0（不计虚增）', /已答 0 \/ 剩余 10/.test(await page.locator('body').innerText()))
+
+      // ── FE-P0-04：离开提示 ──
+      await page.locator('a').filter({ hasText: '题库' }).first().click()
+      await flush(page)
+      ok('练习离开提示进度已存', /刷题进度已保存/.test(await page.locator('body').innerText()))
+    }
+  },
+
+  {
+    id: 'review',
+    // P1：本模块要验 5000ms 撤销窗口。clock 让我们能精确测「窗口内可撤销 / 越界即消失」
+    usesClock: true,
+    label: '复习：间隔预览 / 撤销 / 最后一题',
+    owns: ['src/views/Review.vue', 'src/utils/reviewPreview.js'],
+    async run({ page, ok }) {
+      // ── FE-P0-06(Review)：间隔预览 + 撤销 ──
+      await goto(page, '#/review')
+      ok('复习页显示待复习数', /待复习/.test(await page.locator('body').innerText()))
+
+      // 统计口径分歧回归：due_total（due_at<=now）为 0 但 due_today（<=今天结束）为 3
+      // 是学习步卡片的常态（state=1/3，1m/10m）。开始复习必须仍可用——
+      // review_due 的截止就是「今天结束」，用 due_total 判断会禁用掉本该能拉的题。
+      await page.evaluate(() => {
+        window.__stats = { ...window.__stats, due_total: 0, due_today: 3, learning_due: 3 }
+      })
+      await goto(page, '#/banks')
+      await goto(page, '#/review')
+      const startBtn = page.getByRole('button', { name: '开始复习' })
+      const reviewBody = await page.locator('body').innerText()
+      ok('due_total=0 但 due_today=3 时开始按钮仍可点',
+        (await startBtn.isEnabled()),
+        reviewBody.match(/当前待复习[^\n]*/)?.[0] || '')
+      ok('不出现「没有待复习」与「今日到期 N 题」自相矛盾',
+        !/当前没有待复习的题/.test(reviewBody),
+        reviewBody.match(/当前没有待复习[^\n]*/)?.[0] || '')
+      // 统计请求失败时不得把「未知」当「0 题」：开始按钮应仍可用，让 start() 报真实错误
+      await page.evaluate(() => { window.__statsFail = true })
+      await page.evaluate(() => { location.hash = '#/banks' })
+      await flush(page)
+      await page.evaluate(() => { location.hash = '#/review' })
+      await flush(page)
+      const failStart = page.getByRole('button', { name: '开始复习' })
+      ok('统计失败时开始按钮仍可点', await failStart.isEnabled())
+      await page.evaluate(() => { window.__statsFail = false })
+      await page.evaluate(() => { location.hash = '#/banks' })
+      await flush(page)
+      await page.evaluate(() => { location.hash = '#/review' })
+      await flush(page)
+
+      await page.getByRole('button', { name: '开始复习' }).click()
+      await flush(page)
+      await page.locator('.option-btn').first().click()
+      await flush(page)
+      const judge = page.getByRole('button', { name: '判分' })
+      if (await judge.count()) { await judge.click(); await flush(page) }
+      const gradeRow = await page.locator('body').innerText()
+      ok('四键显示下次间隔', /\d+[mhd]\b/.test(gradeRow) && /忘记/.test(gradeRow) && /良好/.test(gradeRow))
+      ok('复习卡片显示已复习/剩余', /已复习 \d+ \/ 剩 \d+/.test(gradeRow))
+
+      await page.getByRole('button', { name: /^良好/ }).click()
+      await flush(page)
+      ok('评分后出现撤销入口', /可撤销/.test(await page.locator('body').innerText()))
+
+      // ── P1：撤销窗口（REVERT_WINDOW_MS = 5000）的**边界**才是真契约 ──
+      // 旧写法：评分后立刻点撤销，只是「碰巧在窗口内」——机器慢一点就随机失败，
+      // 且从未验过「越界应该消失」。用 clock 快进可以确定地测两边。
+      // 注意：评分后 next() 已前进到下一张卡（lastRevert 仍在，撤销条全局可见），
+      // 所以两个边界断言只看「撤销入口是否存在」，不改动作答状态。
+      await page.clock.fastForward(4900)          // 窗口内
+      ok('撤销窗口内（4.9s）仍可撤销',
+        (await page.getByRole('button', { name: /撤销/ }).count()) > 0)
+      await page.clock.fastForward(300)           // 超过 5000ms → 定时器触发 clearRevert
+      await flush(page)
+      ok('超出撤销窗口（5.2s）撤销入口自动消失',
+        (await page.getByRole('button', { name: /撤销/ }).count()) === 0,
+        '撤销按钮未随窗口过期消失')
+
+      // 真正走一遍撤销：评分后 next() 已到下一张**未作答**的卡，必须先选选项 → 判分 → 才出四键
+      const beforeRevert = await page.evaluate(() => window.__reverted.length)
+      await page.locator('.option-btn').first().click()
+      await flush(page)
+      const judge2 = page.getByRole('button', { name: '判分' })
+      if (await judge2.count()) { await judge2.click(); await flush(page) }
+      const grade2 = page.getByRole('button', { name: /^良好/ })
+      ok('下一张卡判分后出现四键', (await grade2.count()) > 0)
+      if (await grade2.count()) await grade2.first().click()
+      await flush(page)
+      const undo = page.getByRole('button', { name: /撤销/ }).first()
+      ok('重新评分后撤销入口再次出现', (await undo.count()) > 0)
+      if (await undo.count()) { await undo.click(); await flush(page) }
+      ok('撤销调用 review_revert', (await page.evaluate(() => window.__reverted.length)) > beforeRevert)
+      ok('撤销后提示可重新评分', /已撤销/.test(await page.locator('body').innerText()))
+
+      // ── 最后一题也必须能撤销（否则 toast 承诺的「可撤销」是假的）──
+      await page.evaluate(() => { window.__reviewOnly = 1 })
+      await page.evaluate(() => { sessionStorage.clear() })
+      await goto(page, '#/banks')
+      await goto(page, '#/review')
+      await page.getByRole('button', { name: '开始复习' }).click()
+      await flush(page)
+      await page.locator('.option-btn').first().click()
+      await flush(page)
+      const j2 = page.getByRole('button', { name: '判分' })
+      if (await j2.count()) { await j2.click(); await flush(page) }
+      const beforeUndo = await page.evaluate(() => window.__reverted.length)
+      await page.getByRole('button', { name: /^良好/ }).click()
+      await flush(page)
+      const doneBody = await page.locator('body').innerText()
+      ok('最后一题评完进入结束页', /本轮复习完成/.test(doneBody))
+      const undoOnDone = page.getByRole('button', { name: /撤销并重评/ })
+      ok('结束页仍有撤销入口（不再只是口头承诺）', (await undoOnDone.count()) === 1,
+        doneBody.match(/刚才把最后一题[^\n]*/)?.[0] || '(未找到撤销条)')
+      if (await undoOnDone.count()) { await undoOnDone.click(); await flush(page) }
+      ok('结束页撤销真的调用了 review_revert', (await page.evaluate(() => window.__reverted.length)) > beforeUndo)
+      const afterUndoBody = await page.locator('body').innerText()
+      ok('撤销后回到作答卡（可重新评分）', /自评记忆效果/.test(afterUndoBody))
+      await page.evaluate(() => { window.__reviewOnly = 0 })
+    }
+  },
+
+  {
+    id: 'exam',
+    label: '模考：答题卡 / 交卷 / 历史回看',
+    owns: ['src/views/Exam.vue', 'src/components/exam/', 'src/utils/examSheet.js', 'src/utils/examTrend.js'],
+    async run({ page, ok }) {
+      // ── FE-P0-07：答题卡 + 回看 ──
+      await goto(page, '#/exam')
+      ok('准备页显示成绩趋势（SVG）', (await page.locator('svg[role=img]').count()) >= 1)
+      ok('历史场次有回看入口', (await page.getByRole('button', { name: '回看' }).count()) >= 1)
+
+      await page.getByRole('button', { name: '全部', exact: true }).click()
+      await page.getByRole('button', { name: '开始模考' }).click()
+      await flush(page)
+      await page.getByRole('button', { name: /答题卡/ }).click()
+      await flush(page)
+      ok('答题卡渲染 10 格', (await page.locator('.sc-cell').count()) === 10)
+      await page.locator('.sc-cell').nth(7).click()
+      await flush(page)
+      ok('点第 8 格跳到第 8 题', /第 8 \/ 10 题/.test(await page.locator('body').innerText()))
+
+      await page.getByRole('button', { name: /^交卷/ }).last().click()
+      await flush(page)
+      ok('交卷确认报告未答数', /还有 \d+ 题未作答/.test(await page.locator('body').innerText()))
+      await page.getByRole('button', { name: '继续作答' }).click()
+      await flush(page)
+
+      // 历史回看：选项 id 必须映射回字母
+      // 注意：先丢掉模考草稿再回准备页——留在 card 阶段时页面没有「回看」入口
+      await page.evaluate(() => { sessionStorage.removeItem('qbank.session.v1.exam') })
+      await goto(page, '#/banks')
+      await goto(page, '#/exam')
+      const backBtn = page.getByRole('button', { name: '回看' }).first()
+      ok('回到准备页后有回看入口', (await backBtn.count()) > 0)
+      if (await backBtn.count()) { await backBtn.click(); await flush(page) }
+      const row = page.locator('.hr-panel button').filter({ hasText: '5 / 5' }).first()
+      if (await row.count()) { await row.click(); await flush(page) }
+      const reviewText = await page.locator('body').innerText()
+      ok('回看调用 exam_detail', !!(await page.evaluate(() => window.__detailArg)))
+      ok('回看作答显示字母而非内部 id', /你的作答：\s*B/.test(reviewText), reviewText.match(/你的作答：[^\n]*/)?.[0] || '(未找到)')
+      ok('回看不泄露内部选项 id', !/\bo[12]\b/.test(reviewText), '出现了 o1/o2 字样')
+      ok('回看显示题面与解析', /第一题题面/.test(reviewText) && /第一题解析/.test(reviewText))
+
+      // 展开答错的那行：必须给出正确答案字母
+      const wrongRow = page.locator('.hr-panel button').filter({ hasText: '0 / 5' }).first()
+      if (await wrongRow.count()) { await wrongRow.click(); await flush(page) }
+      const wrongText = await page.locator('body').innerText()
+      ok('答错行展示正确答案字母', /正确答案：\s*A/.test(wrongText), wrongText.match(/正确答案：[^\n]*/)?.[0] || '(未找到)')
+
+      // 材料子题回看：必须切到子题题面与子题选项，不能显示母题题面或内部 id
+      const matRow = page.locator('.hr-panel button').filter({ hasText: '第 2 问' }).first()
+      ok('材料子题行标注「第 N 问」', (await matRow.count()) > 0)
+      if (await matRow.count()) { await matRow.click(); await flush(page) }
+      const matText = await page.locator('body').innerText()
+      ok('材料子题显示子题题面', /子题二题面/.test(matText), matText.match(/子题[^\n]*题面/)?.[0] || '(未找到子题题面)')
+      ok('材料子题不显示母题题面充当题面', !/材料母题题面/.test(matText))
+      ok('材料子题作答映射为字母', /你的作答：\s*B/.test(matText), matText.match(/你的作答：[^\n]*/)?.[0] || '(未找到)')
+      ok('材料子题不泄露内部选项 id', !/\bo[12]\b/.test(matText))
+
+      // 简答回看：必须给出参考答案（answer.reference），否则「每道题的正确答案」不成立
+      const shortRow = page.locator('.hr-panel button').filter({ hasText: '简答题' }).first()
+      ok('简答行存在', (await shortRow.count()) > 0)
+      if (await shortRow.count()) { await shortRow.click(); await flush(page) }
+      const shortText2 = await page.locator('body').innerText()
+      ok('简答回看显示我的答案', /我写的答案ABC/.test(shortText2), shortText2.match(/我的答案：[^\n]*/)?.[0] || '(未找到)')
+      ok('简答回看显示参考答案', /参考答案：\s*标准参考答案XYZ/.test(shortText2), shortText2.match(/参考答案：[^\n]*/)?.[0] || '(未找到参考答案)')
+    }
+  },
+
+  {
+    id: 'wrong',
+    label: '错题本：搜索 / 排序 / 统计',
+    owns: ['src/views/Wrong.vue', 'src/api/practice.js'],
+    async run({ page, ok }) {
+      // ── FE-P0-11：错题本搜索 / 排序 / 统计 ──
+      await goto(page, '#/wrong')
+      const wBody = await page.locator('body').innerText()
+      ok('统计条显示全库错题数', /错题 6/.test(wBody), wBody.match(/错题 \d+/)?.[0] || '')
+      ok('统计条按题型分组', /简答|单选|多选|判断/.test(wBody))
+      ok('统计条按题库分组', /默认题库 4/.test(wBody) && /第二题库 2/.test(wBody), wBody.match(/题库[^\n]*/)?.[0] || '')
+      ok('顽固错题入口可见', /顽固错题 3/.test(wBody), wBody.match(/顽固错题 \d+/)?.[0] || '')
+      ok('重练全部显示真实数量', /重练全部（6 题）/.test(wBody), wBody.match(/重练全部（[^）]*）/)?.[0] || '')
+      ok('有搜索框', (await page.locator('input[placeholder="搜索题干..."]').count()) === 1)
+      ok('有排序下拉', /最近错优先/.test(wBody))
+
+      // 排序：错得最多优先 → 首行应是 wrong_count=5 的 q5
+      await page.locator('select').filter({ hasText: '最近错优先' }).first().selectOption('wrong_count_desc')
+      await flush(page)
+      const wSortArgs = await page.evaluate(() => window.__wrongArgs)
+      ok('排序参数下发 wrong_count_desc', wSortArgs?.sort === 'wrong_count_desc', String(wSortArgs?.sort))
+      const firstWrongRow = await page.locator('tbody tr').first().innerText()
+      ok('wrong_count_desc 首行为 q5（错 5 次）', /q5/.test(firstWrongRow) && /5/.test(firstWrongRow), firstWrongRow.slice(0, 50))
+
+      // 搜索：q3 → 只剩 1 条
+      await page.locator('input[placeholder="搜索题干..."]').fill('q3')
+      await page.getByRole('button', { name: '搜索' }).first().click()
+      await flush(page)
+      const wSearchArgs = await page.evaluate(() => window.__wrongArgs)
+      ok('搜索参数下发', wSearchArgs?.query === 'q3', String(wSearchArgs?.query))
+      ok('搜索后只剩 1 条', (await page.locator('tbody tr').count()) === 1, `${await page.locator('tbody tr').count()} 行`)
+      ok('搜索后统计条不变（全库口径）', /错题 6/.test(await page.locator('body').innerText()))
+
+      // 搜不到：提示筛选空而不是「暂无错题」
+      await page.locator('input[placeholder="搜索题干..."]').fill('zzz-none')
+      await page.getByRole('button', { name: '搜索' }).first().click()
+      await flush(page)
+      const wEmpty = await page.locator('body').innerText()
+      ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件的错题/.test(wEmpty))
+      ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
+      await page.getByRole('button', { name: '清除筛选' }).click()
+      await flush(page)
+
+      // 顽固错题筛选：minWrongCount=3 → 3 条（q2=4, q3=3, q5=5）
+      await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
+      await flush(page)
+      const stubArgs = await page.evaluate(() => window.__wrongArgs)
+      ok('顽固筛选下发 minWrongCount=3', stubArgs?.minWrongCount === 3, String(stubArgs?.minWrongCount))
+      ok('顽固筛选后剩 3 条', (await page.locator('tbody tr').count()) === 3, `${await page.locator('tbody tr').count()} 行`)
+      // 再点一次取消
+      await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
+      await flush(page)
+      ok('再点一次取消顽固筛选', (await page.locator('tbody tr').count()) === 6, `${await page.locator('tbody tr').count()} 行`)
+
+      // 材料题重练文案：必须明说含 N 问（不是默默整题重练）
+      const matRetry = page.locator('tbody tr').filter({ hasText: 'q6' }).getByRole('button', { name: /重练/ }).first()
+      const matRetryText = (await matRetry.count()) ? await matRetry.innerText() : ''
+      ok('材料题重练文案标注含 N 问', /重练整题（含 2 问）/.test(matRetryText), matRetryText || '(未找到材料题重练按钮)')
+
+      // 统计拉取失败不能让列表也挂（挡不住看错题）
+      await page.evaluate(() => { window.__wrongStatsFail = true })
+      await goto(page, '#/banks')
+      await goto(page, '#/wrong')
+      const failStatsBody = await page.locator('body').innerText()
+      ok('统计失败时仍能看到错题列表', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
+      ok('统计失败时不显示错乱统计条', !/错题 6/.test(failStatsBody))
+      await page.evaluate(() => { window.__wrongStatsFail = false })
+    }
+  }
+]
+
+/* ══════════════════════════════════════════════════════════════════
+ * dev server：自动起 / 复用已有 / 结束关闭（忘记起 server 不再白跑）
+ * ══════════════════════════════════════════════════════════════════ */
+
+async function httpOk(url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1500) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+async function ensureServer() {
+  // 显式指定 BASE_URL = 用户自己管的实例，不启不关
+  if (process.env.BASE_URL) {
+    if (!(await httpOk(BASE))) {
+      console.error(`BASE_URL 指向的 ${BASE} 打不开，请先启动该实例。`)
+      process.exit(2)
+    }
+    return { stop() {} }
+  }
+  if (await httpOk(BASE)) {
+    console.log(`复用已在运行的 dev server：${BASE}`)
+    return { stop() {} }
+  }
+  const viteBin = path.join(ROOT, 'node_modules/vite/bin/vite.js')
+  if (!fs.existsSync(viteBin)) {
+    console.error('找不到 vite，无法自动起 dev server。请先 pnpm install。')
+    process.exit(2)
+  }
+  const child = spawn(process.execPath, [viteBin, '--port', String(PORT), '--strictPort'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, FORCE_COLOR: '0' }
+  })
+  let log = ''
+  child.stdout.on('data', (d) => { log += String(d) })
+  child.stderr.on('data', (d) => { log += String(d) })
+  const t0 = Date.now()
+  while (Date.now() - t0 < 60000) {
+    if (await httpOk(BASE)) {
+      console.log(`dev server 就绪（${Date.now() - t0}ms）：${BASE}`)
+      return { stop() { try { child.kill() } catch { /* 忽略 */ } } }
+    }
+    if (child.exitCode != null) {
+      console.error(`dev server 启动失败（exit ${child.exitCode}）：\n${log.slice(-2000)}`)
+      process.exit(2)
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  console.error(`dev server 60s 未就绪：\n${log.slice(-2000)}`)
+  process.exit(2)
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * Selectors：模块过滤 / --changed
+ * ══════════════════════════════════════════════════════════════════ */
+
+function pickModules() {
+  if (!PICKED.length) return MODULES
+  const unknown = PICKED.filter((p) => !MODULES.some((m) => m.id === p))
+  if (unknown.length) {
+    console.error(`未知模块：${unknown.join(', ')}\n可选：${MODULES.map((m) => m.id).join(' / ')}`)
+    process.exit(2)
+  }
+  return MODULES.filter((m) => PICKED.includes(m.id))
+}
+
+/** 按 git 工作区改动挑模块；无命中 / 不在 git 里则保守全跑 */
+function changedModules() {
+  let files = []
+  try {
+    files = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: ROOT, encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map((l) => l.slice(3).trim())
+      .filter(Boolean)
+  } catch {
+    return MODULES
+  }
+  const hit = MODULES.filter((m) => files.some((f) => m.owns.some((own) => f === own || f.startsWith(own))))
+  return hit.length ? hit : MODULES
 }
 
 /**
@@ -294,476 +1046,106 @@ function findChromium() {
   return cands[0]
 }
 
-async function launch() {
+async function launch(chromium, headed) {
   try {
-    return await chromium.launch()
+    return await chromium.launch({ headless: !headed })
   } catch (e) {
     const exe = findChromium()
     if (!exe) throw e
-    console.log(`  （回退到本地已装 chromium：${path.basename(path.dirname(exe))}）`)
-    return await chromium.launch({ executablePath: exe })
+    console.log(`（回退到本地已装 chromium：${path.basename(path.dirname(exe))}）`)
+    return await chromium.launch({ headless: !headed, executablePath: exe })
   }
 }
 
-const browser = await launch()
-const ctx = await browser.newContext()
-const page = await ctx.newPage()
-const pageErrors = []
-page.on('pageerror', (e) => pageErrors.push(String(e.message)))
-await page.addInitScript(mockScript)
+/* ══════════════════════════════════════════════════════════════════
+ * main
+ * ══════════════════════════════════════════════════════════════════ */
 
-try {
-  await page.goto(`${BASE}/#/banks`)
-  await page.waitForTimeout(1500)
-  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
+if (FLAGS.has('--list')) {
+  for (const m of MODULES) console.log(`${m.id.padEnd(9)} ${m.label}`)
+  process.exit(0)
+}
 
-  // ── FE-P0-09：列表排序 / 筛选 / 页码收敛 ──
-  console.log('\nFE-P0-09 列表排序与筛选')
-  await goto(page, '#/banks')
-  await goto(page, '#/library?bank=bank_default')
-  const listBody = await page.locator('body').innerText()
-  ok('列表显示每页条数选择', /条\/页/.test(listBody))
-  ok('排序下拉默认为「最新创建」', /最新创建/.test(listBody))
+const selected = FLAGS.has('--changed') ? changedModules() : pickModules()
+if (!selected.length) {
+  console.error('没有选中任何模块')
+  process.exit(2)
+}
 
-  // 排序：改 created_asc 后首行应是第 1 题（created_at 最早）
-  const sortSel = page.locator('select').filter({ hasText: '最新创建' }).first()
-  if (await sortSel.count()) {
-    await sortSel.selectOption('created_asc')
-    await page.waitForTimeout(900)
+// ── 前置契约守卫：必须在跑 e2e 之前通过 ──
+// 守卫检查 ROUTE_TITLE ↔ meta.title、title 拼接格式、inflight 的 try/finally、
+// 无 networkidle、超时必抛等跨文件契约。这些一旦漂移，e2e 会 19 处集体超时，
+// 空转半分钟才看得出问题。所以先花几毫秒跑它。
+if (!FLAGS.has('--skip-guard')) {
+  const { runGuard } = await import('./e2e/guard.mjs')
+  const guard = runGuard()
+  if (!guard.ok) {
+    console.error('\n✗ E2E 前置契约守卫失败 —— 此时 e2e 的结果不可信，已中止。\n')
+    const lines = guard.output.split(/\r?\n/)
+    const interesting = lines.filter((l) => /✖|not ok|Error|AssertionError|期望|现有|不一致/.test(l))
+    console.error((interesting.length ? interesting : lines.slice(-40)).join('\n'))
+    console.error('\n（确认过只是想强行跑：--skip-guard）\n')
+    process.exit(3)
   }
-  const ascArgs = await page.evaluate(() => window.__listArgs)
-  ok('排序参数下发 created_asc', ascArgs?.sort === 'created_asc', JSON.stringify(ascArgs?.sort))
-  const firstRowAsc = await page.locator('tbody tr').first().innerText()
-  ok('created_asc 首行为第 1 题', /第1题/.test(firstRowAsc), firstRowAsc.slice(0, 40))
+  const pass = (guard.output.match(/ℹ pass (\d+)/) || guard.output.match(/# pass (\d+)/))?.[1] ?? '?'
+  console.log(`契约守卫通过（${pass} 项）`)
+}
 
-  // 难度筛选：只应剩下难度 3 的题（q3/q8），且参数真的下发了
-  const diffSel = page.locator('select').filter({ hasText: '全部难度' }).first()
-  if (await diffSel.count()) {
-    await diffSel.selectOption('3')
-    await page.waitForTimeout(900)
+const { chromium } = await loadPlaywright()
+const server = await ensureServer()
+const browser = await launch(chromium, FLAGS.has('--headed'))
+
+const summary = []
+const startedAll = Date.now()
+console.log(`\nE2E ${selected.length} 个模块：${selected.map((m) => m.id).join(', ')}`)
+
+for (const mod of selected) {
+  console.log(`\n▸ ${mod.id} — ${mod.label}`)
+  const { results, ok } = makeRecorder()
+  // 每个模块独立 context：mock 状态、localStorage、会话快照互不污染，
+  // 也让单模块运行与全量运行的行为完全一致（这是模块化能成立的前提）。
+  const ctx = await browser.newContext()
+  const page = await ctx.newPage()
+  const pageErrors = []
+  page.on('pageerror', (e) => pageErrors.push(String(e.message)))
+  await page.addInitScript(mockScript)
+
+  const t0 = Date.now()
+  try {
+    // P1：时间可控。install 后阶段内定时器由 fastForward 驱动（实测不会冻结 mock 的异步）
+    if (mod.usesClock) await page.clock.install()
+    await page.goto(`${BASE}/#/banks`)
+    // P2：首屏也用路由标题 + inflight 判定，不依赖任何界面文案
+    const shellReady = await page.waitForSelector('header nav a', { timeout: 10000 }).catch(() => null)
+    if (!shellReady) throw new Error('等待就绪超时：首屏导航未渲染（header nav a）')
+    await requireRoute(page, '#/banks', 10000)
+    await page.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
+    await mod.run({ page, ok })
+  } catch (e) {
+    ok('脚本执行未中断', false, String(e?.message || e))
   }
-  const diffArgs = await page.evaluate(() => window.__listArgs)
-  ok('难度参数下发为数字 3', diffArgs?.difficulty === 3, String(diffArgs?.difficulty))
-  const rowsAfterDiff = await page.locator('tbody tr').count()
-  ok('难度 3 筛选后只剩 2 题', rowsAfterDiff === 2, `实际 ${rowsAfterDiff} 行`)
-
-  // 状态筛选叠加：难度 3 且 draft（q3 是 draft，q8 不是）
-  const statusSel = page.locator('select').filter({ hasText: '全部状态' }).first()
-  if (await statusSel.count()) {
-    await statusSel.selectOption('draft')
-    await page.waitForTimeout(900)
-  }
-  const bothArgs = await page.evaluate(() => window.__listArgs)
-  ok('状态参数下发', bothArgs?.status === 'draft', String(bothArgs?.status))
-  const rowsBoth = await page.locator('tbody tr').count()
-  ok('难度+状态叠加后只剩 1 题', rowsBoth === 1, `实际 ${rowsBoth} 行`)
-
-  // 页码收敛：总数 1 条而当前页 > 总页数时须自动回退（这里验 clampPage 已接线）
-  const pageInfo = await page.locator('body').innerText()
-  ok('页码不出现「第 2 / 1 页」这种越界值', !/第 \d+ \/ [1-9]\d* 页/.test(pageInfo) || /第 1 \/ 1 页/.test(pageInfo),
-    pageInfo.match(/第 \d+ \/ \d+ 页[^\n]*/)?.[0] || '')
-
-  // 筛选持久化：重新进入列表页后筛选条件应保留
-  await goto(page, '#/banks')
-  await goto(page, '#/library?bank=bank_default')
-  const restoredDiff = await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()
-  const restoredStatus = await page.locator('select').filter({ hasText: '全部状态' }).first().inputValue()
-  ok('刷新后难度筛选保留', restoredDiff === '3', `实际 ${restoredDiff}`)
-  ok('刷新后状态筛选保留', restoredStatus === 'draft', `实际 ${restoredStatus}`)
-  const persisted = await page.evaluate(() => localStorage.getItem('qbank.listFilter.v1.list:bank_default'))
-  ok('筛选已写入 localStorage', !!persisted && /difficulty/.test(persisted), String(persisted).slice(0, 60))
-
-  // 重置后回到默认
-  await page.getByRole('button', { name: '重置' }).click()
-  await page.waitForTimeout(900)
-  const afterReset = await page.locator('body').innerText()
-  ok('重置后回到全部难度', (await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()) === '')
-  ok('重置后列表恢复 10 题', (await page.locator('tbody tr').count()) === 10, afterReset.match(/\d+ 题/)?.[0] || '')
-
-  // 页码收敛（真实场景，不是只测 clampPage 函数）：
-  // 造 60 题 @20/页 = 3 页 → 翻到第 3 页 → 把第 3 页的 20 题全选删除 → 必须回到第 2 页
-  await page.evaluate(() => window.__setCount(60))
-  await page.locator('select').filter({ hasText: /条\/页/ }).first().selectOption('20')
-  await page.waitForTimeout(1000)
-  const pageInfo3 = await page.locator('body').innerText()
-  ok('60 题 @20/页 显示 3 页', /第 1 \/ 3 页/.test(pageInfo3), pageInfo3.match(/第 \d+ \/ \d+ 页/)?.[0] || '')
-  await page.getByRole('button', { name: /下一页/ }).click()
-  await page.waitForTimeout(600)
-  await page.getByRole('button', { name: /下一页/ }).click()
-  await page.waitForTimeout(800)
-  ok('翻到第 3 页', /第 3 \/ 3 页/.test(await page.locator('body').innerText()))
-  // 全选并删除本页 20 题 → 只剩 40 题 = 2 页，当前页 3 已越界
-  await page.locator('.batch-bar').count().catch(() => 0)
-  await page.locator('thead input[type=checkbox]').check()
-  await page.waitForTimeout(300)
-  await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
-  await page.waitForTimeout(600)
-  await page.locator('.dg-card button').filter({ hasText: /^删除$/ }).last().click()
-  await page.waitForTimeout(1600)
-  const afterDelPage = await page.locator('body').innerText()
-  ok('删完末页后自动回到第 2 页（不出现「第 3 / 2 页」）',
-    /第 2 \/ 2 页/.test(afterDelPage),
-    afterDelPage.match(/第 \d+ \/ \d+ 页/)?.[0] || '(未找到页码)')
-  ok('收敛后不是空页', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
-  await page.evaluate(() => window.__restoreQs())
-  await page.waitForTimeout(400)
-
-  // 空态 CTA：筛选不到时给「清除筛选」，而非硬说「暂无数据」
-  await page.locator('select').filter({ hasText: '全部难度' }).first().selectOption('1')
-  await page.waitForTimeout(400)
-  await page.locator('input[placeholder="搜索题干..."]').fill('不存在的关键词')
-  await page.getByRole('button', { name: '搜索' }).first().click()
-  await page.waitForTimeout(900)
-  const emptyBody = await page.locator('body').innerText()
-  ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件/.test(emptyBody))
-  ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
-  await page.getByRole('button', { name: '清除筛选' }).click()
-  await page.waitForTimeout(900)
-
-  // ── FE-P0-10：批量操作单次 IPC + 逐项失败可重试 ──
-  console.log('\nFE-P0-10 批量操作')
-  await page.getByRole('button', { name: '重置' }).click()
-  await page.waitForTimeout(800)
-  // 全选本页 10 题
-  await page.locator('thead input[type=checkbox]').check()
-  await page.waitForTimeout(400)
-  const selBody = await page.locator('body').innerText()
-  ok('选中后出现批量操作条', /已选 10 题/.test(selBody), selBody.match(/已选 \d+ 题/)?.[0] || '')
-  ok('批量条含难度/状态入口', /难度/.test(selBody) && /状态/.test(selBody))
-
-  // 批量改难度：必须只打 1 次 IPC（不是 10 次）
-  await page.evaluate(() => { window.__batchUpdateCalls = 0 }).catch(() => {})
-  await page.locator('.batch-bar').getByRole('button', { name: '难度', exact: true }).click()
-  await page.waitForTimeout(600)
-  const dlg = page.locator('.dialog-card, [role=dialog]').first()
-  const dlgText = await page.locator('body').innerText()
-  ok('改难度弹出应用内选择框', /选择难度/.test(dlgText), dlgText.match(/选择难度[^\n]*/)?.[0] || '')
-  // selectDialog 是原生 <select> + 确定按钮（不是按钮列表）
-  await page.locator('.dg-card select').first().selectOption('4')
-  await page.locator('.dg-card button').filter({ hasText: /^应用$/ }).last().click()
-  await page.waitForTimeout(1200)
-  const batchCalls = await page.evaluate(() => window.__batchUpdateCalls || 0)
-  ok('10 题改难度只触发 1 次 IPC', batchCalls === 1, `实际 ${batchCalls} 次`)
-  const lastUpd = await page.evaluate(() => window.__lastBatchUpdate)
-  ok('批量更新带全部选中 id', (lastUpd?.ids || []).length === 10, `${(lastUpd?.ids || []).length} 个 id`)
-  ok('批量更新只带白名单字段', lastUpd && Object.keys(lastUpd.patch || {}).join() === 'difficulty', JSON.stringify(lastUpd?.patch))
-  const afterDiff = await page.locator('body').innerText()
-  ok('改难度后列表即时刷新为 4', /难度 4/.test(afterDiff) || (await page.locator('.difficulty-dots').count()) > 0)
-
-  // 逐项失败：让 2 个 id 失败，页面必须逐项列原因 + 提供重试
-  await page.locator('thead input[type=checkbox]').check()
-  await page.waitForTimeout(300)
-  await page.evaluate(() => { window.__batchFailIds = ['q1', 'q2'] })
-  await page.locator('.batch-bar').getByRole('button', { name: '状态', exact: true }).click()
-  await page.waitForTimeout(600)
-  await page.locator('.dg-card select').first().selectOption('draft')
-  await page.locator('.dg-card button').filter({ hasText: /^应用$/ }).last().click()
-  await page.waitForTimeout(1300)
-  const failBody = await page.locator('body').innerText()
-  ok('部分失败时逐项列原因', /2 项未成功/.test(failBody) && /题目不存在/.test(failBody),
-    failBody.match(/\d+ 项未成功/)?.[0] || '(未找到失败汇总)')
-  ok('失败汇总提供重试入口', (await page.getByRole('button', { name: '重试失败项' }).count()) === 1)
-
-  // 重试：这次不再失败，应消掉失败条
-  await page.evaluate(() => { window.__batchFailIds = [] })
-  await page.getByRole('button', { name: '重试失败项' }).click()
-  await page.waitForTimeout(1300)
-  ok('重试成功后失败汇总消失', (await page.getByRole('button', { name: '重试失败项' }).count()) === 0)
-
-  // 批量删除：同样只 1 次 IPC
-  // 计数器清零：前面「页码收敛」用例也做过一次批量删除，不清零会累加成 2
-  await page.evaluate(() => { window.__batchRemoveCalls = 0; window.__removes = 0 })
-  await page.locator('thead input[type=checkbox]').check()
-  await page.waitForTimeout(300)
-  await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
-  await page.waitForTimeout(700)
-  ok('批量删除确认框提示不可撤销', /不可撤销/.test(await page.locator('body').innerText()))
-  // 删除确认按钮文案就是「删除」，但批量条里也有同名按钮，故限定在弹层内
-  const delOk = page.locator('.dg-card button').filter({ hasText: /^删除$/ })
-  ok('删除确认弹层就位', (await delOk.count()) > 0, `弹层按钮数 ${await delOk.count()}`)
-  await delOk.last().click()
-  await page.waitForTimeout(1600)
-  const delCalls = await page.evaluate(() => window.__batchRemoveCalls || 0)
-  ok('10 题批量删除只触发 1 次 IPC', delCalls === 1, `实际 ${delCalls} 次`)
-  ok('未走单条逐删路径', (await page.evaluate(() => window.__removes || 0)) === 0)
-  // 复位 mock 数据：刚才那批删除把 qs 清空了，后面的刷题/模考用例还要用
-  await page.evaluate(() => window.__restoreQs())
-
-  // ── FE-P0-03：脏徽章 / 离开确认 / Ctrl+S / 保存后清草稿 ──
-  console.log('\nFE-P0-03 录题防丢失')
-  await goto(page, '#/create?bank=bank_default')
-  await page.locator('.ProseMirror').first().click()
-  await page.keyboard.type('E2E题干')
-  await page.waitForTimeout(400)
-  ok('改题干后出现「未保存」徽章', (await page.locator('.badge', { hasText: '未保存' }).count()) === 1)
-
-  await page.locator('a').filter({ hasText: '题库' }).first().click()
-  await page.waitForTimeout(800)
-  ok('脏离开弹出应用内确认', /放弃未保存的修改？/.test(await page.locator('body').innerText()))
-  await page.getByRole('button', { name: '继续编辑' }).click()
-  await page.waitForTimeout(500)
-  ok('取消后内容不丢', /E2E题干/.test(await page.locator('.ProseMirror').first().innerText()))
-
-  // 等草稿防抖写入
-  await page.waitForTimeout(2400)
-  const draftBefore = await page.evaluate(() => Object.keys(sessionStorage).some((k) => k.startsWith('qbank.formDraft.v1')))
-  ok('脏状态会写入草稿', draftBefore)
-
-  const createsBefore = await page.evaluate(() => window.__creates)
-  await page.keyboard.press('Control+s')
-  await page.waitForTimeout(1000)
-  ok('Ctrl+S 触发保存', (await page.evaluate(() => window.__creates)) > createsBefore)
-  ok('保存后走 create 分支并带题干', /E2E题干/.test(JSON.stringify(await page.evaluate(() => window.__lastCreate))))
-
-  // 关键回归：保存成功后草稿必须被清掉（曾因传 computed 对象而残留）
-  const draftAfter = await page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('qbank.formDraft.v1')))
-  ok('保存成功后草稿被清除', draftAfter.length === 0, `残留：${JSON.stringify(draftAfter)}`)
-
-  // 保存后离开应静默
-  await page.locator('a').filter({ hasText: '题库' }).first().click()
-  await page.waitForTimeout(900)
-  ok('保存后离开不弹确认', !/放弃未保存的修改？/.test(await page.locator('body').innerText()))
-
-  // ── FE-P0-05：可用题量 ──
-  console.log('\nFE-P0-05 配置记忆 + 可用题量')
-  await goto(page, '#/practice')
-  ok('刷题页显示可用题量', /可用 \d+ 题/.test(await page.locator('body').innerText()))
-  await page.getByRole('button', { name: '全部', exact: true }).click()
-  await page.waitForTimeout(300)
-  ok('配置写入 localStorage', !!(await page.evaluate(() => localStorage.getItem('qbank.runConfig.v1.practice'))))
-
-  // ── FE-P0-06：练习导航 + 跳过回卷 ──
-  console.log('\nFE-P0-06 练习导航')
-  await page.getByRole('button', { name: '开始刷题' }).click()
-  await page.waitForTimeout(1500)
-  const navText = await page.locator('body').innerText()
-  ok('导航三项就位', /上一题/.test(navText) && /标记/.test(navText) && /跳过/.test(navText))
-  ok('已答/剩余计数', /已答 0 \/ 剩余 10/.test(navText))
-  await page.getByRole('button', { name: '标记', exact: true }).click()
-  await page.waitForTimeout(300)
-  ok('标记后按钮变「取消标记」', (await page.getByRole('button', { name: '取消标记' }).count()) === 1)
-
-  await page.getByRole('button', { name: '跳过' }).click()
-  await page.waitForTimeout(700)
-  ok('跳过后已答仍为 0（不计虚增）', /已答 0 \/ 剩余 10/.test(await page.locator('body').innerText()))
-
-  // ── FE-P0-04：离开提示 ──
-  console.log('\nFE-P0-04 离开提示')
-  await page.locator('a').filter({ hasText: '题库' }).first().click()
-  await page.waitForTimeout(1000)
-  ok('练习离开提示进度已存', /刷题进度已保存/.test(await page.locator('body').innerText()))
-
-  // ── FE-P0-06(Review)：间隔预览 + 撤销 ──
-  console.log('\nFE-P0-06 复习间隔预览与撤销')
-  await goto(page, '#/review')
-  ok('复习页显示待复习数', /待复习/.test(await page.locator('body').innerText()))
-
-  // 统计口径分歧回归：due_total（due_at<=now）为 0 但 due_today（<=今天结束）为 3
-  // 是学习步卡片的常态（state=1/3，1m/10m）。开始复习必须仍可用——
-  // review_due 的截止就是「今天结束」，用 due_total 判断会禁用掉本该能拉的题。
-  await page.evaluate(() => {
-    window.__stats = { ...window.__stats, due_total: 0, due_today: 3, learning_due: 3 }
-  })
-  await goto(page, '#/banks')
-  await goto(page, '#/review')
-  const startBtn = page.getByRole('button', { name: '开始复习' })
-  const reviewBody = await page.locator('body').innerText()
-  ok('due_total=0 但 due_today=3 时开始按钮仍可点',
-    (await startBtn.isEnabled()),
-    reviewBody.match(/当前待复习[^\n]*/)?.[0] || '')
-  ok('不出现「没有待复习」与「今日到期 N 题」自相矛盾',
-    !/当前没有待复习的题/.test(reviewBody),
-    reviewBody.match(/当前没有待复习[^\n]*/)?.[0] || '')
-  // 统计请求失败时不得把「未知」当「0 题」：开始按钮应仍可用，让 start() 报真实错误
-  await page.evaluate(() => { window.__statsFail = true })
-  await page.evaluate(() => { location.hash = '#/banks' })
-  await page.waitForTimeout(700)
-  await page.evaluate(() => { location.hash = '#/review' })
-  await page.waitForTimeout(1600)
-  const failStart = page.getByRole('button', { name: '开始复习' })
-  ok('统计失败时开始按钮仍可点', await failStart.isEnabled())
-  await page.evaluate(() => { window.__statsFail = false })
-  await page.evaluate(() => { location.hash = '#/banks' })
-  await page.waitForTimeout(700)
-  await page.evaluate(() => { location.hash = '#/review' })
-  await page.waitForTimeout(1600)
-
-  await page.getByRole('button', { name: '开始复习' }).click()
-  await page.waitForTimeout(1600)
-  await page.locator('.option-btn').first().click()
-  await page.waitForTimeout(250)
-  const judge = page.getByRole('button', { name: '判分' })
-  if (await judge.count()) { await judge.click(); await page.waitForTimeout(800) }
-  const gradeRow = await page.locator('body').innerText()
-  ok('四键显示下次间隔', /\d+[mhd]\b/.test(gradeRow) && /忘记/.test(gradeRow) && /良好/.test(gradeRow))
-  ok('复习卡片显示已复习/剩余', /已复习 \d+ \/ 剩 \d+/.test(gradeRow))
-
-  await page.getByRole('button', { name: /^良好/ }).click()
-  await page.waitForTimeout(800)
-  ok('评分后出现撤销入口', /可撤销/.test(await page.locator('body').innerText()))
-  const undo = page.getByRole('button', { name: /撤销/ }).first()
-  if (await undo.count()) { await undo.click(); await page.waitForTimeout(1100) }
-  ok('撤销调用 review_revert', (await page.evaluate(() => window.__reverted.length)) > 0)
-  ok('撤销后提示可重新评分', /已撤销/.test(await page.locator('body').innerText()))
-
-  // ── 最后一题也必须能撤销（否则 toast 承诺的「可撤销」是假的）──
-  console.log('\n复习最后一题撤销')
-  await page.evaluate(() => { window.__reviewOnly = 1 })
-  await page.evaluate(() => { sessionStorage.clear() })
-  await goto(page, '#/banks')
-  await goto(page, '#/review')
-  await page.getByRole('button', { name: '开始复习' }).click()
-  await page.waitForTimeout(1600)
-  await page.locator('.option-btn').first().click()
-  await page.waitForTimeout(250)
-  const j2 = page.getByRole('button', { name: '判分' })
-  if (await j2.count()) { await j2.click(); await page.waitForTimeout(800) }
-  const beforeUndo = await page.evaluate(() => window.__reverted.length)
-  await page.getByRole('button', { name: /^良好/ }).click()
-  await page.waitForTimeout(900)
-  const doneBody = await page.locator('body').innerText()
-  ok('最后一题评完进入结束页', /本轮复习完成/.test(doneBody))
-  const undoOnDone = page.getByRole('button', { name: /撤销并重评/ })
-  ok('结束页仍有撤销入口（不再只是口头承诺）', (await undoOnDone.count()) === 1,
-    doneBody.match(/刚才把最后一题[^\n]*/)?.[0] || '(未找到撤销条)')
-  if (await undoOnDone.count()) { await undoOnDone.click(); await page.waitForTimeout(1200) }
-  ok('结束页撤销真的调用了 review_revert', (await page.evaluate(() => window.__reverted.length)) > beforeUndo)
-  const afterUndoBody = await page.locator('body').innerText()
-  ok('撤销后回到作答卡（可重新评分）', /自评记忆效果/.test(afterUndoBody))
-  await page.evaluate(() => { window.__reviewOnly = 0 })
-
-  // ── FE-P0-07：答题卡 + 回看 ──
-  console.log('\nFE-P0-07 模考答题卡与历史回看')
-  await goto(page, '#/exam')
-  ok('准备页显示成绩趋势（SVG）', (await page.locator('svg[role=img]').count()) >= 1)
-  ok('历史场次有回看入口', (await page.getByRole('button', { name: '回看' }).count()) >= 1)
-
-  await page.getByRole('button', { name: '全部', exact: true }).click()
-  await page.getByRole('button', { name: '开始模考' }).click()
-  await page.waitForTimeout(2000)
-  await page.getByRole('button', { name: /答题卡/ }).click()
-  await page.waitForTimeout(700)
-  ok('答题卡渲染 10 格', (await page.locator('.sc-cell').count()) === 10)
-  await page.locator('.sc-cell').nth(7).click()
-  await page.waitForTimeout(800)
-  ok('点第 8 格跳到第 8 题', /第 8 \/ 10 题/.test(await page.locator('body').innerText()))
-
-  await page.getByRole('button', { name: /^交卷/ }).last().click()
-  await page.waitForTimeout(900)
-  ok('交卷确认报告未答数', /还有 \d+ 题未作答/.test(await page.locator('body').innerText()))
-  await page.getByRole('button', { name: '继续作答' }).click()
-  await page.waitForTimeout(600)
-
-  // 历史回看：选项 id 必须映射回字母
-  // 注意：先丢掉模考草稿再回准备页——留在 card 阶段时页面没有「回看」入口
-  await page.evaluate(() => { sessionStorage.removeItem('qbank.session.v1.exam') })
-  await goto(page, '#/banks')
-  await goto(page, '#/exam')
-  const backBtn = page.getByRole('button', { name: '回看' }).first()
-  ok('回到准备页后有回看入口', (await backBtn.count()) > 0)
-  if (await backBtn.count()) { await backBtn.click(); await page.waitForTimeout(1200) }
-  const row = page.locator('.hr-panel button').filter({ hasText: '5 / 5' }).first()
-  if (await row.count()) { await row.click(); await page.waitForTimeout(600) }
-  const reviewText = await page.locator('body').innerText()
-  ok('回看调用 exam_detail', !!(await page.evaluate(() => window.__detailArg)))
-  ok('回看作答显示字母而非内部 id', /你的作答：\s*B/.test(reviewText), reviewText.match(/你的作答：[^\n]*/)?.[0] || '(未找到)')
-  ok('回看不泄露内部选项 id', !/\bo[12]\b/.test(reviewText), '出现了 o1/o2 字样')
-  ok('回看显示题面与解析', /第一题题面/.test(reviewText) && /第一题解析/.test(reviewText))
-
-  // 展开答错的那行：必须给出正确答案字母
-  const wrongRow = page.locator('.hr-panel button').filter({ hasText: '0 / 5' }).first()
-  if (await wrongRow.count()) { await wrongRow.click(); await page.waitForTimeout(600) }
-  const wrongText = await page.locator('body').innerText()
-  ok('答错行展示正确答案字母', /正确答案：\s*A/.test(wrongText), wrongText.match(/正确答案：[^\n]*/)?.[0] || '(未找到)')
-
-  // 材料子题回看：必须切到子题题面与子题选项，不能显示母题题面或内部 id
-  const matRow = page.locator('.hr-panel button').filter({ hasText: '第 2 问' }).first()
-  ok('材料子题行标注「第 N 问」', (await matRow.count()) > 0)
-  if (await matRow.count()) { await matRow.click(); await page.waitForTimeout(600) }
-  const matText = await page.locator('body').innerText()
-  ok('材料子题显示子题题面', /子题二题面/.test(matText), matText.match(/子题[^\n]*题面/)?.[0] || '(未找到子题题面)')
-  ok('材料子题不显示母题题面充当题面', !/材料母题题面/.test(matText))
-  ok('材料子题作答映射为字母', /你的作答：\s*B/.test(matText), matText.match(/你的作答：[^\n]*/)?.[0] || '(未找到)')
-  ok('材料子题不泄露内部选项 id', !/\bo[12]\b/.test(matText))
-
-  // 简答回看：必须给出参考答案（answer.reference），否则「每道题的正确答案」不成立
-  const shortRow = page.locator('.hr-panel button').filter({ hasText: '简答题' }).first()
-  ok('简答行存在', (await shortRow.count()) > 0)
-  if (await shortRow.count()) { await shortRow.click(); await page.waitForTimeout(600) }
-  const shortText2 = await page.locator('body').innerText()
-  ok('简答回看显示我的答案', /我写的答案ABC/.test(shortText2), shortText2.match(/我的答案：[^\n]*/)?.[0] || '(未找到)')
-  ok('简答回看显示参考答案', /参考答案：\s*标准参考答案XYZ/.test(shortText2), shortText2.match(/参考答案：[^\n]*/)?.[0] || '(未找到参考答案)')
-
-  // ── FE-P0-11：错题本搜索 / 排序 / 统计 ──
-  console.log('\nFE-P0-11 错题本搜索排序统计')
-  await goto(page, '#/wrong')
-  const wBody = await page.locator('body').innerText()
-  ok('统计条显示全库错题数', /错题 6/.test(wBody), wBody.match(/错题 \d+/)?.[0] || '')
-  ok('统计条按题型分组', /简答|单选|多选|判断/.test(wBody))
-  ok('统计条按题库分组', /默认题库 4/.test(wBody) && /第二题库 2/.test(wBody), wBody.match(/题库[^\n]*/)?.[0] || '')
-  ok('顽固错题入口可见', /顽固错题 3/.test(wBody), wBody.match(/顽固错题 \d+/)?.[0] || '')
-  ok('重练全部显示真实数量', /重练全部（6 题）/.test(wBody), wBody.match(/重练全部（[^）]*）/)?.[0] || '')
-  ok('有搜索框', (await page.locator('input[placeholder="搜索题干..."]').count()) === 1)
-  ok('有排序下拉', /最近错优先/.test(wBody))
-
-  // 排序：错得最多优先 → 首行应是 wrong_count=5 的 q5
-  await page.locator('select').filter({ hasText: '最近错优先' }).first().selectOption('wrong_count_desc')
-  await page.waitForTimeout(900)
-  const wSortArgs = await page.evaluate(() => window.__wrongArgs)
-  ok('排序参数下发 wrong_count_desc', wSortArgs?.sort === 'wrong_count_desc', String(wSortArgs?.sort))
-  const firstWrongRow = await page.locator('tbody tr').first().innerText()
-  ok('wrong_count_desc 首行为 q5（错 5 次）', /q5/.test(firstWrongRow) && /5/.test(firstWrongRow), firstWrongRow.slice(0, 50))
-
-  // 搜索：q3 → 只剩 1 条
-  await page.locator('input[placeholder="搜索题干..."]').fill('q3')
-  await page.getByRole('button', { name: '搜索' }).first().click()
-  await page.waitForTimeout(1000)
-  const wSearchArgs = await page.evaluate(() => window.__wrongArgs)
-  ok('搜索参数下发', wSearchArgs?.query === 'q3', String(wSearchArgs?.query))
-  ok('搜索后只剩 1 条', (await page.locator('tbody tr').count()) === 1, `${await page.locator('tbody tr').count()} 行`)
-  ok('搜索后统计条不变（全库口径）', /错题 6/.test(await page.locator('body').innerText()))
-
-  // 搜不到：提示筛选空而不是「暂无错题」
-  await page.locator('input[placeholder="搜索题干..."]').fill('zzz-none')
-  await page.getByRole('button', { name: '搜索' }).first().click()
-  await page.waitForTimeout(1000)
-  const wEmpty = await page.locator('body').innerText()
-  ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件的错题/.test(wEmpty))
-  ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
-  await page.getByRole('button', { name: '清除筛选' }).click()
-  await page.waitForTimeout(1000)
-
-  // 顽固错题筛选：minWrongCount=3 → 3 条（q2=4, q3=3, q5=5）
-  await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
-  await page.waitForTimeout(1000)
-  const stubArgs = await page.evaluate(() => window.__wrongArgs)
-  ok('顽固筛选下发 minWrongCount=3', stubArgs?.minWrongCount === 3, String(stubArgs?.minWrongCount))
-  ok('顽固筛选后剩 3 条', (await page.locator('tbody tr').count()) === 3, `${await page.locator('tbody tr').count()} 行`)
-  // 再点一次取消
-  await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
-  await page.waitForTimeout(1000)
-  ok('再点一次取消顽固筛选', (await page.locator('tbody tr').count()) === 6, `${await page.locator('tbody tr').count()} 行`)
-
-  // 材料题重练文案：必须明说含 N 问（不是默默整题重练）
-  const matRetry = page.locator('tbody tr').filter({ hasText: 'q6' }).getByRole('button', { name: /重练/ }).first()
-  const matRetryText = (await matRetry.count()) ? await matRetry.innerText() : ''
-  ok('材料题重练文案标注含 N 问', /重练整题（含 2 问）/.test(matRetryText), matRetryText || '(未找到材料题重练按钮)')
-
-  // 统计拉取失败不能让列表也挂（挡不住看错题）
-  await page.evaluate(() => { window.__wrongStatsFail = true })
-  await goto(page, '#/banks')
-  await goto(page, '#/wrong')
-  const failStatsBody = await page.locator('body').innerText()
-  ok('统计失败时仍能看到错题列表', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
-  ok('统计失败时不显示错乱统计条', !/错题 6/.test(failStatsBody))
-  await page.evaluate(() => { window.__wrongStatsFail = false })
-
   ok('全程无 pageerror', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
-} catch (e) {
-  ok('脚本执行未中断', false, String(e?.message || e))
-} finally {
-  await browser.close()
+
+  const ms = Date.now() - t0
+  const fails = results.filter((r) => !r.pass)
+  summary.push({ id: mod.id, label: mod.label, ms, total: results.length, fails })
+  console.log(`  ${fails.length ? `✗ ${fails.length} 失败` : '✓ 全通过'}（${results.length} 项，${ms}ms）`)
+  await ctx.close()
 }
 
-console.log(`\n${failures === 0 ? 'E2E PASS' : `E2E FAIL（${failures} 项失败）`} — ${results.filter((r) => r.pass).length}/${results.length} 通过`)
-process.exit(failures === 0 ? 0 : 1)
+const elapsed = Date.now() - startedAll
+await browser.close()
+server.stop()
+
+console.log('\n──────── 汇总 ────────')
+let totalFails = 0
+let totalAssertions = 0
+for (const r of summary) {
+  totalFails += r.fails.length
+  totalAssertions += r.total
+  console.log(`${r.fails.length ? '✗' : '✓'} ${r.id.padEnd(9)} ${String(r.total).padStart(3)} 项  ${String(r.ms).padStart(6)}ms  ${r.label}`)
+  for (const f of r.fails) console.log(`      ✗ ${f.name}${f.detail ? ` — ${f.detail}` : ''}`)
+}
+
+console.log(`\n${totalFails === 0 ? 'E2E PASS' : `E2E FAIL（${totalFails} 项失败）`} — ${totalAssertions - totalFails}/${totalAssertions} 通过，用时 ${(elapsed / 1000).toFixed(1)}s`)
+process.exit(totalFails === 0 ? 0 : 1)

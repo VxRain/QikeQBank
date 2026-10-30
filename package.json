@@ -12,7 +12,15 @@
     "lint": "cd src-tauri && cargo clippy --lib --tests -- -D warnings",
     "portable": "node tools/make-portable.mjs",
     "build:all": "pnpm tauri build && node tools/make-portable.mjs --skip-build",
-    "test:e2e": "node tools/e2e-frontend.mjs"
+    "test:e2e": "node tools/e2e-frontend.mjs",
+    "test:e2e:list": "node tools/e2e-frontend.mjs list",
+    "test:e2e:batch": "node tools/e2e-frontend.mjs batch",
+    "test:e2e:form": "node tools/e2e-frontend.mjs form",
+    "test:e2e:practice": "node tools/e2e-frontend.mjs practice",
+    "test:e2e:review": "node tools/e2e-frontend.mjs review",
+    "test:e2e:exam": "node tools/e2e-frontend.mjs exam",
+    "test:e2e:wrong": "node tools/e2e-frontend.mjs wrong",
+    "test:e2e:changed": "node tools/e2e-frontend.mjs --changed"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

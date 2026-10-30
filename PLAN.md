@@ -79,7 +79,7 @@ QikeQBank/
                 run-config（配置归一/可用题量）
                 review-preview（间隔预览/撤销载荷） exam-sheet（答题卡分组） exam-trend（趋势坐标/回看行）
                 （node:test，零依赖）
-└── tools/e2e-frontend.mjs   浏览器端到端回归（Playwright + 注入 mock IPC，33 项断言）
+└── tools/e2e-frontend.mjs   浏览器端到端回归（Playwright + 注入 mock IPC，102 项断言，分 7 模块可单跑）
 ```
 
 **存储**：`banks` + `questions`（JSON 列）+ `practice_records` + `review_state`。DB 默认在 app_data_dir（`QKEBANK_DB` 环境变量可覆盖）。
@@ -544,7 +544,26 @@ export function persistBankFilter(page, id)
 - **跨语言常量校对**：前后端各有一份「排序白名单」时（`SORT_WHITELIST` / `WRONG_SORT_WHITELIST` ↔ `SORT_KEYS` / `WRONG_SORT_OPTIONS`），单测必须逐字比对两侧键集合，否则会出现「前端写入、后端 Err」的死角。
 - **事务回滚守卫**：批量写命令的测试用临时 `TRIGGER` 制造「写到第 N 条才报错」，断言前 N-1 条的修改被回滚。只测参数校验不改库是不够的——那只验证了预检，没真的开过写事务。
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
-- **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。需先起 dev server（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
+- **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的「耗时」为模块自身耗时（实测，不含 node 启动 ~0.6s）：
+  | 模块 | 覆盖页面 | 断言 | 典型耗时 |
+  |---|---|---|---|
+  | `list` | 试题列表：排序 / 筛选 / 页码收敛 | 21 | ~2.0s |
+  | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~2.8s |
+  | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 | 9 | ~3.2s |
+  | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 | 8 | ~1.3s |
+  | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 14 | ~2.2s |
+  | `exam` | 模考：答题卡 / 交卷 / 历史回看 | 20 | ~3.3s |
+  | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~1.5s |
+  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（~16s）只在提交前 / 发版前 / 真跨模块改动时跑。
+  - 新增页面行为时：把断言加到对应模块；新模块必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
+  - **等待约定（重要，别退回固定 sleep / 文案标记）**：`goto(page, hash)` 不接受任何标记参数，就绪判定统一走 `requireRoute()`：**`document.title === meta.title + ' · ' + APP_NAME` 且 `window.__inflight === 0`**。
+    - 为什么不是界面文案：`meta.title` 是路由元数据（写在 `router/index.js`），改界面文案/布局不影响它；而 `/新建题库/` 这类文案一改就废。
+    - 为什么加 inflight：7 个视图的 `onMounted` 都经 `bridge.js` 发 IPC，归零即首屏数据到齐（mock 里用 try/finally 计数）。
+    - 实测：该组合 8/8 成功、平均 6~77ms；`goto` 超时**必抛**并附带实际 `title/inflight/hash/页面文本`。
+    - 已禁用 `networkidle`（Playwright 官方标 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead"），也禁用 `waitForTimeout`（官方："Never wait for timeout in production"）。
+    - **前置契约守卫**：跑 e2e 前自动执行 `tests/unit/e2e-ready-signal.test.js`（7 项），检测 `ROUTE_TITLE ↔ meta.title` 漂移、title 拼接格式、inflight 的 try/finally、无 networkidle、超时必抛；不过则 **exit 3 中止**（~0.3s），不会白跑 30s 超时。`--skip-guard` 仅排障用。
+    - **时间相关断言用 `page.clock`**（仅 `form`/`review` 模块启用：`usesClock: true`）。实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 3ms。`exam`/`practice` 有 `Date.now()` 算用时/限时，**暂不启用**。
 - **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、`pnpm test:e2e`、debug EXE 启动建库冒烟、git commit。
 
 **升级条件**（同 v1）：失败 ≥2 次或计划假设失真 → 停止如实汇报，禁止臆造。

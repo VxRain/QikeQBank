@@ -33,7 +33,8 @@
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` 全绿
 - [ ] `pnpm lint`（clippy `-D warnings`）0 警告
 - [ ] `node tools/smoke-test.mjs` 通过
-- [ ] 涉及页面行为：`pnpm test:e2e` 通过（`tools/e2e-frontend.mjs`，需先起 dev server）；浏览器结论必须由脚本证伪，不接受口头「实测通过」
+- [ ] 涉及页面行为：跑对应模块的 `pnpm test:e2e:<模块>`（**默认动作**）；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e` 只在提交前 / 发版前 / 真跨模块改动时跑。浏览器结论必须由脚本证伪，不接受口头「实测通过」
+- 模块名（三处文档必须逐字一致）：`list`(试题列表) / `batch`(批量操作) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本)
 - [ ] 涉及命令签名 / 数据结构：同步更新 `PLAN.md §4/§7` ↔ Rust command ↔ `src/api/*.js`
 - [ ] 涉及表结构：同步更新 `PLAN.md §3` ↔ `src-tauri/src/db/schema.rs` ↔ `tools/` 两脚本（逐字符一致）
 - [ ] 新增交互不出现 `alert/confirm/prompt`，统一走 `src/stores/ui.js`
@@ -728,6 +729,34 @@
 
 > ✅ 已完成（前端架构批次）。落地：`utils/render.js` 生成的 `<img>` 带 `loading="lazy" decoding="async"`；材料题子题块加 `cv-auto`（`styles/perf.css` 的 content-visibility:auto）；`QuestionPreview` 去掉挂载时的双次 compute 并按渲染签名缓存。守卫：`tests/unit/render-perf.test.js`。
 
+### [ ] FE-ARCH-09 E2E 迁 `@playwright/test`（方案 C）
+
+> ⏳ 待开工（技术选型已定，排在当前 e2e 分层改造之后）。
+
+**动机（为什么必须迁）**：当前 `tools/e2e-frontend.mjs` 是手写 runner + 手调等待。分层改造已把它从 93s/无模块降到**全量 ~16s（实测 14.5~17.7s，5 次）、单模块 1.3~3.3s**，并把 62 处 `waitForTimeout` 全部换成「等真实 DOM 谓词 + Vue 更新批次」；但**手调等待无法根治 flaky**——
+
+- 本轮实测的对照证据：跳路由前「只等 IPC 静默」成功 **6/10**（会 flaky），「等真实挂载标记」**10/10**；同时禁掉 marker + `networkidle` 兜底后连跑 5 次有 **3 次失败**。这说明当前绿是「等待恰好配对」的产物，任何新用例少写一个谓词就会重新 flaky，而守门手段只有人肉 review。
+- 框架原生能力可把这类风险从「靠人写对」变成「机制保证」：`expect(locator)` 自带自动重试与 timeout，不需要作者自己想清楚该等什么。
+
+**改用要点**：
+
+| 能力 | 现在（手写） | 迁移后 |
+|---|---|---|
+| dev server | 脚本内 60 行 spawn/poll/复用逻辑 | `webServer` 配置 + `reuseExistingServer` |
+| 分模块 | 自建 `MODULES` 数组 + 位置参数过滤 | `test.describe` + `--project` / `--grep` |
+| 只跑改动 | 自建 `--changed`（按 `owns` 前缀匹配 git status） | 内置 `--only-changed` |
+| 等待 | 自写 `waitText` / `waitUntil` / `flush` 轮询 | `expect(locator).toHaveText()` 自动重试 |
+| 并发分片 | 无（只能整串行） | `--shard` / `fullyParallel` |
+| 失败诊断 | 只有 `console.log` + 失败详情字符串 | trace viewer + HTML 报告 + `retries` |
+
+**前置隐患（必须先处理）**：`@playwright/test@1.64.1` **已存在于 `node_modules`（传递依赖）但 `package.json` 未声明**。这意味着：
+- 当前 e2e 在干净安装 / CI 上必然跑不起来（`loadPlaywright()` 找不到 `playwright` 包时会退到 npx 缓存，CI 无缓存则 exit 2）；
+- 迁移时必须显式加入 `devDependencies`，并同时处理浏览器版本（本地已装 chromium-1234，而 1.64.1 期望 1247，现靠 `findChromium()` 回退——迁后应改为 `npx playwright install chromium` 或固定版本）。
+
+**迁移步骤（建议）**：① `pnpm add -D @playwright/test` + 补 `playwright.config.js`（`webServer` 指向 vite，`projects` 按 7 个模块切分）；② 把现有 103 条断言按模块逐个搬进 `tests/e2e/*.spec.mjs`，`ok(name, cond)` 改为 `expect(...)`；③ 每搬一个模块就跑一次新旧对照，断言数与结论必须一致；④ 全绿后删掉旧的 `tools/e2e-frontend.mjs`，`package.json` 脚本改为 `playwright test`；⑤ 同步更新 `AGENTS.md`、本文件 §0.3、`PLAN.md §8` 三处的模块名与用法。
+
+**验收**：① 7 个模块可独立 `--project` 运行，且断言总数 ≥ 现有 103；② 全量耗时 ≤ 迁移前（~16s）；③ 连续 10 次全量 0 flaky；④ CI 干净安装可直接跑（不再依赖 npx 缓存）；⑤ 失败时产出 trace 可回放。
+
 - 图片懒加载/异步解码；长列表 `content-visibility`；搜索摘要。
 - **验收**：见 FE-P1-12。
 
@@ -862,3 +891,5 @@
 | v3.4 | 2026-10-30 | 审计驳回修复：①材料题回看完全不成立——流水挂母题 id 但题面/选项/答案在子题，`exam_detail` 未返回 `children_json`，导致每个子题都显示母题题面 + 内部选项 id；已补 `children` 并按 `detail.child_id` 切到子题，行标题标「第 N 问」。②最后一题评分后 `phase=done`，撤销控件只在 `card` 阶段，toast 承诺「可撤销」却无入口；已在结束页补撤销条，撤销时切回 `card`。cargo 144、E2E 45 |
 | v3.5 | 2026-10-30 | 审计驳回修复：简答题历史回看缺「正确答案」——`answerTextOf` 只处理 ids/blanks，`answer.reference` 未渲染，而 `normalize.js` 会把只有 analysis 的简答迁移为 reference 并清空 analysis，导致这类题回看只剩自己的答案；已补参考答案块（与当场成绩单 `refOf`、`Wrong.vue` 同语言）。顺带修掉填空回看正确答案重复输出两次。FE-P0-07 趋势「按题库筛选」显式降级为全库（需改 `exam_sessions` 签名，与后端边界冲突）。E2E 48 |
 | v4 | 2026-10-30 | FE-P0-09/10/11 完成并勾选（列表排序筛选与页码收敛 / 批量操作单事务命令 / 错题本搜索排序统计）。后端：`questions_list` 与 `wrong_list` 各加参数、新增 `questions_batch_update`、`questions_batch_remove`、`wrong_stats` 共 3 条命令，**schema 零改动**。范围调整：FE-P0-11 的「导出错题」移出（落到 FE-P1-08），FE-P0-10 的「与 FE-P0-02 恢复语义一致」标注为待 FE-P0-02。修掉 3 个只在运行时暴露的缺陷（SQL 三值逻辑致 NULL 过滤全表、CTE 不可嵌套、前端 TDZ 白屏）。cargo 157、单测 154、E2E 98 |
+| v5 | 2026-10-30 | **E2E 分层改造（不新增功能、断言零丢失 103→103）**。背景：原 e2e 为 769 行单文件无模块边界，改一行页面也要跑完 6 个页面共 93s，且需手动先起 dev server。①**规定层修正**（消除「改一行跑全量」的制度成因）：`AGENTS.md` 验证门禁原不含 e2e 且与本文件 §0.3 自相矛盾，现补入并按「单模块为默认 / 全量为提交前」分级；三处文档（`AGENTS.md` / 本文件 §0.3 / `PLAN.md §8`）统一 7 个模块名。②**脚本模块化**：拆为 `list`/`batch`/`form`/`practice`/`review`/`exam`/`wrong`，每模块独立 browser context、支持位置参数过滤、`--changed` 按 git 改动选模块。③**dev server 自动起/复用**。④顺带修掉一个既有真 bug：`vite.config.js` 的 `watch.ignored` 未排除 `dist-portable/`，其中被 WebView 独占的 Cookies 文件会触发 `EBUSY` 直接把 dev server 打挂（这正是「手动起 server 经常白跑」的根因）。⑤**等待语义重写**：62 处 `waitForTimeout`（共 62s）全部改为「等真实 DOM 谓词 + Vue 更新批次」，并实测对照证明「等 IPC 静默」为 6/10 成功（flaky 源）、「等真实挂载标记」为 10/10。**实测**：单模块 1.3~3.3s、全量 14.5~17.7s（93s → ~16s，-83%），连跑 5 次 0 flaky，断言 103/103 逐条对齐无丢失。⑥新增 FE-ARCH-09：E2E 迁 `@playwright/test`（方案 C，手调等待无法根治 flaky；并记下 `@playwright/test` 已在 `node_modules` 却未声明于 `package.json` 这一会导致 CI 必坏的隐患） |
+| v6 | 2026-10-30 | **E2E 正确性与等待机制再修（P0~P3，不新增功能）**。v5 的等待方案有两处按官方标准不该留的东西，本轮按 Playwright 一手文档纠正。①**P0 修静默吞失败**：`waitForSelector(marker).catch(() => {})` 会在标记失效时静默继续，导致后续断言在**错误页面**上求值（误导性失败甚至假绿）。改为 `requireRoute()` 超时**必抛**，异常带实际 `title/inflight/hash/页面文本`。实测：注入失效标记后立即报「期望 #/wrong 页面就绪，实际页面：…」，而非等到后面报「按钮找不到」。②**P1 `page.clock` 消除时间等待**：实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 **3ms**（对照真实等待 2029ms）。仅 `form`/`review` 启用（`exam`/`practice` 有 12 处 `Date.now()` 算用时/限时，风险高，暂不开）。顺带把 review 撤销从「碰巧在 5000ms 窗口内」升级为**精确边界测试**（4.9s 仍可撤销 / 5.2s 自动消失，+4 条断言）。③**P2 就绪信号换源**：从「界面文案」（`/新建题库/` 等 19 处，产品改文案即废）换成「`document.title`(= `meta.title` + APP_NAME) 且 `__inflight === 0`」。前者是**路由元数据**、后者靠 `bridge.js` 唯一 IPC 漏斗，二者都与文案/布局解耦。实测 6 个路由 ×8 次全 8/8、平均 6~77ms。同时**删除 `networkidle`**——Playwright API 文档明确标注 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead." ④**前置契约守卫**：新增 `tests/unit/e2e-ready-signal.test.js`（7 项），e2e 启动前自动执行（~0.3s，失败 exit 3），防 `ROUTE_TITLE ↔ meta.title` 漂移、title 格式变更、inflight 漏 try/finally、networkidle 回流、超时被吞；实测改 `meta.title` 后 **0.29s 被拦下**而非白跑 30s 超时。⑤**P3 分层**：新增 `tests/unit/request-params-wiring.test.js`（6 项静态守卫，校验 `fetchList` 真的把 query/type/difficulty/status/sort/limit/offset 拼进请求，含空值守卫），注入「忘记下发 difficulty」后两条守卫同时报警。**注意**：实测从 e2e 删除 5 条纯参数断言**并未提速**（list 1493→1539ms、wrong 649→699ms，属噪声），说明耗时由「操作 + 等待」驱动而非断言条数，故**保留 E2E 覆盖**、单测守卫作补充而非替代。**实测**：全量 16.9s → **9.8~11.0s**，断言 108 → **112**，连跑 5 次 0 flaky；单测 154 → **167**；build/smoke/clippy 全绿 |
