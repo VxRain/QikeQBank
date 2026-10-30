@@ -78,7 +78,7 @@ function mockScript() {
     updated_at: '2026-01-0' + (1 + (i % 9)) + 'T00:00:00.000Z',
     fsrs: { due_at: '2026-01-01T00:00:00.000Z', stability: 2.5, difficulty: 5, reps: 2, lapses: 0, state: 2, learning_steps: 0, scheduled_days: 3, last_reviewed_at: '2026-01-01T00:00:00.000Z', last_result: 'good' }
   })
-  const freshQs = () => Array.from({ length: 10 }, (_, k) => {
+  const freshQs = (n = 10) => Array.from({ length: n }, (_, k) => {
     const q = mk(k + 1)
     q.created_at = `2026-01-${String(k + 1).padStart(2, '0')}T00:00:00.000Z`
     return q
@@ -86,6 +86,8 @@ function mockScript() {
   const qs = freshQs()
   // 批量删除会真的从 qs 里 splice 掉行；后续用例还要用满 10 题，故留一个复位口
   window.__restoreQs = () => { qs.length = 0; qs.push(...freshQs()) }
+  // 可调题量：验「删掉末页最后一题后页码收敛」需要真的造出第 2 页
+  window.__setCount = (n) => { qs.length = 0; qs.push(...freshQs(n)) }
   const sessions = [
     { exam_id: 'e1', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 3, correct_count: 1, score: 5, full_score: 15 },
     { exam_id: 'e2', started_at: '2026-09-05T10:00:00.000Z', ended_at: '2026-09-05T10:20:00.000Z', item_count: 3, correct_count: 2, score: 10, full_score: 15 }
@@ -378,6 +380,34 @@ try {
   ok('重置后回到全部难度', (await page.locator('select').filter({ hasText: '全部难度' }).first().inputValue()) === '')
   ok('重置后列表恢复 10 题', (await page.locator('tbody tr').count()) === 10, afterReset.match(/\d+ 题/)?.[0] || '')
 
+  // 页码收敛（真实场景，不是只测 clampPage 函数）：
+  // 造 60 题 @20/页 = 3 页 → 翻到第 3 页 → 把第 3 页的 20 题全选删除 → 必须回到第 2 页
+  await page.evaluate(() => window.__setCount(60))
+  await page.locator('select').filter({ hasText: /条\/页/ }).first().selectOption('20')
+  await page.waitForTimeout(1000)
+  const pageInfo3 = await page.locator('body').innerText()
+  ok('60 题 @20/页 显示 3 页', /第 1 \/ 3 页/.test(pageInfo3), pageInfo3.match(/第 \d+ \/ \d+ 页/)?.[0] || '')
+  await page.getByRole('button', { name: /下一页/ }).click()
+  await page.waitForTimeout(600)
+  await page.getByRole('button', { name: /下一页/ }).click()
+  await page.waitForTimeout(800)
+  ok('翻到第 3 页', /第 3 \/ 3 页/.test(await page.locator('body').innerText()))
+  // 全选并删除本页 20 题 → 只剩 40 题 = 2 页，当前页 3 已越界
+  await page.locator('.batch-bar').count().catch(() => 0)
+  await page.locator('thead input[type=checkbox]').check()
+  await page.waitForTimeout(300)
+  await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
+  await page.waitForTimeout(600)
+  await page.locator('.dg-card button').filter({ hasText: /^删除$/ }).last().click()
+  await page.waitForTimeout(1600)
+  const afterDelPage = await page.locator('body').innerText()
+  ok('删完末页后自动回到第 2 页（不出现「第 3 / 2 页」）',
+    /第 2 \/ 2 页/.test(afterDelPage),
+    afterDelPage.match(/第 \d+ \/ \d+ 页/)?.[0] || '(未找到页码)')
+  ok('收敛后不是空页', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
+  await page.evaluate(() => window.__restoreQs())
+  await page.waitForTimeout(400)
+
   // 空态 CTA：筛选不到时给「清除筛选」，而非硬说「暂无数据」
   await page.locator('select').filter({ hasText: '全部难度' }).first().selectOption('1')
   await page.waitForTimeout(400)
@@ -441,6 +471,8 @@ try {
   ok('重试成功后失败汇总消失', (await page.getByRole('button', { name: '重试失败项' }).count()) === 0)
 
   // 批量删除：同样只 1 次 IPC
+  // 计数器清零：前面「页码收敛」用例也做过一次批量删除，不清零会累加成 2
+  await page.evaluate(() => { window.__batchRemoveCalls = 0; window.__removes = 0 })
   await page.locator('thead input[type=checkbox]').check()
   await page.waitForTimeout(300)
   await page.locator('.batch-bar').getByRole('button', { name: '删除', exact: true }).click()
