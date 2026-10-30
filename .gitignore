@@ -12,3 +12,6 @@ data/
 
 # Playwright MCP 临时产物（截图快照/控制台日志）
 .playwright-mcp/
+
+# Pi goal 运行时数据（工具产物，不入库）
+.pi/
