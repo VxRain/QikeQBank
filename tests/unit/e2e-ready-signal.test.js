@@ -47,6 +47,55 @@ function e2eRouteTitles() {
   return out
 }
 
+/**
+ * 按花括号配对取出一个函数的整个函数体（含首尾花括号）。
+ *
+ * 为什么不能用正则：函数体里有对象字面量、模板字符串、嵌套箭头函数（含 `}`），
+ * 非贪婪 `[\s\S]*?` 会提前截断，`[^}]*` 又走不过第一个 `}`。
+ *
+ * @param {string} src 源码
+ * @param {string} decl 函数声明前缀，如 `async function requireRoute`
+ * @returns {string|null}
+ */
+function extractFunctionBody(src, decl) {
+  const at = src.indexOf(decl)
+  if (at < 0) return null
+  const open = src.indexOf('{', at)
+  if (open < 0) return null
+  return sliceBalanced(src, open)
+}
+
+/**
+ * 从 `decl` 函数内找到 `} catch {` 之后的 catch 块，按花括号配对取出整块。
+ *
+ * @param {string} src 源码
+ * @param {string} decl 函数声明前缀
+ * @returns {string|null}
+ */
+function extractCatchBody(src, decl) {
+  const at = src.indexOf(decl)
+  if (at < 0) return null
+  const ci = src.indexOf('} catch {', at)
+  if (ci < 0) return null
+  const open = src.indexOf('{', ci)
+  if (open < 0) return null
+  return sliceBalanced(src, open)
+}
+
+/** 从 open 处的 `{` 开始，返回配对完整的 `{...}` 文本 */
+function sliceBalanced(src, open) {
+  let depth = 0
+  for (let i = open; i < src.length; i++) {
+    const c = src[i]
+    if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) return src.slice(open, i + 1)
+    }
+  }
+  return null
+}
+
 describe('E2E 就绪信号（P2）', () => {
   test('ROUTE_TITLE 的每个标题都能在 router 的 meta.title 里找到同名项', () => {
     const titles = new Set(Object.values(routerTitles()))
@@ -117,6 +166,47 @@ describe('E2E 就绪信号（P2）', () => {
       'requireRoute 里的失败被静默吞掉了；超时必须抛出并带上实际页面内容'
     )
     assert.match(e2eSrc, /throw new Error\(\s*`等待路由就绪超时/, 'requireRoute 缺少超时抛出')
+  })
+
+  test('requireRoute 的 catch 块唯一出口是 throw（A1：不得静默 return）', () => {
+    // 为什么不能用正则直接判：
+    //   catch 块里有 page.evaluate(() => ({ ... }))，内含 }，
+    //   ① /catch\s*\{[^}]*throw/   —— [^}]* 走不到后面的 throw，对干净源码也不匹配
+    //   ② /catch\s*\{[\s\S]*?\breturn\b[\s\S]*?\n\s*\}/ —— 非贪婪会跨出块边界，干净源码误报
+    // 所以：先按花括号配对把 catch 块「取出来」，再对块内做断言。
+    const body = extractCatchBody(e2eSrc, 'async function requireRoute')
+    assert.ok(body, '找不到 requireRoute 的 catch 块（函数改名了？守卫须同步）')
+    assert.ok(
+      !/\breturn\b/.test(body),
+      'requireRoute 的 catch 块内出现 return —— 超时会被静默吞掉，e2e 会假绿（实测：挂起 wrong_stats 时 wrong 模块 21/21 全绿）'
+    )
+    assert.match(body, /\bthrow new Error\(/, 'requireRoute 的 catch 块内没有 throw')
+  })
+
+  test('就绪信号表达式必须是 inflight === 0（A4：防被改坏）', () => {
+    // 实测变异：把 (window.__inflight || 0) === 0 改成 === -1（永不满足）
+    //   → 旧守卫 exit 0 放行，e2e 全模块 10s×N 集体超时。
+    // 这个表达式是「就绪信号」的核心契约，必须被逐字锁定。
+    //
+    // 注意：全脚本有**两处**，两处都必须守（实测只守 requireRoute 时，
+    // 把 flush 里那处改成 === -1 会漏检）：
+    //   ① requireRoute —— 路由就绪判定（goto 靠它）
+    //   ② flush       —— 每个断言前的“等到 IPC 静默”（A2 后才加的）
+    const requireRouteBody = extractFunctionBody(e2eSrc, 'async function requireRoute')
+    assert.ok(requireRouteBody, '找不到 requireRoute 函数体')
+    assert.match(
+      requireRouteBody,
+      /\(window\.__inflight \|\| 0\) === 0/,
+      'requireRoute 的就绪判定不再是 `(window.__inflight || 0) === 0`；改这个表达式会让所有 goto 超时'
+    )
+
+    const flushBody = extractFunctionBody(e2eSrc, 'const flush = async')
+    assert.ok(flushBody, '找不到 flush 函数体（它已改成箭头函数或改名？守卫需同步）')
+    assert.match(
+      flushBody,
+      /\(window\.__inflight \|\| 0\) === 0/,
+      'flush 的等待条件不再是 `(window.__inflight || 0) === 0`；改成永不满足会让每个断言白等满 budget'
+    )
   })
 
   test('mock 的 invoke 对 inflight 用了 try/finally（异常也要归零）', () => {

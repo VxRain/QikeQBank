@@ -36,7 +36,6 @@
 import { createRequire } from 'node:module'
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -44,30 +43,35 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
- * 解析 playwright：优先项目 node_modules，其次 npx 缓存。
- * 不把 playwright 写进 package.json：它是测试工具，不该让每个贡献者都下浏览器。
+ * 解析 playwright。
+ *
+ * ── A3：为什么现在直接从已声明的依赖加载 ──
+ * 旧实现不在 package.json 声明 playwright，而是去扫 npx 缓存目录（~/_npx 下的子目录），
+ * 再靠 findChromium() 回退已装浏览器。后果：
+ *   - `import('playwright')` 报 ERR_MODULE_NOT_FOUND（干净安装必现）
+ *   - CI 无 npx 缓存 → 直接 exit 2，e2e 根本跑不起来
+ *   - 实际能跑仅因为本机 npx 缓存里恰有 playwright 1.62.1
+ *
+ * 现在声明 `@playwright/test` 到 devDependencies（它带 chromium 导出，
+ * 与单独的 `playwright` 包 API 一致），直接解析；带缓存的部分只是为了兼容
+ * 已在跑旧环境的开发者，找不到会给出明确安装命令。
  */
 async function loadPlaywright() {
+  // ① 项目已声明的依赖：@playwright/test（首选）
+  try {
+    const req = createRequire(import.meta.url)
+    return req('@playwright/test')
+  } catch { /* 继续 */ }
+  // ② 旧项目直接装 playwright 的情况
   try {
     return await import('playwright')
-  } catch { /* 继续找缓存 */ }
-  const require = createRequire(import.meta.url)
-  const roots = [
-    path.join(os.homedir(), 'AppData/Local/npm-cache/_npx'),
-    path.join(os.homedir(), '.npm/_npx'),
-    path.join(os.homedir(), 'AppData/Local/Zed/node/cache/_npx')
-  ]
-  for (const root of roots) {
-    if (!fs.existsSync(root)) continue
-    for (const dir of fs.readdirSync(root)) {
-      const pkg = path.join(root, dir, 'node_modules/playwright')
-      if (fs.existsSync(pkg)) {
-        // playwright 是 CJS，直接 require 最稳（ESM import 拿不到具名导出）
-        return require(pkg)
-      }
-    }
-  }
-  console.error('找不到 playwright。请先装：pnpm add -D playwright && npx playwright install chromium')
+  } catch { /* 继续 */ }
+
+  console.error(
+    '找不到 playwright。请在项目根执行：\n' +
+    '  pnpm add -D @playwright/test\n' +
+    '  npx playwright install chromium'
+  )
   process.exit(2)
 }
 
@@ -82,6 +86,19 @@ const BASE = process.env.BASE_URL || `http://127.0.0.1:${PORT}`
  * 断言记录器：每个模块独立记账，汇总时才合并
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * 断言记录器。
+ *
+ * A5：除了记录「过了几条」，还要能判断「是不是没跑完」。
+ *
+ * 为什么需要：模块被一整块 try/catch 包住，任一断言里抛异常（或断言内部 await 超时）
+ * 就会直接跳到 catch，**后面的断言全部不再执行**。旧实现只把这一条记成
+ * 「脚本执行未中断 失败」，于是：
+ *   - 汇总里的分母会缩水（实测 200ms 延迟下出现过 59/106 这种）
+ *   - 更糟的是若异常恰好让后续的「负向断言」不执行，看上去只是少跑了几条
+ * 对账做法：与 MODULE_BASELINE 比对实际条数，少跑就报 INCOMPLETE——
+ * 不允许把「没跑到」当成「过了」。
+ */
 function makeRecorder() {
   const results = []
   const ok = (name, cond, detail = '') => {
@@ -90,6 +107,26 @@ function makeRecorder() {
     return !!cond
   }
   return { results, ok }
+}
+
+/**
+ * 模块的「基准断言数」：全绿时该模块应该跑出多少条。
+ *
+ * 用途（A5）：与 results.length 对账。少跑就说明中途抛异常跳过了断言。
+ * 新增用例时必须同步本表（与 PLAN.md §8 的模块表同一套数字）。
+ *
+ * 为什么不用「声明式 expectMore」：条件分支（`if (await x.count())`）会让断言合法地少跑，
+ * 声明式对账要么写成两套账、要么被迫改写所有分支；用固定的基准数更简单：
+ * 少跑就是异常，分支导致的变化应该改基准数（说明确实是不同路径）。
+ */
+const MODULE_BASELINE = {
+  list: 21,
+  batch: 15,
+  form: 9,
+  practice: 8,
+  review: 18,
+  exam: 20,
+  wrong: 21
 }
 
 /** 注入 mock IPC：覆盖本批功能涉及的全部命令 */
@@ -288,12 +325,23 @@ function mockScript() {
           }
         }
         case 'wrong_dismiss': return { success: true, data: { id: args?.questionId } }
+        case 'records_overview': return { success: true, data: { total_practiced: 0, today_practiced: 0, correct_rate: null } }
+        case 'is_portable_mode': return { success: true, data: false }
+        case 'banks_create': return { success: true, data: { id: 'bank_new', name: args?.name } }
+        case 'banks_update': return { success: true, data: { id: args?.id } }
+        case 'banks_remove': return { success: true, data: { id: args?.id } }
+        case 'settings_set': return { success: true, data: {} }
         case 'settings_get': return { success: true, data: [] }
         case 'review_stats':
         case 'practice_stats':
           if (window.__statsFail) throw 'stats backend down'
           return { success: true, data: window.__stats }
-        default: return { success: true, data: null }
+        // ── 未 mock 的命令必须炸，不能「假装成功」（A5 / C3）──────────────
+        // 旧写法 `default: return { success: true, data: null }` 让「忘了 mock」
+        // 变成静默通过：前端调用拿到 null 也不报错，页面看起来正常，
+        // 于是 e2e 绿了但那条链路一次都没验过。
+        default:
+          throw new Error(`e2e mock 未覆盖的命令：${cmd}（请在 mockScript 里补 case，不要依赖 default）`)
       }
       } finally {
         window.__inflight--
@@ -337,8 +385,42 @@ async function requireText(page, re, what, timeout = 6000) {
   }
 }
 
-/** 等待层渲染完成（Vue 更新 flush + 一次宏任务，远小于固定 sleep 且不会提前） */
-const flush = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))))
+/**
+ * 等待层渲染完成：等「在飞的 IPC 归零」+ 两帧。
+ *
+ * ── 为什么必须等 inflight（A2）────────────────────────────────────
+ * 旧实现只做「一帧 + 一个宏任务」，**不等 IPC 返回**。它之所以长期不 flaky，
+ * 仅因为 mock 的 invoke 是同步返回的 async 函数（零延迟）。实测给 mock 注入
+ * 真实延迟后成批失败（1ms 起就出现，50~200ms 稳定 45~47 项）——即「绿」靠的是
+ * 零延迟这个巧合，不是等待逻辑正确。
+ *
+ * ── 为什么内层超时必须远小于 waitUntil 的预算（A2 的坑）────────────
+ * flush 同时是 waitUntil() 的轮询节拍（waitText/requireText 建在其上，预算 4000ms）。
+ * 若内层 waitForFunction 用 5000ms 并抛异常，会把外层 waitUntil 的超时判定
+ * 「劫持」成 5000ms——waitUntil 本该在 4000ms 返回 false 交给断言报错。
+ * 所以这里：budget 默认 1000ms（能覆盖 200ms×连续 4~5 次的极端人为延迟），
+ * 且**失败不抛**，只当「本轮未就绪」，由外层 waitUntil 继续计数。
+ * 这样 waitUntil 语义完全不变：4000ms 预算仍是它的，只是每轮最多花 1000ms。
+ *
+ * 实测依据：budget=300 时 200ms 注入下 list 模块的「删完末页回第 2 页」仍会失败
+ * （该场景 flush 前有「删除 + 重拉列表」两次连续 IPC = 400ms > 300ms），
+ * 调到 1000ms 后 5/50/200ms 全部 112/112 绿。
+ *
+ * 假时钟安全性另行验证过：`page.clock.install()` 后 `waitForFunction(polling:10)`
+ * 的轮询与超时均正常（实测超时 266ms 触发、条件变真 65ms 返回），不会被冻结。
+ *
+ * @param {import('playwright').Page} page
+ * @param {number} [budget] 单轮等待 inflight 归零的上限（必须 < waitUntil 最小预算 4000）
+ */
+const flush = async (page, budget = 1000) => {
+  try {
+    await page.waitForFunction(() => (window.__inflight || 0) === 0, null, { timeout: budget, polling: 10 })
+  } catch {
+    /* 本轮没等到：交给外层 waitUntil 继续轮询，超时判定权不外借 */
+  }
+  // 两帧：一帧给 Vue 的 patch，一帧给随之触发的样式/布局
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0)))))
+}
 
 /**
  * 路由跳转（事件驱动）。
@@ -1025,35 +1107,24 @@ function changedModules() {
 }
 
 /**
- * 定位已安装的 chromium 可执行文件。
- * 场景：缓存的 playwright 版本要的浏览器版本（如 1247）与本地已装的（如 1234）不一致时，
- * 默认 launch() 会直接报「Executable doesn't exist」。与其逼迫用户重新下几百 MB，
- * 不如回退到已装的可用 chromium。
- * @returns {string|undefined}
+ * 启动浏览器。
+ *
+ * ── A3：为什么不再回退到「已装的任意 chromium」──
+ * 旧实现 try { chromium.launch() } catch { 扫描 ms-playwright 目录，拿随便一个 chromium 顶上 }。
+ * 这条回退把「版本不匹配」这个真问题掩盖成了「能跑」：测试实际跑在 playwright 期望版本
+ * 之外的浏览器上，行为差异无从得知。既然 `@playwright/test` 已进 devDependencies，
+ * 版本就该由它决定；不匹配时的正确做法是显式报错并给出安装命令，而不是偷偷顶上。
  */
-function findChromium() {
-  const base = process.env.PLAYWRIGHT_BROWSERS_PATH ||
-    path.join(os.homedir(), 'AppData/Local/ms-playwright')
-  if (!fs.existsSync(base)) return undefined
-  const cands = []
-  for (const dir of fs.readdirSync(base)) {
-    if (!dir.startsWith('chromium')) continue
-    for (const rel of ['chrome-win64/chrome.exe', 'chrome-win/chrome.exe', 'chrome-linux/chrome', 'chrome-headless-shell-win64/chrome-headless-shell.exe']) {
-      const p = path.join(base, dir, rel)
-      if (fs.existsSync(p)) cands.push(p)
-    }
-  }
-  return cands[0]
-}
-
 async function launch(chromium, headed) {
   try {
     return await chromium.launch({ headless: !headed })
   } catch (e) {
-    const exe = findChromium()
-    if (!exe) throw e
-    console.log(`（回退到本地已装 chromium：${path.basename(path.dirname(exe))}）`)
-    return await chromium.launch({ headless: !headed, executablePath: exe })
+    console.error(
+      `\n浏览器启动失败：${e.message}\n\n` +
+      '请执行（只需一次）：\n' +
+      '  npx playwright install chromium\n'
+    )
+    process.exit(2)
   }
 }
 
@@ -1128,8 +1199,24 @@ for (const mod of selected) {
 
   const ms = Date.now() - t0
   const fails = results.filter((r) => !r.pass)
-  summary.push({ id: mod.id, label: mod.label, ms, total: results.length, fails })
-  console.log(`  ${fails.length ? `✗ ${fails.length} 失败` : '✓ 全通过'}（${results.length} 项，${ms}ms）`)
+
+  // ── A5：断言分母对账 ──
+  // 模块中途抛异常会跳过后面的断言；若不比对，汇总只看得到「少跑了几条」，
+  // 很容易与「本来就没这么多断言」混淆。基准数见 MODULE_BASELINE。
+  const baseline = MODULE_BASELINE[mod.id]
+  const incomplete = typeof baseline === 'number' && results.length < baseline
+
+  summary.push({
+    id: mod.id,
+    label: mod.label,
+    ms,
+    total: results.length,
+    baseline,
+    incomplete,
+    fails
+  })
+  const incompleteTag = incomplete ? `  ⚠ INCOMPLETE（基准 ${baseline} 条，只跑到 ${results.length} 条）` : ''
+  console.log(`  ${fails.length ? `✗ ${fails.length} 失败` : '✓ 全通过'}（${results.length} 项，${ms}ms）${incompleteTag}`)
   await ctx.close()
 }
 
@@ -1140,12 +1227,33 @@ server.stop()
 console.log('\n──────── 汇总 ────────')
 let totalFails = 0
 let totalAssertions = 0
+let incompleteCount = 0
 for (const r of summary) {
   totalFails += r.fails.length
   totalAssertions += r.total
-  console.log(`${r.fails.length ? '✗' : '✓'} ${r.id.padEnd(9)} ${String(r.total).padStart(3)} 项  ${String(r.ms).padStart(6)}ms  ${r.label}`)
+  if (r.incomplete) incompleteCount++
+  const mark = r.fails.length || r.incomplete ? '✗' : '✓'
+  const denom = typeof r.baseline === 'number' ? `/${r.baseline}` : ''
+  console.log(`${mark} ${r.id.padEnd(9)} ${String(r.total).padStart(3)}${denom.padEnd(4)} 项  ${String(r.ms).padStart(6)}ms  ${r.label}`)
   for (const f of r.fails) console.log(`      ✗ ${f.name}${f.detail ? ` — ${f.detail}` : ''}`)
+  if (r.incomplete) {
+    console.log(`      ⚠ INCOMPLETE — 基准 ${r.baseline} 条，实际只跑到 ${r.total} 条（中途抛异常跳过了断言）`)
+  }
 }
 
-console.log(`\n${totalFails === 0 ? 'E2E PASS' : `E2E FAIL（${totalFails} 项失败）`} — ${totalAssertions - totalFails}/${totalAssertions} 通过，用时 ${(elapsed / 1000).toFixed(1)}s`)
-process.exit(totalFails === 0 ? 0 : 1)
+const pass = totalFails === 0 && incompleteCount === 0
+console.log(
+  `\n${pass ? 'E2E PASS' : 'E2E FAIL'}` +
+  `${
+    totalFails
+      ? `（${totalFails} 项失败`
+      : incompleteCount
+        ? `（${incompleteCount} 个模块 INCOMPLETE`
+        : '（'
+  }已执行 ${totalAssertions} 条）` +
+  ` — ${totalAssertions - totalFails}/${totalAssertions} 通过，用时 ${(elapsed / 1000).toFixed(1)}s`
+)
+if (incompleteCount) {
+  console.log('\n提示：INCOMPLETE 说明该模块中途抛异常、有断言没跑。不许当 PASS —— 先看上面的「脚本执行未中断」那一行。')
+}
+process.exit(pass ? 0 : 1)
