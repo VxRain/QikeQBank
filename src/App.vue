@@ -84,6 +84,7 @@ import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import SettingsDialog from '@/components/settings/SettingsDialog.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
+import { typeLabel } from '@/constants/questions.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -92,7 +93,6 @@ const REPO = 'VxRain/QikeQBank'
 const RELEASES_URL = `https://github.com/${REPO}/releases`
 
 // ── 全局搜索：跨库搜题干，展开行内预览 + 去编辑 ──
-const SEARCH_TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '简答', material: '材料' }
 const searchText = ref('')
 const searchResults = ref([])
 const searching = ref(false)
@@ -100,9 +100,6 @@ const searchOpen = ref(false)
 const expandedId = ref(null)
 let searchTimer = null
 
-function typeLabel(t) {
-  return SEARCH_TYPE_LABELS[t] || t || '-'
-}
 function stemText(q) {
   const s = String(q?.plain_text || '').replace(/\s+/g, ' ').trim()
   return s ? (s.length > 60 ? s.slice(0, 60) + '…' : s) : '(空题干)'
@@ -120,7 +117,7 @@ async function runSearch() {
   searching.value = true
   try {
     const res = await listQuestions({ query: kw, limit: 8 })
-    searchResults.value = res?.data?.items || []
+    searchResults.value = res?.items || []
   } catch (e) {
     console.error(e)
     searchResults.value = []
@@ -167,14 +164,22 @@ watch(() => route.fullPath, closeSearch)
 
 const showSettings = ref(false)
 
-const navItems = [
-  { to: '/', label: '首页', icon: 'i-lucide-home' },
-  { to: '/banks', label: '题库', icon: 'i-lucide-book-open' },
-  { to: '/practice', label: '刷题', icon: 'i-lucide-zap' },
-  { to: '/exam', label: '模考', icon: 'i-lucide-clipboard-list' },
-  { to: '/wrong', label: '错题本', icon: 'i-lucide-circle-x' },
-  { to: '/review', label: '复习', icon: 'i-lucide-repeat' }
-]
+// 顶栏导航由路由表派生：有 meta.nav 的路由按 order 升序渲染，新增页面只改 router/index.js。
+const navItems = router.options.routes
+  .filter((r) => r.meta?.nav)
+  .sort((a, b) => a.meta.nav.order - b.meta.nav.order)
+  .map((r) => ({ to: r.path, label: r.meta.nav.label, icon: r.meta.nav.icon }))
+
+// 页面标题随路由变化：`meta.title · 奇客题库`，未声明 meta.title 时只显示站点名。
+const APP_NAME = '奇客题库'
+function syncDocumentTitle() {
+  const title = route.meta?.title
+  document.title = title ? `${title} · ${APP_NAME}` : APP_NAME
+}
+syncDocumentTitle()
+watch(() => route.fullPath, syncDocumentTitle)
+// 首次进入（含直接命中 '/'）时 fullPath 不变，等首次导航完成后再同步一次标题
+router.isReady().then(syncDocumentTitle)
 
 // FSRS 升级一次性提示：有历史作答记录的老用户才提示，全新安装静默
 const FSRS_MIGRATED_KEY = 'qbank.fsrsMigrated.v1'

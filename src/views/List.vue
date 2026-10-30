@@ -32,12 +32,7 @@
         </div>
         <select v-model="type" class="select min-w-[130px]" @change="search">
           <option value="">全部类型</option>
-          <option value="single">单选</option>
-          <option value="multi">多选</option>
-          <option value="judge">判断</option>
-          <option value="fill">填空</option>
-          <option value="short">问答</option>
-          <option value="material">材料</option>
+          <option v-for="t in QUESTION_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
         </select>
         <button class="btn btn-primary" @click="search">
           <i class="i-lucide-search" />搜索
@@ -147,6 +142,7 @@ import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
 import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
+import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -207,8 +203,7 @@ function togglePreview(id) {
   previewId.value = id
   if (previewCache.value[id]) return
   previewLoading.value = true
-  get(id).then((res) => {
-    const full = res?.data ?? res
+  get(id).then((full) => {
     if (full && full.id) previewCache.value = { ...previewCache.value, [id]: full }
     else previewId.value = null
   }).catch((e) => {
@@ -305,18 +300,6 @@ async function onBatchMove() {
   await moveQuestions([...selected.value])
 }
 
-function typeLabel(t) {
-  const map = {
-    single: '单选',
-    multi: '多选',
-    judge: '判断',
-    fill: '填空',
-    short: '问答',
-    material: '材料'
-  }
-  return map[t] || t || '-'
-}
-
 function truncate(s, n) {
   if (!s) return '-'
   return s.length > n ? s.slice(0, n) + '…' : s
@@ -382,29 +365,13 @@ async function fetchList() {
     params.limit = PAGE_SIZE
     params.offset = (page.value - 1) * PAGE_SIZE
     params.summary = true
-    const res = await list(params)
-    // 信封 {success, data:{total, items}}；兼容旧数组形状兜底
-    const envelope = res?.data ?? res
-    if (envelope && typeof envelope === 'object' && Array.isArray(envelope.items)) {
-      total.value = Number(envelope.total) || 0
-      questions.value = envelope.items
-    } else if (Array.isArray(envelope)) {
-      total.value = envelope.length
-      questions.value = envelope
-    } else {
-      let data = envelope
-      if (envelope && Array.isArray(envelope.data)) data = envelope.data
-      else if (envelope && Array.isArray(envelope.questions)) data = envelope.questions
-      if (!Array.isArray(data)) {
-        const arrVal = envelope && typeof envelope === 'object' ? Object.values(envelope).find(v => Array.isArray(v)) : null
-        data = arrVal || []
-      }
-      total.value = data.length
-      questions.value = data
-    }
+    // 契约：questions_list 经 bridge.unwrap 拆包后固定为 {total, items}
+    const data = await list(params)
+    total.value = Number(data?.total) || 0
+    questions.value = Array.isArray(data?.items) ? data.items : []
   } catch (e) {
     console.error(e)
-    error.value = e?.response?.data?.error || e?.response?.data?.message || e.message || '加载失败'
+    error.value = e?.message || '加载失败'
   } finally {
     loading.value = false
     clearSelection()
@@ -452,7 +419,7 @@ async function onDelete(q) {
     await fetchList()
     toast('试题已删除', 'success')
   } catch (e) {
-    toast(e?.response?.data?.error || e.message || '删除失败', 'error')
+    toast(e?.message || '删除失败', 'error')
   }
 }
 

@@ -42,8 +42,7 @@
 import { onMounted, ref } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { cmd } from '@/api/bridge.js'
-import { openDataDir as openDataDirApi } from '@/api/practice.js'
+import { openDataDir as openDataDirApi, isPortableMode } from '@/api/practice.js'
 import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.js'
 import { toast } from '@/stores/ui.js'
 
@@ -64,8 +63,8 @@ onMounted(async () => {
     version.value = ''
   }
   try {
-    const r = await cmd('is_portable_mode')
-    portable.value = !!r?.data?.portable
+    const r = await isPortableMode()
+    portable.value = r
   } catch {
     portable.value = null
   }

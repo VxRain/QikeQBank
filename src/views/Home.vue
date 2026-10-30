@@ -75,8 +75,8 @@
         </h2>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span v-for="t in TYPE_ORDER" :key="t" class="badge badge-type">
-          {{ TYPE_LABELS[t] }} {{ stats?.by_type?.[t] ?? 0 }}
+        <span v-for="t in QUESTION_TYPES" :key="t.key" class="badge badge-type">
+          {{ t.label }} {{ stats?.by_type?.[t.key] ?? 0 }}
         </span>
       </div>
     </div>
@@ -181,16 +181,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { stats as fetchStats, recordsOverview } from '@/api/practice.js'
-import { cmd } from '@/api/bridge.js'
+import { stats as fetchStats, recordsOverview, isPortableMode } from '@/api/practice.js'
+import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 
 const router = useRouter()
 function go(path) {
   router.push(path)
 }
-
-const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
-const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '简答', material: '材料' }
 
 const stats = ref(null)
 const error = ref('')
@@ -202,9 +199,6 @@ const ovError = ref('')
 const ovDays = ref([])
 const ovTypes = ref([])
 
-function typeLabel(t) {
-  return TYPE_LABELS[t] || t || '-'
-}
 function fmtSec(ms) {
   const s = Number(ms) / 1000
   if (!Number.isFinite(s) || s <= 0) return '—'
@@ -277,8 +271,8 @@ async function load() {
   error.value = ''
   // 便携标记静默探测：失败就当非便携，不污染错误区
   try {
-    const r = await cmd('is_portable_mode')
-    isPortable.value = !!r?.data?.portable
+    const r = await isPortableMode()
+    isPortable.value = !!r
   } catch { /* ignore */ }
   try {
     stats.value = await fetchStats()

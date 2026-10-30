@@ -134,11 +134,11 @@ onMounted(async ()=>{
   if(isEdit.value){
     loading.value=true
     try{
-      const res = await get(route.params.id)
+      const q = await get(route.params.id)
       // asset: 引用展开成可显示 URL（保存时再归一回去）
-      const list = await expandQuestions([res.data])
-      form.value = list[0] || res.data
-    } catch(e){ error.value = e.response?.data?.error || e.message }
+      const list = await expandQuestions([q])
+      form.value = list[0] || q
+    } catch(e){ error.value = e?.message || String(e) }
     finally{ loading.value=false }
   }
 })
@@ -178,7 +178,7 @@ async function onSave(){
   } catch(e){
     console.error(e)
     // invoke 拒因即后端 Err 字符串（无 .message），axios 式取法会吞错显空
-    error.value = typeof e === 'string' ? e : (e?.response?.data?.error || e?.message || '保存失败')
+    error.value = typeof e === 'string' ? e : (e?.message || '保存失败')
   } finally{ saving.value=false }
 }
 </script>

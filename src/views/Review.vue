@@ -79,104 +79,65 @@
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
-      <div v-if="cur.isChild" class="border border-dashed border-primary-border bg-bg-accent rounded-[12px] px-3.5 py-2">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-[12px] font-600 text-muted flex items-center gap-1.5 min-w-0">
-            <i class="i-lucide-book-open shrink-0" />材料 · 共 {{ cur.childCount }} 问 · 第 {{ cur.childIdx + 1 }} 问
-          </span>
-          <button type="button" class="btn btn-small shrink-0" title="M 展开/收起" @click="materialOpen = !materialOpen">
-            <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}
-          </button>
-        </div>
-        <div v-if="materialOpen" class="text-[13px] text-text-secondary pt-2" v-html="materialStemHtml"></div>
-      </div>
 
-      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="stemHtml" @input="onStemInput" @keydown="onStemKeydown"></div>
-
-      <!-- 选择类 -->
-      <div v-if="isChoice" class="flex flex-col gap-2">
-        <button
-          v-for="(o, i) in cur.q.options || []"
-          :key="o.id"
-          type="button"
-          class="option-btn"
-          title="空格/A–F 选择，回车判分"
-          :class="singlePick === o.id && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
-          @click="singlePick = o.id"
-        >
-          <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
-          <span class="opt-body" v-html="optHtml(o)"></span>
-        </button>
-      </div>
-      <div v-else-if="cur.q.type === 'multi'" class="flex flex-col gap-2">
-        <button
-          v-for="(o, i) in cur.q.options || []"
-          :key="o.id"
-          type="button"
-          class="option-btn"
-          title="空格/A–F 选择，回车判分"
-          :class="multiPick.includes(o.id) && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
-          @click="toggleMulti(o.id)"
-        >
-          <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
-          <span class="opt-body" v-html="optHtml(o)"></span>
-        </button>
-      </div>
-
-      <!-- 简答 -->
-      <div v-else-if="cur.q.type === 'short'" class="flex flex-col gap-2.5">
-        <textarea v-model="shortText" rows="5" class="w-full p-3 border border-line rounded-[8px] text-[14px] text-text bg-card outline-none resize-y shadow-sm transition-[border-color,box-shadow] duration-150 focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.15)]" placeholder="请输入你的答案…"></textarea>
-        <div class="flex gap-2">
-          <button type="button" class="btn" @click="showRef = !showRef">
-            <i :class="showRef ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ showRef ? '收起参考答案' : '查看参考答案' }}
-          </button>
-        </div>
-        <div v-if="showRef" class="p-3.5 bg-success-bg border border-[#bcd9c4] rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
-          <b class="text-success flex items-center gap-1"><i class="i-lucide-book-open text-[14px]" />参考答案：</b>
-          <div v-html="refHtml"></div>
-        </div>
-      </div>
-
-      <!-- 自动判分（选择/填空） -->
-      <div v-if="!graded && !isShort">
-        <button type="button" class="btn btn-primary btn-big" :disabled="!canSubmit" @click="submit">
-          <i class="i-lucide-check-circle" />判分
-        </button>
-      </div>
-
-      <!-- 判分结果（判分前绝不展示答案/解析） -->
-      <div v-if="graded" ref="resultRef" tabindex="-1" class="border-t border-line pt-4 flex flex-col gap-3">
-        <div class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px]" :class="gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]'">
-          <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />{{ gradeResult.correct ? '回答正确' : '回答错误' }}
-        </div>
-
-        <div v-if="isChoice && gradeResult" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
-
-        <div v-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
-          <div v-for="r in gradeResult.results" :key="r.id" class="flex items-baseline gap-2 flex-wrap px-3 py-2 rounded-[8px] text-[13px] border border-line" :class="r.correct ? 'bg-success-bg border-[#bcd9c4] text-text-secondary' : 'bg-danger-bg border-[#e3c9c5] text-text-secondary'">
-            <span class="font-700 text-text">{{ r.id }}</span>
-            <span>你的答案：{{ r.value || '（未填写）' }}</span>
-            <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
-            <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
+      <QuestionRunner
+        :item="cur"
+        mode="review"
+        :selected="singlePick"
+        :picked="multiPick"
+        :fill-values="fillValues"
+        :short-text="shortText"
+        :show-ref="showRef"
+        :material-open="materialOpen"
+        :locked="graded"
+        interactive-hint="A–F 选择，回车判分"
+        @update:selected="singlePick = $event"
+        @update:picked="multiPick = $event"
+        @update:short-text="shortText = $event"
+        @update:show-ref="showRef = $event"
+        @update:material-open="materialOpen = $event"
+        @fill-enter="submit"
+      >
+        <template #default="{ analysisHtml, answerHtml }">
+          <div v-if="!graded && !isShort">
+            <button type="button" class="btn btn-primary btn-big" :disabled="!canSubmit" @click="submit">
+              <i class="i-lucide-check-circle" />判分
+            </button>
           </div>
-        </div>
 
-        <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
-          <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
-          <div v-html="analysisHtml"></div>
-        </div>
-      </div>
+          <div v-if="graded" ref="resultRef" tabindex="-1" class="border-t border-line pt-4 flex flex-col gap-3">
+            <div class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px]" :class="gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]'">
+              <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />{{ gradeResult.correct ? '回答正确' : '回答错误' }}
+            </div>
 
-      <div v-if="recordError" class="text-[12px] text-danger flex items-center gap-1"><i class="i-lucide-triangle-alert" />记录失败：{{ recordError }}</div>
+            <div v-if="isChoice && gradeResult" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
 
-      <!-- 四键自评：判分后(选择/填空)或查看参考答案后(简答)出现 -->
-      <div v-if="canSelfGrade" class="flex items-center gap-2 flex-wrap border-t border-line pt-3.5">
-        <span class="text-[13px] text-muted font-600">自评记忆效果：<span class="font-400 text-muted-light">（键盘 1–4）</span></span>
-        <button type="button" class="btn btn-danger" :disabled="submitting" @click="reviewGrade('again')"><i class="i-lucide-rotate-ccw" />忘记</button>
-        <button type="button" class="btn border-[#d9c4a3] text-[#a06a2a] bg-[#f0e6d6] hover:bg-[#f0e6d6] hover:border-[#c4a87f]" :disabled="submitting" @click="reviewGrade('hard')"><i class="i-lucide-frown" />困难</button>
-        <button type="button" class="btn border-[#bcd9c4] text-success bg-success-bg hover:bg-success-bg hover:border-[#9bc4ad]" :disabled="submitting" @click="reviewGrade('good')"><i class="i-lucide-meh" />良好</button>
-        <button type="button" class="btn btn-primary-link" :disabled="submitting" @click="reviewGrade('easy')"><i class="i-lucide-smile" />简单</button>
-      </div>
+            <div v-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
+              <div v-for="r in gradeResult.results" :key="r.id" class="flex items-baseline gap-2 flex-wrap px-3 py-2 rounded-[8px] text-[13px] border border-line" :class="r.correct ? 'bg-success-bg border-[#bcd9c4] text-text-secondary' : 'bg-danger-bg border-[#e3c9c5] text-text-secondary'">
+                <span class="font-700 text-text">{{ r.id }}</span>
+                <span>你的答案：{{ r.value || '（未填写）' }}</span>
+                <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
+                <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
+              </div>
+            </div>
+
+            <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+              <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
+              <div v-html="analysisHtml"></div>
+            </div>
+          </div>
+
+          <div v-if="recordError" class="text-[12px] text-danger flex items-center gap-1"><i class="i-lucide-triangle-alert" />记录失败：{{ recordError }}</div>
+
+          <div v-if="canSelfGrade" class="flex items-center gap-2 flex-wrap border-t border-line pt-3.5">
+            <span class="text-[13px] text-muted font-600">自评记忆效果：<span class="font-400 text-muted-light">（键盘 1–4）</span></span>
+            <button type="button" class="btn btn-danger" :disabled="submitting" @click="reviewGrade('again')"><i class="i-lucide-rotate-ccw" />忘记</button>
+            <button type="button" class="btn border-[#d9c4a3] text-[#a06a2a] bg-[#f0e6d6] hover:bg-[#f0e6d6] hover:border-[#c4a87f]" :disabled="submitting" @click="reviewGrade('hard')"><i class="i-lucide-frown" />困难</button>
+            <button type="button" class="btn border-[#bcd9c4] text-success bg-success-bg hover:bg-success-bg hover:border-[#9bc4ad]" :disabled="submitting" @click="reviewGrade('good')"><i class="i-lucide-meh" />良好</button>
+            <button type="button" class="btn btn-primary-link" :disabled="submitting" @click="reviewGrade('easy')"><i class="i-lucide-smile" />简单</button>
+          </div>
+        </template>
+      </QuestionRunner>
     </section>
 
     <!-- 结束页 -->
@@ -227,19 +188,18 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
-import { reviewDue, recordAnswer, stats as fetchStats } from '@/api/practice.js'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { reviewDue, practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
-import { renderDoc, renderOptions } from '@/utils/render.js'
+import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
-import { fillBlankCorrect } from '@/utils/grading.js'
+import { gradeQuestion } from '@/utils/gradeQuestion.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
-import { ui } from '@/stores/ui.js'
-
-const TYPE_LABELS = {
-  single: '单选题', multi: '多选题', judge: '判断题', fill: '填空题', short: '简答题', material: '材料题'
-}
+import { ui, toast } from '@/stores/ui.js'
+import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.js'
+import { promptResume, discardSession } from '@/composables/sessionResume.js'
+import { typeLabel } from '@/constants/questions.js'
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref('')
@@ -322,7 +282,7 @@ const curBadge = computed(() => {
   const it = cur.value
   if (!it) return ''
   if (it.isChild) return `材料题 · 第 ${it.childIdx + 1}/${it.childCount} 问`
-  return TYPE_LABELS[it.q.type] || it.q.type
+  return typeLabel(it.q.type, { full: true })
 })
 
 const progressPct = computed(() => {
@@ -340,45 +300,10 @@ const canSubmit = computed(() => {
   return true
 })
 
-const stemHtml = computed(() => renderStemHtml(cur.value))
-const materialStemHtml = computed(() => (cur.value?.parent ? renderDoc(cur.value.parent.stem) : ''))
-const refHtml = computed(() => {
-  const q = cur.value?.q
-  return q?.type === 'short' && q.answer?.reference ? renderDoc(q.answer.reference) : ''
-})
-const analysisHtml = computed(() => {
-  const q = cur.value?.q
-  return q && q.analysis && Array.isArray(q.analysis.content) && q.analysis.content.length
-    ? renderDoc(q.analysis)
-    : ''
-})
-const answerHtml = computed(() => {
-  const q = cur.value?.q
-  if (!q || !isChoice.value) return ''
-  return renderOptions(q.options, q.answer?.ids)
-})
-
-function keyOf(i) { return String.fromCharCode(65 + (i || 0)) }
-function optHtml(o) { return renderDoc(o?.content).replace(/^<p>/, '').replace(/<\/p>$/, '') }
 function blankAnswersOf(id) {
   const blanks = cur.value?.q?.answer?.blanks || []
   const b = blanks.find((x) => x.id === id)
   return Array.isArray(b?.answers) ? b.answers.join(' / ') : ''
-}
-function renderStemHtml(it) {
-  if (!it) return ''
-  const q = it.q
-  if (q.type === 'fill') {
-    return renderDoc(q.stem).replace(
-      /<span class="blank"[^>]*data-id="([^"]+)"[^>]*>[\s\S]*?<\/span>/g,
-      (m, id) => `<input class="qb-fill-input" data-blank="${id}" type="text" autocomplete="off" placeholder="填写答案" />`
-    )
-  }
-  return renderDoc(q.stem)
-}
-function onStemInput(e) {
-  const b = e.target && e.target.dataset && e.target.dataset.blank
-  if (b) fillValues[b] = e.target.value
 }
 // 卡片级键盘流（状态机互斥，同一键不在两套状态同时有效）：
 // 未判分：A–F 选择类选题（单选设值/多选切换）、M 切材料、Enter 判分；
@@ -390,10 +315,8 @@ function onCardKeydown(e) {
   if (ui.dialog) return
   if (phase.value !== 'card') return
   const t = e.target
-  const isFillInput = !!(t && t.classList && t.classList.contains('qb-fill-input'))
-  const inField = isFillInput || !!(t && t.closest && t.closest('textarea, select, input, [contenteditable], .tiptap, .ProseMirror'))
+  const inField = !!(t && t.closest && t.closest('textarea, select, input, [contenteditable], .tiptap, .ProseMirror'))
   if (e.key === 'Enter') {
-    if (isFillInput) return // 填空走 stem 跳空逻辑
     if (inField) return
     if (graded.value) return // 复习判分后 Enter 无动作，坚持显式自评
     if (t && t.closest && t.closest('button.option-btn')) {
@@ -410,46 +333,11 @@ function onCardKeydown(e) {
   }
   if (inField) return
   const k = typeof e.key === 'string' ? e.key.toUpperCase() : ''
-  if (k === 'M' && cur.value?.isChild) {
-    materialOpen.value = !materialOpen.value
-    return
-  }
-  if (!graded.value && /^[A-F]$/.test(k)) {
-    const q = cur.value?.q
-    if (q && ['single', 'judge', 'multi'].includes(q.type)) {
-      const opt = (q.options || [])[k.charCodeAt(0) - 65]
-      if (opt) {
-        if (q.type === 'multi') toggleMulti(opt.id)
-        else singlePick.value = opt.id
-      }
-    }
-    return
-  }
+  // A–F 选题、M 切材料已由 QuestionRunner 处理；这里只保留 1–4 自评
   if (/^[1-4]$/.test(k) && canSelfGrade.value) {
     reviewGrade({ 1: 'again', 2: 'hard', 3: 'good', 4: 'easy' }[k])
   }
 }
-// 填空回车：跳下一空并全选（直接覆盖写）；末空回车直接判分
-function onStemKeydown(e) {
-  if (e.key !== 'Enter') return
-  const t = e.target
-  if (!t || !t.classList || !t.classList.contains('qb-fill-input')) return
-  e.preventDefault()
-  const inputs = [...e.currentTarget.querySelectorAll('.qb-fill-input')]
-  const i = inputs.indexOf(t)
-  if (i >= 0 && i < inputs.length - 1) {
-    inputs[i + 1].focus()
-    if (inputs[i + 1].select) inputs[i + 1].select()
-  } else {
-    submit()
-  }
-}
-function toggleMulti(id) {
-  const i = multiPick.value.indexOf(id)
-  if (i >= 0) multiPick.value.splice(i, 1)
-  else multiPick.value.push(id)
-}
-
 function resetAnswer() {
   singlePick.value = ''
   multiPick.value = []
@@ -475,6 +363,115 @@ function buildItems(questions) {
     }
   }
   return items.map((it, idx) => ({ ...it, uid: `${it.q.id}_${idx}` }))
+}
+
+// ── 会话快照（FE-ARCH-05）：只存题目 id 与作答状态，离开后可继续 ──
+const SNAP_MODE = 'review'
+const answers = reactive({}) // key → { selected, picked, fillValues, shortText, showRef, graded }
+function currentAnswerKey() {
+  return itemKeyOf(cur.value)
+}
+function readAnswerRefs() {
+  return {
+    selected: singlePick.value,
+    picked: [...multiPick.value],
+    fillValues: { ...fillValues },
+    shortText: shortText.value,
+    showRef: showRef.value,
+    graded: graded.value
+  }
+}
+function rememberAnswer() {
+  const k = currentAnswerKey()
+  if (k) answers[k] = readAnswerRefs()
+}
+function restoreCachedAnswer() {
+  const k = currentAnswerKey()
+  const a = k ? answers[k] : null
+  if (!a) return
+  singlePick.value = a.selected || ''
+  multiPick.value = Array.isArray(a.picked) ? [...a.picked] : []
+  for (const key in fillValues) delete fillValues[key]
+  Object.assign(fillValues, a.fillValues || {})
+  shortText.value = a.shortText || ''
+  showRef.value = !!a.showRef
+  if (a.graded) {
+    graded.value = true
+    gradeResult.value = gradeItem(cur.value)
+  }
+}
+function snapshotNow() {
+  const out = { ...answers }
+  const k = currentAnswerKey()
+  if (k && phase.value === 'card') out[k] = readAnswerRefs()
+  return {
+    mode: SNAP_MODE,
+    bankId: bankId.value,
+    keys: pool.value.map(itemKeyOf),
+    curIdx: curIdx.value,
+    answers: out,
+    // 复习没有“对/错”口径，只记已复习数与用时；各档次数放 extra
+    round: { total: reviewedCount.value, correct: 0, wrongKeys: [], ms: roundMs.value },
+    rounds: [],
+    startedAt: startedAt.value,
+    extra: { limit: reviewLimit.value, gradesCount: { ...gradesCount } }
+  }
+}
+function persistSession() {
+  if (phase.value !== 'card') return
+  scheduleSave(SNAP_MODE, snapshotNow())
+}
+watch(
+  [curIdx, phase, singlePick, multiPick, fillValues, shortText, showRef, graded, reviewedCount, roundMs],
+  persistSession,
+  { deep: true }
+)
+onBeforeUnmount(() => {
+  if (phase.value !== 'card') return
+  rememberAnswer()
+  flushSession(SNAP_MODE)
+  saveSession(SNAP_MODE, snapshotNow())
+})
+function resetSessionState() {
+  for (const k of Object.keys(answers)) delete answers[k]
+  clearSession(SNAP_MODE)
+}
+
+async function resumeSession(snap) {
+  dueLoading.value = true
+  try {
+    const questions = await practicePool({ ids: parentIdsOf(snap.keys) })
+    const items = buildItems(await expandQuestions(questions))
+    const byKey = new Map(items.map((it) => [itemKeyOf(it), it]))
+    const { snapshot, missing } = clampSnapshot(snap, snap.keys.filter((k) => byKey.has(k)))
+    if (!snapshot) {
+      discardSession(SNAP_MODE, '上次的复习题已被删除，无法继续')
+      await refreshDue()
+      return
+    }
+    pool.value = snapshot.keys.map((k) => byKey.get(k))
+    for (const k of Object.keys(answers)) delete answers[k]
+    Object.assign(answers, snapshot.answers)
+    curIdx.value = snapshot.curIdx
+    reviewedCount.value = snapshot.round.total
+    roundMs.value = snapshot.round.ms
+    startedAt.value = snapshot.startedAt
+    const g = snapshot.extra?.gradesCount || {}
+    for (const k of ['again', 'hard', 'good', 'easy']) gradesCount[k] = Math.max(0, Number(g[k]) || 0)
+    if (snapshot.bankId) bankId.value = snapshot.bankId
+    resetAnswer()
+    restoreCachedAnswer()
+    phase.value = 'card'
+    if (missing.length) toast(`有 ${missing.length} 项已被删除，已跳过`, 'info')
+    focusCard()
+  } catch (e) {
+    console.error(e)
+    discardSession(SNAP_MODE, '上次复习进度恢复失败，已返回准备页')
+    phase.value = 'due'
+    await refreshDue()
+  } finally {
+    dueLoading.value = false
+  }
 }
 
 function onBankChange() {
@@ -516,6 +513,7 @@ async function start() {
     reviewedCount.value = 0
     roundMs.value = 0
     gradesCount.again = 0; gradesCount.hard = 0; gradesCount.good = 0; gradesCount.easy = 0
+    resetSessionState()
     curIdx.value = 0
     resetAnswer()
     startedAt.value = Date.now()
@@ -534,25 +532,25 @@ function gradeItem(it) {
   const q = it.q
   if (q.type === 'single' || q.type === 'judge') {
     if (!singlePick.value) return { valid: false, message: '请先选择一个选项' }
-    const ans = q.answer?.ids || []
-    return { valid: true, correct: ans.length === 1 && singlePick.value === ans[0], selected: [singlePick.value] }
-  }
-  if (q.type === 'multi') {
+  } else if (q.type === 'multi') {
     if (!multiPick.value.length) return { valid: false, message: '请至少选择一个选项' }
-    const ans = q.answer?.ids || []
-    const sel = [...multiPick.value]
-    return { valid: true, correct: ans.length === sel.length && ans.every((id) => sel.includes(id)), selected: sel }
+  } else if (q.type === 'fill') {
+    if (!(q.answer?.blanks || []).length) return { valid: false, message: '题目缺少答案（blank）' }
+  } else {
+    // 复习的简答不做自动判分，直接走四键自评（与既有行为一致）
+    return { valid: false, message: '暂不支持的题型：' + (q.type || '未知') }
   }
-  if (q.type === 'fill') {
-    const blanks = q.answer?.blanks || []
-    if (!blanks.length) return { valid: false, message: '题目缺少答案（blank）' }
-    const results = blanks.map((b) => {
-      const raw = (fillValues[b.id] || '').trim()
-      return { id: b.id, value: raw, correct: fillBlankCorrect(b, raw) }
-    })
-    return { valid: true, correct: results.every((r) => r.correct), results }
-  }
-  return { valid: false, message: '暂不支持的题型：' + (q.type || '未知') }
+  const res = gradeQuestion(q, {
+    selected: singlePick.value,
+    picked: [...multiPick.value],
+    fillValues: { ...fillValues },
+    shortText: shortText.value
+  }, { mode: 'review' })
+  const out = { valid: true, correct: !!res.correct }
+  if (res.detail?.selected) out.selected = res.detail.selected
+  if (res.detail?.blanks) out.results = res.detail.blanks
+  if (res.detail?.self_grade) out.self = res.detail.self_grade
+  return out
 }
 
 function submit() {
@@ -626,13 +624,16 @@ function reviewGrade(g) {
 }
 
 function next() {
+  rememberAnswer()
   if (curIdx.value < pool.value.length - 1) {
     curIdx.value++
     resetAnswer()
+    restoreCachedAnswer()
     startedAt.value = Date.now()
     focusCard()
   } else {
     phase.value = 'done'
+    resetSessionState() // 本轮已收口，不再“继续上次”
     refreshDue().catch(() => {})
   }
 }
@@ -663,26 +664,10 @@ onMounted(async () => {
   }
   bankId.value = resolveBankFilter('review')
   await refreshDue()
+  const snap = await promptResume(SNAP_MODE, { title: '继续上次复习？' })
+  if (snap) await resumeSession(snap)
 })
 </script>
 
 <style scoped>
-/* v-html 注入的题干 / 选项 / 解析 / 答案渲染样式，原子类无法覆盖，保留 :deep() */
-.stem :deep(p) { margin: 10px 0; }
-.stem :deep(figure) { margin: 14px 0; text-align: center; }
-.stem :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #fffdf7; }
-.stem :deep(.math-block) { margin: 12px 0; padding: 12px; background: var(--bg-accent); border: 1px solid var(--line); border-radius: 8px; text-align: center; }
-.stem :deep(.qb-fill-input) {
-  min-width: 92px; padding: 6px 10px; margin: 0 4px;
-  border: 1px solid var(--line-strong); border-bottom: 2px solid var(--primary);
-  border-radius: 8px; font-size: 14px; color: var(--text); background: var(--card);
-  outline: none; transition: border-color .15s ease, box-shadow .15s ease; box-shadow: var(--shadow-sm);
-}
-.stem :deep(.qb-fill-input:focus) { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(31,77,58,.15); }
-.opt-body :deep(p) { margin: 0; }
-.answer-view :deep(.option) { padding: 6px 8px; border-radius: 8px; }
-.answer-view :deep(.option.correct) { color: var(--success); font-weight: 600; }
-.answer-view :deep(.key) { font-weight: 700; color: var(--primary); margin-right: 6px; }
-.answer-view :deep(p) { margin: 4px 0; }
-.analysis :deep(p) { margin: 6px 0; }
 </style>

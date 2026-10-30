@@ -30,12 +30,7 @@
         </select>
         <select v-model="type" class="select min-w-[130px]" @change="search">
           <option value="">全部类型</option>
-          <option value="single">单选</option>
-          <option value="multi">多选</option>
-          <option value="judge">判断</option>
-          <option value="fill">填空</option>
-          <option value="short">问答</option>
-          <option value="material">材料</option>
+          <option v-for="t in QUESTION_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
         </select>
         <button class="btn btn-primary" @click="search">
           <i class="i-lucide-search" />搜索
@@ -161,6 +156,7 @@ import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/st
 import { settings } from '@/stores/settings.js'
 import { renderDoc } from '@/utils/render.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'
+import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
 
 const router = useRouter()
@@ -267,11 +263,6 @@ function onDismissOne(id) {
 
 function onBatchDismiss() {
   dismissIds([...selected.value])
-}
-
-function typeLabel(t) {
-  const map = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '问答', material: '材料' }
-  return map[t] || t || '-'
 }
 
 function bankNameOf(bid) {

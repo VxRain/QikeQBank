@@ -1,4 +1,4 @@
-import { cmd } from './bridge.js'
+import { cmd, unwrap } from './bridge.js'
 import { convertFileSrc } from '@tauri-apps/api/core'
 
 // assets（题配图文件化存储）前端层：
@@ -16,9 +16,9 @@ export function isAssetRef(src) {
 }
 
 export async function putAsset({ b64, mime, w, h }) {
-  const res = await cmd('assets_put', { dataB64: b64, mime, width: w ?? null, height: h ?? null })
-  const sha = res?.data?.sha
-  const path = res?.data?.path
+  const data = unwrap(await cmd('assets_put', { dataB64: b64, mime, width: w ?? null, height: h ?? null }))
+  const sha = data?.sha
+  const path = data?.path
   if (!sha) throw new Error('入库失败：未返回 sha')
   if (path) pathCache.set(sha, path)
   return { sha, path }
@@ -29,8 +29,8 @@ export async function resolveAssetPaths(shas) {
   const missing = uniq.filter((s) => !pathCache.has(s))
   // 后端单次上限 200：分片串行取
   for (let i = 0; i < missing.length; i += 200) {
-    const res = await cmd('assets_resolve', { shas: missing.slice(i, i + 200) })
-    for (const it of res?.data?.items || []) pathCache.set(it.sha, it.path || null)
+    const data = unwrap(await cmd('assets_resolve', { shas: missing.slice(i, i + 200) }))
+    for (const it of data?.items || []) pathCache.set(it.sha, it.path || null)
   }
   const out = {}
   for (const s of uniq) out[s] = pathCache.get(s) || null
@@ -120,8 +120,7 @@ export function normalizeDocAssets(doc) {
 }
 
 export async function gcAssets() {
-  const res = await cmd('assets_gc', {})
-  return res?.data
+  return unwrap(await cmd('assets_gc', {}))
 }
 
 export function fmtBytes(n) {

@@ -15,23 +15,14 @@
  * 对外：parseSheetRows(rows) -> { blocks }，rows 为 SheetJS sheet_to_json(header:1) 的二维数组；
  * block 形状与 parseTemplateFile 一致 { index, type, typeLabel, stemText, raw, question|null, error|null }。
  */
+import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
 import {
-  TYPE_LABELS,
   textToDoc,
   stemToFillDoc,
   parseAnswerIds,
   parseFillBlanks,
   judgeValue,
 } from './parseTemplate.js'
-
-const TYPE_ALIASES = {
-  '单选': 'single', '单选题': 'single',
-  '多选': 'multi', '多选题': 'multi',
-  '判断': 'judge', '判断题': 'judge',
-  '填空': 'fill', '填空题': 'fill',
-  '问答': 'short', '问答题': 'short', '简答': 'short', '简答题': 'short',
-  '材料': 'material', '材料题': 'material',
-}
 
 // 列下标（A=0）：ID0 题目1 题型2 分数3 难度4 选项A-E 5..9 答案10 解析11
 const C = { ID: 0, STEM: 1, TYPE: 2, SCORE: 3, DIFF: 4, OPT_A: 5, OPT_E: 9, ANSWER: 10, ANALYSIS: 11 }
@@ -157,7 +148,7 @@ export function parseSheetRows(rows) {
     const typeKey = TYPE_ALIASES[typeRaw]
     const typeLabel = typeRaw || ''
     if (!typeKey || typeKey === 'material') {
-      blocks.push({ index, type: '', typeLabel, stemText: '', raw, question: null, error: `${ctx}：题型须为 单选/多选/判断/填空/问答${attachTo ? '（子题不能是材料）' : ''}` })
+      blocks.push({ index, type: '', typeLabel, stemText: '', raw, question: null, error: `${ctx}：题型须为 单选/多选/判断/填空/简答${attachTo ? '（子题不能是材料）' : ''}` })
       return null
     }
     const stemText = stripNum ? stripSubNum(cell(row, C.STEM)) : cell(row, C.STEM)
@@ -232,7 +223,7 @@ export function parseSheetRows(rows) {
     const typeRaw = cell(row, C.TYPE)
     const typeKey = TYPE_ALIASES[typeRaw]
     if (!typeKey) {
-      blocks.push({ index: blocks.length + 1, type: '', typeLabel: typeRaw, stemText: '', raw: rawRow(row), question: null, error: `行 ${rowIdx}：未知题型“${typeRaw}”（须为 单选/多选/判断/填空/问答/材料）` })
+      blocks.push({ index: blocks.length + 1, type: '', typeLabel: typeRaw, stemText: '', raw: rawRow(row), question: null, error: `行 ${rowIdx}：未知题型“${typeRaw}”（须为 单选/多选/判断/填空/简答/材料）` })
       return
     }
     if (typeKey !== 'material') {

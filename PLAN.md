@@ -44,19 +44,31 @@
 QikeQBank/
 ├── package.json / vite.config.js / index.html / tsconfig.json / pnpm-workspace.yaml   [根配置，主线程所有]
 ├── src/                           ← 前端
-│   ├── main.js  App.vue  router/index.js
-│   ├── api/    bridge.js  questions.js  practice.js  banks.js  assets.js
-│   ├── stores/ bank.js（题库筛选） settings.js（FSRS 参数/记忆开关等）
-│   ├── utils/  fsrs.js image.js  parseTemplate.js parseDocxTemplate.js parseSheet.js
-│   │           render.js validate.js normalize.js parsePureText.js stripMarkdown.js
+│   ├── main.js  App.vue  router/index.js（路由 meta 驱动导航/标题）
+│   ├── constants/questions.js     ← 题型唯一权威（label/shortLabel/fullLabel/icon/hasOptions/默认分值/别名）
+│   ├── api/    bridge.js（cmd + 统一 unwrap）  types.js（JSDoc 契约 typedef）
+│   │           questions.js  practice.js  banks.js  exam.js  settings.js  sync.js  assets.js
+│   ├── stores/ bank.js（题库筛选） settings.js（FSRS 参数/记忆开关等） ui.js（弹层服务）
+│   │           session.js（练习/复习/模考统一会话快照） autoSync.js
+│   ├── composables/ sessionResume.js（全应用唯一的「继续上次/放弃」交互）
+│   ├── styles/ perf.css（content-visibility 等渲染性能辅助类）
+│   ├── utils/  gradeQuestion.js（题型注册表 + 统一判分入口）
+│   │           grading.js（判分基元，零依赖） fsrs.js image.js
+│   │           parseTemplate.js parseDocxTemplate.js parseSheet.js render.js validate.js
+│   │           normalize.js parsePureText.js stripMarkdown.js device.js
 │   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
+│   │               question/QuestionRunner.vue（练习/复习/模考/背题共用的答题渲染层）
 │   │               settings/（SettingsDialog 弹窗外壳 + registry.js 设置项注册表 + SettingRow 通用行 + AboutPanel）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
+│               ↳ Practice/Review/Exam 已收敛为「薄编排层」：题干/选项/填空/材料/键盘流在 QuestionRunner，
+│                 判分走 gradeQuestion，题型文案取 constants/questions.js，进行中状态存 stores/session.js
 ├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync/s3）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
 ├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
-└── tests/unit/  fsrs.test.js  parseDocx.test.js（node:test，零依赖）
+└── tests/unit/  fsrs grading parseDocx auto-sync settings-store
+                api-contract（信封拆包） question-constants（题型常量） grade-question（注册表/统一判分）
+                session（会话快照） render-perf（懒加载/content-visibility）（node:test，零依赖）
 ```
 
 **存储**：`banks` + `questions`（JSON 列）+ `practice_records` + `review_state`。DB 默认在 app_data_dir（`QKEBANK_DB` 环境变量可覆盖）。

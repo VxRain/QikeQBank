@@ -65,14 +65,14 @@
 | FE-P0-10 | 批量操作接口 + 批量编辑 | P0 | M | 是 | 2 |
 | FE-P0-11 | 错题本搜索/排序/统计/导出 | P0 | M | 是 | 2 |
 | FE-P0-12 | 抽题配额与材料题统计口径 | P0 | M–L | 是 | 2–3 |
-| FE-ARCH-01 | 题型常量收敛 | P1 | S | 否 | 1 |
-| FE-ARCH-02 | QuestionRunner 统一答题渲染 | P1 | L | 否 | 2–3 |
-| FE-ARCH-03 | 题型注册表 + 统一判分 | P1 | L | 否 | 3 |
-| FE-ARCH-04 | 路由 meta 驱动导航 / 标题 | P1 | S | 否 | 2 |
-| FE-ARCH-05 | 统一会话 store | P1 | M | 否 | 3 |
-| FE-ARCH-06 | API 契约收敛 + 删除兜底解析 | P1 | S–M | 否 | 1 |
+| ~~FE-ARCH-01~~ ✅ | 题型常量收敛 | P1 | S | 否 | 1 |
+| ~~FE-ARCH-02~~ ✅ | QuestionRunner 统一答题渲染 | P1 | L | 否 | 2–3 |
+| ~~FE-ARCH-03~~ ✅ | 题型注册表 + 统一判分 | P1 | L | 否 | 3 |
+| ~~FE-ARCH-04~~ ✅ | 路由 meta 驱动导航 / 标题 | P1 | S | 否 | 2 |
+| ~~FE-ARCH-05~~ ✅ | 统一会话 store | P1 | M | 否 | 3 |
+| ~~FE-ARCH-06~~ ✅ | API 契约收敛 + 删除兜底解析 | P1 | S–M | 否 | 1 |
 | FE-ARCH-07 | 前端组件/E2E 测试 | P1 | M | 否 | 3 |
-| FE-ARCH-08 | 渲染性能（图片懒加载等） | P1 | S | 否 | 2 |
+| ~~FE-ARCH-08~~ ✅ | 渲染性能（图片懒加载等） | P1 | S | 否 | 2 |
 
 ### 1.1 P1 索引
 
@@ -599,13 +599,17 @@
 
 > 目标：让「新增题型 / 新增模式 / 修改判分」只改一处，降低后续所有功能的边际成本。
 
-### [ ] FE-ARCH-01 题型常量收敛
+### [x] FE-ARCH-01 题型常量收敛
+
+> ✅ 已完成（前端架构批次）。落地：`src/constants/questions.js`（label/shortLabel/fullLabel/icon/hasOptions/defaultScore/defaultDifficulty/order + TYPE_ALIASES）；App/Home/List/Wrong/QuestionEditor/三个答题页/parse* 全部改为引用；`grep TYPE_LABELS|TYPE_ORDER|SEARCH_TYPE_LABELS src` 只剩常量文件与 parse* 的别名 re-export；题型命名统一为「简答」（问答/问答题仍作导入别名接受）。守卫：`tests/unit/question-constants.test.js`。
 
 - 新增 `src/constants/questions.js`：`QUESTION_TYPES`（label / shortLabel / icon / hasOptions / defaultScore / defaultDifficulty / order）。
 - 替换 `App.vue`、`Home.vue`、`List.vue`、`Practice.vue`、`Review.vue`、`Wrong.vue`、`Exam.vue`、`QuestionEditor.vue`、`parseTemplate.js` 中的重复定义。
 - **验收**：`grep -rn "TYPE_LABELS\\|TYPE_ORDER\\|typeLabel" src` 只剩常量文件与必要的展示适配；题型命名统一（简答/问答二选一）。
 
-### [ ] FE-ARCH-02 QuestionRunner 统一答题渲染
+### [x] FE-ARCH-02 QuestionRunner 统一答题渲染
+
+> ✅ 已完成（前端架构批次）。落地：`src/components/question/QuestionRunner.vue`（材料面板/题干填空注入/选项/简答/答案片段 slot/A–F 与 M 键盘）；Practice/Review/Exam 改薄编排层，模式差异走 slot；`grep renderStemHtml|qb-fill-input src/views` = 0。
 
 - 新增 `src/components/question/QuestionRunner.vue`：
   - props：`question` / `parent` / `mode`（practice/review/exam/recite）/ `answerState`；
@@ -614,7 +618,9 @@
 - `Practice.vue` / `Review.vue` / `Exam.vue` 改为薄编排层。
 - **验收**：三个视图不再各自维护 `renderStemHtml` / `qb-fill-input` / 选项键盘逻辑；新增一个模式不需要复制答题 UI。
 
-### [ ] FE-ARCH-03 题型注册表 + 统一判分
+### [x] FE-ARCH-03 题型注册表 + 统一判分
+
+> ✅ 已完成（前端架构批次）。落地：`src/utils/gradeQuestion.js`（createTypeRegistry + 六种内置注册项 + createDefault/validate/grade/renderAnswer），`utils/grading.js` 降为判分基元层；练习/复习「全对才算对」、模考「得分率 ≥ 0.6」口径与原实现逐条一致；新增题型只需加注册项（测试内用 ranking 验证，未落地真实新题型、未动 schema）。守卫：`tests/unit/grade-question.test.js`。
 
 - 新增 `src/utils/gradeQuestion.js` 与题型注册表：
   ```js
@@ -628,18 +634,24 @@
 - 练习/复习/模考共用 `grade()`；模考的多选比例、填空部分分作为 `opts`。
 - **验收**：新增一个测试题型（如排序题）只需加注册项 + 编辑器，不改三个作答页；注册表守卫测试覆盖每种题型。
 
-### [ ] FE-ARCH-04 路由 meta 驱动导航 / 标题
+### [x] FE-ARCH-04 路由 meta 驱动导航 / 标题
+
+> ✅ 已完成（前端架构批次）。落地：`router/index.js` 每条路由带 `meta.title`，六条主导航带 `meta.nav{label,icon,order}`；`App.vue` 的 navItems 改为从路由表派生、`document.title` 随路由同步。新增页面不再改 App.vue。
 
 - 路由增加 `meta: { nav: { label, icon, order }, title }`；`App.vue` 导航从路由表生成。
 - 同步设置 `document.title`；为后续面包屑/快捷键/实验开关留位置。
 - **验收**：新增页面只改 `router/index.js` + 页面组件，不再改 `App.vue` 的 `navItems`。
 
-### [ ] FE-ARCH-05 统一会话 store
+### [x] FE-ARCH-05 统一会话 store
+
+> ✅ 已完成（前端架构批次）。落地：`src/stores/session.js` 承载练习/复习/模考的 save/load/scheduleSave/flush/clear/clampSnapshot（sessionStorage、版本号、24h TTL，只存题目 id 与作答，恢复时按 id 重拉）；`composables/sessionResume.js` 是全应用唯一的「继续上次/放弃」交互；题目被删时跳过缺失项并提示。已含 FE-P0-04 的功能面。守卫：`tests/unit/session.test.js`。
 
 - 新增 `src/stores/session.js`，承载练习/复习/模考的进行中状态与恢复逻辑；与 FE-P0-04 合并。
 - **验收**：三类会话使用同一套快照/恢复/清理 API；路由守卫只写一处。
 
-### [ ] FE-ARCH-06 API 契约收敛
+### [x] FE-ARCH-06 API 契约收敛
+
+> ✅ 已完成（前端架构批次）。落地：`api/bridge.js` 提供统一 `unwrap({success,data}) → data | throw`，全部 `src/api/*.js` 改用它；`List.vue` 的多信封兜底解析删除；`api/types.js` 补齐 Bank/Question/QuestionSummary/PracticeStats/ExportDoc 等 JSDoc typedef。`grep "\.data" src/api` 为 0。守卫：`tests/unit/api-contract.test.js`。
 
 - `src/api/bridge.js` 提供统一 `unwrap`（`{success,data}` → data 或抛错）。
 - 删除 `List.vue` 中兼容多种信封形状的兜底解析（约 30 行）。
@@ -648,11 +660,15 @@
 
 ### [ ] FE-ARCH-07 前端组件 / E2E 测试
 
+> ⏳ 未开工（按决策推迟）：本批 01–06、08 已完成并留出接缝——`bridge.setProvider` 可注入 mock IPC 供 E2E 跑主链路，`gradeQuestion`/`session` 均为零依赖纯逻辑已有 node:test 覆盖。下一步按「node:test 纯逻辑单测 + Playwright E2E（经 setProvider 注入 mock IPC）」推进，不引入 vitest。
+
 - 单测：题型注册表守卫、统一判分、会话恢复序列化。
 - E2E（Playwright + Tauri IPC mock 或开发版）：导入 → 刷题 → 错题 → 复习 → 模考 → 导出 主链路。
 - **验收**：主链路可在 CI 或本地一键运行；答题状态机回归有自动化覆盖。
 
-### [ ] FE-ARCH-08 渲染性能
+### [x] FE-ARCH-08 渲染性能
+
+> ✅ 已完成（前端架构批次）。落地：`utils/render.js` 生成的 `<img>` 带 `loading="lazy" decoding="async"`；材料题子题块加 `cv-auto`（`styles/perf.css` 的 content-visibility:auto）；`QuestionPreview` 去掉挂载时的双次 compute 并按渲染签名缓存。守卫：`tests/unit/render-perf.test.js`。
 
 - 图片懒加载/异步解码；长列表 `content-visibility`；搜索摘要。
 - **验收**：见 FE-P1-12。
@@ -778,3 +794,4 @@
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1 | 2026-10-29 | 初版：基于前端功能设计评审拆解 P0/P1/P2 与架构任务 |
+| v2 | 2026-10-30 | FE-ARCH-01~06、08 完成并勾选（题型常量/QuestionRunner/注册表统一判分/路由 meta/统一会话 store/API 契约收敛/渲染性能）；FE-ARCH-07 按决策推迟 |

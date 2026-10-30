@@ -15,15 +15,10 @@
  * question 为可直接 normalize → plain_text → bank_id → create 的形状（id 由后端生成）。
  */
 
-const TYPE_MAP = {
-  '单选': 'single',
-  '多选': 'multi',
-  '判断': 'judge',
-  '填空': 'fill',
-  '问答': 'short',
-  '材料': 'material',
-}
-export const TYPE_LABELS = { single: '单选', multi: '多选', judge: '判断', fill: '填空', short: '问答', material: '材料' }
+import { TYPE_LABELS, TYPE_ALIASES } from '../constants/questions.js'
+
+// 题型命名/别名唯一权威在 constants/questions.js（FE-ARCH-01）；此处 re-export 兼容旧引用
+export { TYPE_LABELS }
 
 const RE_TYPE_HEAD = /^\s*【\s*(单选|多选|判断|填空|问答|材料)[题型]?\s*】\s*(.*)$/
 const RE_SEP_LINE = /^\s*(-{3,}|\*{3,})\s*$/
@@ -286,7 +281,7 @@ function buildMaterial(bodyLines, ctx) {
   for (const s of subs) {
     const hm = RE_TYPE_HEAD.exec(s.rest)
     if (!hm) return { error: `${ctx}：子题 ${s.num} 缺少题型标记（写法：${s.num}. 【单选】……）` }
-    const innerType = TYPE_MAP[hm[1]]
+    const innerType = TYPE_ALIASES[hm[1]]
     if (innerType === 'material') return { error: `${ctx}：子题 ${s.num} 不支持嵌套材料` }
     const r = buildSingle(innerType, TYPE_LABELS[innerType], [hm[2], ...s.lines], `${ctx}子题 ${s.num}`)
     if (r.error) return { error: r.error }
@@ -314,10 +309,11 @@ export function parseTemplateFile(text) {
     const raw = [(b.head ? b.head[0] : ''), ...b.lines].join('\n')
     const base = { index, raw, startLine: b.startLine }
     if (!b.head) {
-      return { ...base, type: '', typeLabel: '', stemText: '', question: null, error: `${ctx}：缺少题型标记（须以【单选/多选/判断/填空/问答/材料】开头）` }
+      return { ...base, type: '', typeLabel: '', stemText: '', question: null, error: `${ctx}：缺少题型标记（须以【单选/多选/判断/填空/简答/材料】开头）` }
     }
-    const typeLabel = b.head[1]
-    const type = TYPE_MAP[typeLabel]
+    // 展示/报错一律用规范名（问答 → 简答），解析规则仍由别名表决定
+    const type = TYPE_ALIASES[b.head[1]]
+    const typeLabel = TYPE_LABELS[type] || b.head[1]
     // 标记行行尾文字并入正文首行（如：【单选】下列…？）
     const body = b.head[2] ? [b.head[2], ...b.lines] : b.lines
     if (type === 'material') {

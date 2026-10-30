@@ -1,5 +1,5 @@
 <template>
-  <div class="preview bg-card border border-line rounded-[12px] p-4 min-h-[120px] leading-[1.7] shadow-sm text-text" v-html="html"></div>
+  <div class="preview cv-auto bg-card border border-line rounded-[12px] p-4 min-h-[120px] leading-[1.7] shadow-sm text-text" v-html="html"></div>
 </template>
 
 <script setup>
@@ -23,28 +23,38 @@ function compute(q){
   return h
 }
 
-const html = ref(compute(props.question))
-// asset: 引用是异步解析的：先同步出一版文字（图片位空着），解析完再补全
+const html = ref('')
+// asset: 引用是异步解析的：解析完再一次性渲染（避免挂载时先算一遍、展开后又算一遍）
 let refreshSeq = 0
+let lastSig = ''
 refresh()
+
+// 渲染输入签名：只取真正影响 HTML 的字段。改分值/难度/标签等不触发整块重渲染（KaTeX 排版不便宜）
+function signature(q) {
+  if (!q) return ''
+  return JSON.stringify([q.type, q.stem, q.options, q.answer, q.analysis, q.children])
+}
 
 async function refresh() {
   const my = ++refreshSeq
   const q = props.question
+  let src = q
   if (q && q.type) {
     try {
       // 深拷贝后展开：不碰父组件对象，避免 watch 比对抖动
       const clone = JSON.parse(JSON.stringify(q))
       await expandQuestions([clone])
       if (my !== refreshSeq) return // 后来的刷新已接管，丢弃过期结果
-      html.value = compute(clone)
-      return
+      src = clone
     } catch (e) {
       console.error(e)
     }
   }
   if (my !== refreshSeq) return
-  html.value = compute(q)
+  const sig = signature(src)
+  if (sig === lastSig && html.value) return // 渲染输入没变：跳过重算
+  lastSig = sig
+  html.value = compute(src)
 }
 let timer = null
 let lastType = props.question?.type

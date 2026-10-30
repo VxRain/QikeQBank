@@ -45,7 +45,7 @@
             :class="selectedTypes.includes(t) && 'bg-primary-bg border-primary-border text-primary font-600'"
           >
             <input v-model="selectedTypes" type="checkbox" :value="t" class="hidden" />
-            {{ TYPE_LABELS[t] }}
+            {{ TYPE_FULL_LABELS[t] }}
           </label>
         </div>
       </div>
@@ -92,139 +92,105 @@
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
-      <div v-if="cur.isChild" class="border border-dashed border-primary-border bg-bg-accent rounded-[12px] px-3.5 py-2">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-[12px] font-600 text-muted flex items-center gap-1.5 min-w-0">
-            <i class="i-lucide-book-open shrink-0" />材料 · 共 {{ cur.childCount }} 问 · 第 {{ cur.childIdx + 1 }} 问
-          </span>
-          <button type="button" class="btn btn-small shrink-0" title="M 展开/收起" @click="materialOpen = !materialOpen">
-            <i :class="materialOpen ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ materialOpen ? '收起' : '展开' }}
-          </button>
-        </div>
-        <div v-if="materialOpen" class="text-[13px] text-text-secondary pt-2" v-html="materialStemHtml"></div>
-      </div>
-
-      <div class="stem leading-[1.8] text-text-secondary" :key="cur.uid" v-html="recite ? reciteStemHtml : stemHtml" @input="onStemInput" @keydown="onStemKeydown"></div>
-
-      <!-- 选择类（作答，仅练习模式） -->
-      <div v-if="!recite && isChoice" class="flex flex-col gap-2">
-        <button
-          v-for="(o, i) in cur.q.options || []"
-          :key="o.id"
-          type="button"
-          class="option-btn"
-          title="空格/A–F 选择，回车提交"
-          :class="singlePick === o.id && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
-          @click="singlePick = o.id"
-        >
-          <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
-          <span class="opt-body" v-html="optHtml(o)"></span>
-        </button>
-      </div>
-      <div v-else-if="!recite && cur.q.type === 'multi'" class="flex flex-col gap-2">
-        <button
-          v-for="(o, i) in cur.q.options || []"
-          :key="o.id"
-          type="button"
-          class="option-btn"
-          title="空格/A–F 选择，回车提交"
-          :class="multiPick.includes(o.id) && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
-          @click="toggleMulti(o.id)"
-        >
-          <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
-          <span class="opt-body" v-html="optHtml(o)"></span>
-        </button>
-      </div>
-
-      <!-- 简答（作答，仅练习模式） -->
-      <div v-else-if="!recite && cur.q.type === 'short'" class="flex flex-col gap-2.5">
-        <textarea v-model="shortText" rows="5" class="w-full p-3 border border-line rounded-[8px] text-[14px] text-text bg-card outline-none resize-y shadow-sm transition-[border-color,box-shadow] duration-150 focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.15)]" placeholder="请输入你的答案…"></textarea>
-        <div class="flex gap-2">
-          <button type="button" class="btn" @click="showRef = !showRef">
-            <i :class="showRef ? 'i-lucide-eye-off' : 'i-lucide-eye'" />{{ showRef ? '收起参考答案' : '查看参考答案' }}
-          </button>
-        </div>
-        <div v-if="showRef" class="p-3.5 bg-success-bg border border-[#bcd9c4] rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
-          <b class="text-success flex items-center gap-1"><i class="i-lucide-book-open text-[14px]" />参考答案：</b>
-          <div v-html="refHtml"></div>
-        </div>
-        <div v-if="showRef && !graded" class="flex items-center gap-2.5 flex-wrap">
-          <span class="text-[13px] text-muted">这道题你会吗？<span class="text-muted-light">（键盘 1 不会 · 2 会）</span></span>
-          <button type="button" class="btn btn-danger" @click="shortSubmit('不会')"><i class="i-lucide-x" />不会</button>
-          <button type="button" class="btn btn-primary" @click="shortSubmit('会')"><i class="i-lucide-check" />会</button>
-        </div>
-      </div>
-
-      <!-- 提交（仅练习模式） -->
-      <div v-if="!recite && !graded && !isShort">
-        <button type="button" class="btn btn-primary btn-big" :disabled="!canSubmit" @click="submit">
-          <i class="i-lucide-check-circle" />提交判分
-        </button>
-      </div>
-
-      <!-- 背题模式：直接展示答案 + 解析，只留上下题 -->
-      <div v-if="recite" class="border-t border-line pt-4 flex flex-col gap-3">
-        <div v-if="isChoiceLike" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
-        <div v-else-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
-          <div v-for="b in cur.q.answer?.blanks || []" :key="b.id" class="flex items-baseline gap-2 px-3 py-2 rounded-[8px] text-[13px] border border-[#bcd9c4] bg-success-bg text-text-secondary">
-            <span class="font-700 text-text">{{ b.id }}</span>
-            <span>正确答案：{{ (b.answers || []).join(' / ') || '—' }}</span>
+      <QuestionRunner
+        :item="cur"
+        :mode="recite ? 'recite' : 'practice'"
+        :selected="singlePick"
+        :picked="multiPick"
+        :fill-values="fillValues"
+        :short-text="shortText"
+        :show-ref="showRef"
+        :material-open="materialOpen"
+        :locked="graded"
+        @update:selected="singlePick = $event"
+        @update:picked="multiPick = $event"
+        @update:short-text="shortText = $event"
+        @update:show-ref="showRef = $event"
+        @update:material-open="materialOpen = $event"
+        @fill-enter="submit"
+      >
+        <!-- 简答自评（仅练习模式） -->
+        <template #short-actions="{ showRef: refOpen }">
+          <div v-if="refOpen && !graded" class="flex items-center gap-2.5 flex-wrap">
+            <span class="text-[13px] text-muted">这道题你会吗？<span class="text-muted-light">（键盘 1 不会 · 2 会）</span></span>
+            <button type="button" class="btn btn-danger" @click="shortSubmit('不会')"><i class="i-lucide-x" />不会</button>
+            <button type="button" class="btn btn-primary" @click="shortSubmit('会')"><i class="i-lucide-check" />会</button>
           </div>
-        </div>
-        <div v-else-if="cur.q.type === 'short' && refHtml" class="p-3.5 bg-success-bg border border-[#bcd9c4] rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
-          <b class="text-success flex items-center gap-1"><i class="i-lucide-book-open text-[14px]" />参考答案：</b>
-          <div v-html="refHtml"></div>
-        </div>
-        <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
-          <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
-          <div v-html="analysisHtml"></div>
-        </div>
-        <div class="flex justify-between gap-2">
-          <button type="button" class="btn btn-big" :disabled="curIdx === 0" title="← 上一题" @click="prev"><i class="i-lucide-arrow-left" />上一题</button>
-          <button ref="nextBtnRef" type="button" class="btn btn-primary btn-big" title="→ 下一题" @click="next"><i class="i-lucide-arrow-right" />{{ isLast ? '完成' : '下一题' }}</button>
-        </div>
-      </div>
+        </template>
 
-      <!-- 判分结果（判分前绝不展示答案/解析） -->
-      <div v-if="graded" class="border-t border-line pt-4 flex flex-col gap-3">
-        <div
-          class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px] relative overflow-hidden"
-          :class="[gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]', autoNextPending && 'cursor-pointer select-none']"
-          :role="autoNextPending ? 'button' : undefined"
-          :tabindex="autoNextPending ? 0 : undefined"
-          :title="autoNextPending ? '点击取消自动下一题' : undefined"
-          @click="autoNextPending && cancelAutoNext()"
-          @keydown.enter="autoNextPending && cancelAutoNext()"
-          @keydown.space.prevent="autoNextPending && cancelAutoNext()"
-        >
-          <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />
-          <span>{{ gradeResult.correct ? '回答正确' : '回答错误' }}</span>
-          <span v-if="autoNextPending" class="text-[12px] font-500 opacity-75">· {{ (autoNextMs / 1000).toFixed(1) }}s 后自动下一题，点击取消</span>
-          <span v-if="autoNextPending" class="auto-next-track" aria-hidden="true"><span class="auto-next-fill" :style="{ animationDuration: autoNextMs + 'ms' }"></span></span>
-        </div>
-
-        <div v-if="isChoice && gradeResult" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
-
-        <div v-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
-          <div v-for="r in gradeResult.results" :key="r.id" class="flex items-baseline gap-2 flex-wrap px-3 py-2 rounded-[8px] text-[13px] border border-line" :class="r.correct ? 'bg-success-bg border-[#bcd9c4] text-text-secondary' : 'bg-danger-bg border-[#e3c9c5] text-text-secondary'">
-            <span class="font-700 text-text">{{ r.id }}</span>
-            <span>你的答案：{{ r.value || '（未填写）' }}</span>
-            <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
-            <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
+        <!-- 背题模式：直接展示答案 + 解析，只留上下题 -->
+        <template #default="{ analysisHtml, answerHtml, refHtml }">
+          <div v-if="recite" class="border-t border-line pt-4 flex flex-col gap-3">
+            <div v-if="isChoiceLike" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
+            <div v-else-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
+              <div v-for="b in cur.q.answer?.blanks || []" :key="b.id" class="flex items-baseline gap-2 px-3 py-2 rounded-[8px] text-[13px] border border-[#bcd9c4] bg-success-bg text-text-secondary">
+                <span class="font-700 text-text">{{ b.id }}</span>
+                <span>正确答案：{{ (b.answers || []).join(' / ') || '—' }}</span>
+              </div>
+            </div>
+            <div v-else-if="cur.q.type === 'short' && refHtml" class="p-3.5 bg-success-bg border border-[#bcd9c4] rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+              <b class="text-success flex items-center gap-1"><i class="i-lucide-book-open text-[14px]" />参考答案：</b>
+              <div v-html="refHtml"></div>
+            </div>
+            <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+              <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
+              <div v-html="analysisHtml"></div>
+            </div>
+            <div class="flex justify-between gap-2">
+              <button type="button" class="btn btn-big" :disabled="curIdx === 0" title="← 上一题" @click="prev"><i class="i-lucide-arrow-left" />上一题</button>
+              <button ref="nextBtnRef" type="button" class="btn btn-primary btn-big" title="→ 下一题" @click="next"><i class="i-lucide-arrow-right" />{{ isLast ? '完成' : '下一题' }}</button>
+            </div>
           </div>
-        </div>
 
-        <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
-          <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
-          <div v-html="analysisHtml"></div>
-        </div>
+          <!-- 提交（仅练习模式） -->
+          <div v-if="!recite && !graded && !isShort">
+            <button type="button" class="btn btn-primary btn-big" :disabled="!canSubmit" @click="submit">
+              <i class="i-lucide-check-circle" />提交判分
+            </button>
+          </div>
 
-        <div v-if="recordError" class="text-[12px] text-danger flex items-center gap-1"><i class="i-lucide-triangle-alert" />记录失败：{{ recordError }}</div>
+          <!-- 判分结果（判分前绝不展示答案/解析） -->
+          <div v-if="graded" class="border-t border-line pt-4 flex flex-col gap-3">
+            <div
+              class="flex items-center gap-2 text-[16px] font-700 px-3.5 py-3 rounded-[8px] relative overflow-hidden"
+              :class="[gradeResult.correct ? 'text-success bg-success-bg border border-[#bcd9c4]' : 'text-danger bg-danger-bg border border-[#e3c9c5]', autoNextPending && 'cursor-pointer select-none']"
+              :role="autoNextPending ? 'button' : undefined"
+              :tabindex="autoNextPending ? 0 : undefined"
+              :title="autoNextPending ? '点击取消自动下一题' : undefined"
+              @click="autoNextPending && cancelAutoNext()"
+              @keydown.enter="autoNextPending && cancelAutoNext()"
+              @keydown.space.prevent="autoNextPending && cancelAutoNext()"
+            >
+              <i :class="gradeResult.correct ? 'i-lucide-circle-check' : 'i-lucide-circle-x'" />
+              <span>{{ gradeResult.correct ? '回答正确' : '回答错误' }}</span>
+              <span v-if="autoNextPending" class="text-[12px] font-500 opacity-75">· {{ (autoNextMs / 1000).toFixed(1) }}s 后自动下一题，点击取消</span>
+              <span v-if="autoNextPending" class="auto-next-track" aria-hidden="true"><span class="auto-next-fill" :style="{ animationDuration: autoNextMs + 'ms' }"></span></span>
+            </div>
 
-        <div class="flex justify-end">
-          <button ref="nextBtnRef" type="button" class="btn btn-primary btn-big" @click="next"><i class="i-lucide-arrow-right" />下一题</button>
-        </div>
-      </div>
+            <div v-if="isChoice && gradeResult" class="answer-view border border-line rounded-[8px] p-2.5 bg-bg-accent text-[14px]" v-html="answerHtml"></div>
+
+            <div v-if="cur.q.type === 'fill'" class="flex flex-col gap-1.5">
+              <div v-for="r in gradeResult.results" :key="r.id" class="flex items-baseline gap-2 flex-wrap px-3 py-2 rounded-[8px] text-[13px] border border-line" :class="r.correct ? 'bg-success-bg border-[#bcd9c4] text-text-secondary' : 'bg-danger-bg border-[#e3c9c5] text-text-secondary'">
+                <span class="font-700 text-text">{{ r.id }}</span>
+                <span>你的答案：{{ r.value || '（未填写）' }}</span>
+                <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
+                <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
+              </div>
+            </div>
+
+            <div v-if="analysisHtml" class="analysis p-3.5 bg-bg-accent border border-line rounded-[8px] text-[14px] leading-[1.7] text-text-secondary">
+              <b class="text-primary flex items-center gap-1"><i class="i-lucide-lightbulb text-[14px]" />解析：</b>
+              <div v-html="analysisHtml"></div>
+            </div>
+
+            <div v-if="recordError" class="text-[12px] text-danger flex items-center gap-1"><i class="i-lucide-triangle-alert" />记录失败：{{ recordError }}</div>
+
+            <div class="flex justify-end">
+              <button ref="nextBtnRef" type="button" class="btn btn-primary btn-big" @click="next"><i class="i-lucide-arrow-right" />下一题</button>
+            </div>
+          </div>
+        </template>
+      </QuestionRunner>
     </section>
 
     <!-- 结束页 -->
@@ -278,22 +244,22 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
-import { renderDoc, renderOptions } from '@/utils/render.js'
+import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
-import { fillBlankCorrect } from '@/utils/grading.js'
-import { ui } from '@/stores/ui.js'
+import { gradeQuestion } from '@/utils/gradeQuestion.js'
+import { ui, toast } from '@/stores/ui.js'
+import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.js'
+import { promptResume, discardSession } from '@/composables/sessionResume.js'
+import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 
-const TYPE_ORDER = ['single', 'multi', 'judge', 'fill', 'short', 'material']
-const TYPE_LABELS = {
-  single: '单选题', multi: '多选题', judge: '判断题', fill: '填空题', short: '简答题', material: '材料题'
-}
-const ALL_TYPES = TYPE_ORDER
+// 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板用完整名（单选题）
+const ALL_TYPES = QUESTION_TYPE_KEYS
 const COUNT_OPTIONS = [
   { value: 5, label: '5 题' },
   { value: 10, label: '10 题' },
@@ -376,7 +342,7 @@ const curBadge = computed(() => {
   const it = cur.value
   if (!it) return ''
   if (it.isChild) return `材料题 · 第 ${it.childIdx + 1}/${it.childCount} 问`
-  return TYPE_LABELS[it.q.type] || it.q.type
+  return TYPE_FULL_LABELS[it.q.type] || it.q.type
 })
 
 const progressPct = computed(() => {
@@ -394,39 +360,6 @@ const canSubmit = computed(() => {
   return true
 })
 
-const stemHtml = computed(() => renderStemHtml(cur.value))
-// 背题模式题干：填空不渲染输入框，直接嵌答案章
-const reciteStemHtml = computed(() => {
-  const it = cur.value
-  if (!it) return ''
-  const q = it.q
-  if (q.type === 'fill') {
-    const map = {}
-    for (const b of q.answer?.blanks || []) map[b.id] = (b.answers || []).join(' / ')
-    return renderDoc(q.stem).replace(
-      /<span class="blank"[^>]*data-id="([^"]+)"[^>]*>[\s\S]*?<\/span>/g,
-      (m, id) => `<span class="blank-recite">${map[id] || '—'}</span>`
-    )
-  }
-  return renderDoc(q.stem)
-})
-const materialStemHtml = computed(() => (cur.value?.parent ? renderDoc(cur.value.parent.stem) : ''))
-const refHtml = computed(() => {
-  const q = cur.value?.q
-  return q?.type === 'short' && q.answer?.reference ? renderDoc(q.answer.reference) : ''
-})
-const analysisHtml = computed(() => {
-  const q = cur.value?.q
-  return q && q.analysis && Array.isArray(q.analysis.content) && q.analysis.content.length
-    ? renderDoc(q.analysis)
-    : ''
-})
-const answerHtml = computed(() => {
-  const q = cur.value?.q
-  if (!q || !isChoiceLike.value) return ''
-  return renderOptions(q.options, q.answer?.ids)
-})
-
 const lastRound = computed(() => rounds.value[rounds.value.length - 1] || { total: 0, correct: 0, wrong: [], ms: 0, rate: 0 })
 const sessionStats = computed(() => {
   let total = 0, correct = 0, ms = 0
@@ -434,40 +367,21 @@ const sessionStats = computed(() => {
   return { total, correct, ms }
 })
 
-function keyOf(i) { return String.fromCharCode(65 + (i || 0)) }
-function optHtml(o) { return renderDoc(o?.content).replace(/^<p>/, '').replace(/<\/p>$/, '') }
 function blankAnswersOf(id) {
   const blanks = cur.value?.q?.answer?.blanks || []
   const b = blanks.find((x) => x.id === id)
   return Array.isArray(b?.answers) ? b.answers.join(' / ') : ''
 }
-function renderStemHtml(it) {
-  if (!it) return ''
-  const q = it.q
-  if (q.type === 'fill') {
-    return renderDoc(q.stem).replace(
-      /<span class="blank"[^>]*data-id="([^"]+)"[^>]*>[\s\S]*?<\/span>/g,
-      (m, id) => `<input class="qb-fill-input" data-blank="${id}" type="text" autocomplete="off" placeholder="填写答案" />`
-    )
-  }
-  return renderDoc(q.stem)
-}
-function onStemInput(e) {
-  const b = e.target && e.target.dataset && e.target.dataset.blank
-  if (b) fillValues[b] = e.target.value
-}
 // 卡片级键盘流（状态机互斥，同一键不在两套状态同时有效）：
-// 未判分：A–F 选择类选题（单选设值/多选切换）、M 切材料、简答看答案后 1/2 自评、Enter 提交；
-// 判分后：Enter 下一题；Esc 取消自动下一题。
-// 输入区（文本域/输入框/下拉/编辑器）/组词中/弹窗开着/带修饰键，一律不劫持。
+// 未判分：简答看答案后 1/2 自评、Enter 提交；判分后：Enter 下一题；Esc 取消自动下一题。
+// A–F 选题 / M 切材料 / 填空跳空在 QuestionRunner 内处理；输入区/组词中/弹窗/带修饰键一律不劫持。
 function onCardKeydown(e) {
   if (e.isComposing || e.keyCode === 229) return
   if (e.ctrlKey || e.metaKey || e.altKey) return
   if (ui.dialog) return
   if (phase.value !== 'card') return
   const t = e.target
-  const isFillInput = !!(t && t.classList && t.classList.contains('qb-fill-input'))
-  const inField = isFillInput || !!(t && t.closest && t.closest('textarea, select, input, [contenteditable], .tiptap, .ProseMirror'))
+  const inField = !!(t && t.closest && t.closest('textarea, select, input, [contenteditable], .tiptap, .ProseMirror'))
   if (e.key === 'Escape') {
     if (autoNextPending) {
       e.preventDefault()
@@ -487,7 +401,6 @@ function onCardKeydown(e) {
     return
   }
   if (e.key === 'Enter') {
-    if (isFillInput) return // 填空走 stem 跳空逻辑
     if (inField) return
     if (graded.value) {
       e.preventDefault()
@@ -508,46 +421,11 @@ function onCardKeydown(e) {
   }
   if (inField || graded.value) return
   const k = typeof e.key === 'string' ? e.key.toUpperCase() : ''
-  if (k === 'M' && cur.value?.isChild) {
-    materialOpen.value = !materialOpen.value
-    return
-  }
-  if (/^[A-F]$/.test(k)) {
-    const q = cur.value?.q
-    if (q && ['single', 'judge', 'multi'].includes(q.type)) {
-      const opt = (q.options || [])[k.charCodeAt(0) - 65]
-      if (opt) {
-        if (q.type === 'multi') toggleMulti(opt.id)
-        else singlePick.value = opt.id
-      }
-    }
-    return
-  }
+  // A–F 选题、M 切材料已由 QuestionRunner 处理；这里只保留模式语义键
   if ((k === '1' || k === '2') && isShort.value && showRef.value) {
     shortSubmit(k === '1' ? '不会' : '会')
   }
 }
-// 填空回车：跳下一空并全选（直接覆盖写）；末空回车直接提交
-function onStemKeydown(e) {
-  if (e.key !== 'Enter') return
-  const t = e.target
-  if (!t || !t.classList || !t.classList.contains('qb-fill-input')) return
-  e.preventDefault()
-  const inputs = [...e.currentTarget.querySelectorAll('.qb-fill-input')]
-  const i = inputs.indexOf(t)
-  if (i >= 0 && i < inputs.length - 1) {
-    inputs[i + 1].focus()
-    if (inputs[i + 1].select) inputs[i + 1].select()
-  } else {
-    submit()
-  }
-}
-function toggleMulti(id) {
-  const i = multiPick.value.indexOf(id)
-  if (i >= 0) multiPick.value.splice(i, 1)
-  else multiPick.value.push(id)
-}
-
 function resetAnswer() {
   cancelAutoNext()
   singlePick.value = ''
@@ -591,6 +469,121 @@ function buildItems(questions) {
   return items.map((it, idx) => ({ ...it, uid: `${it.q.id}_${idx}` }))
 }
 
+// ── 会话快照（FE-ARCH-05）：只存题目 id 与作答状态，离开后可继续 ──
+const SNAP_MODE = 'practice'
+const answers = reactive({}) // key → { selected, picked, fillValues, shortText, selfGrade, showRef, graded }
+function currentAnswerKey() {
+  return itemKeyOf(cur.value)
+}
+function readAnswerRefs() {
+  return {
+    selected: singlePick.value,
+    picked: [...multiPick.value],
+    fillValues: { ...fillValues },
+    shortText: shortText.value,
+    selfGrade: selfGrade.value,
+    showRef: showRef.value,
+    graded: graded.value
+  }
+}
+function rememberAnswer() {
+  const k = currentAnswerKey()
+  if (k) answers[k] = readAnswerRefs()
+}
+function restoreCachedAnswer() {
+  const k = currentAnswerKey()
+  const a = k ? answers[k] : null
+  if (!a) return
+  singlePick.value = a.selected || ''
+  multiPick.value = Array.isArray(a.picked) ? [...a.picked] : []
+  for (const key in fillValues) delete fillValues[key]
+  Object.assign(fillValues, a.fillValues || {})
+  shortText.value = a.shortText || ''
+  selfGrade.value = a.selfGrade || ''
+  showRef.value = !!a.showRef
+  if (a.graded) {
+    graded.value = true
+    gradeResult.value = gradeItem(cur.value)
+  }
+}
+function snapshotNow() {
+  const out = { ...answers }
+  const k = currentAnswerKey()
+  if (k && phase.value === 'card') out[k] = readAnswerRefs()
+  return {
+    mode: SNAP_MODE,
+    bankId: bankId.value,
+    keys: pool.value.map(itemKeyOf),
+    curIdx: curIdx.value,
+    answers: out,
+    round: { total: round.value.total, correct: round.value.correct, wrongKeys: round.value.wrong.map(itemKeyOf), ms: round.value.ms },
+    rounds: rounds.value.map((r) => ({ total: r.total, correct: r.correct, wrongKeys: (r.wrong || []).map(itemKeyOf), ms: r.ms, rate: r.rate || 0 })),
+    startedAt: startedAt.value,
+    extra: { practiceMode: mode.value, selectedTypes: [...selectedTypes.value], count: count.value }
+  }
+}
+function persistSession() {
+  if (phase.value !== 'card') return
+  scheduleSave(SNAP_MODE, snapshotNow())
+}
+watch([curIdx, phase, singlePick, multiPick, fillValues, shortText, selfGrade, showRef, graded], persistSession, { deep: true })
+onBeforeUnmount(() => {
+  if (phase.value !== 'card') return
+  rememberAnswer()
+  flushSession(SNAP_MODE)
+  saveSession(SNAP_MODE, snapshotNow()) // 防抖窗口内的最后一次输入也要留下
+})
+function resetSessionState() {
+  for (const k of Object.keys(answers)) delete answers[k]
+  clearSession(SNAP_MODE)
+}
+
+// 恢复上次进度：按 id 重拉题目 → 跳过被删的题 → 对齐位置与已填作答
+async function resumeSession(snap) {
+  fetching.value = true
+  try {
+    const questions = await practicePool({ ids: parentIdsOf(snap.keys) })
+    const items = buildItems(await expandQuestions(questions))
+    const byKey = new Map(items.map((it) => [itemKeyOf(it), it]))
+    const { snapshot, missing } = clampSnapshot(snap, snap.keys.filter((k) => byKey.has(k)))
+    if (!snapshot) {
+      discardSession(SNAP_MODE, '上次的题目已被删除，无法继续')
+      return
+    }
+    pool.value = snapshot.keys.map((k) => byKey.get(k))
+    for (const k of Object.keys(answers)) delete answers[k]
+    Object.assign(answers, snapshot.answers)
+    rounds.value = snapshot.rounds.map((r) => ({
+      total: r.total,
+      correct: r.correct,
+      wrong: r.wrongKeys.map((k) => byKey.get(k)).filter(Boolean),
+      ms: r.ms,
+      rate: r.rate
+    }))
+    round.value = {
+      total: snapshot.round.total || pool.value.length,
+      correct: snapshot.round.correct,
+      wrong: snapshot.round.wrongKeys.map((k) => byKey.get(k)).filter(Boolean),
+      ms: snapshot.round.ms
+    }
+    curIdx.value = snapshot.curIdx
+    startedAt.value = snapshot.startedAt
+    if (snapshot.bankId) bankId.value = snapshot.bankId
+    if (snapshot.extra?.practiceMode === 'recite') setMode('recite')
+    else if (snapshot.extra?.practiceMode === 'practice') setMode('practice')
+    resetAnswer()
+    restoreCachedAnswer()
+    phase.value = 'card'
+    if (missing.length) toast(`有 ${missing.length} 项已被删除，已跳过`, 'info')
+    focusCard()
+  } catch (e) {
+    console.error(e)
+    discardSession(SNAP_MODE, '上次进度恢复失败，已重新开始')
+  } finally {
+    fetching.value = false
+  }
+}
+
 async function start() {
   const types = selectedTypes.value
   if (!types.length) { error.value = '请至少选择一种题型'; return }
@@ -629,6 +622,7 @@ async function start() {
       error.value = '题库中没有符合条件的试题，请先到“新增试题”添加题目。'
       return
     }
+    resetSessionState()
     curIdx.value = 0
     round.value = { total: pool.value.length, correct: 0, wrong: [], ms: 0 }
     resetAnswer()
@@ -645,32 +639,31 @@ async function start() {
 
 function gradeItem(it) {
   const q = it.q
+  // 未作答/缺答案的前置提示保持原顺序与文案（判分口径统一走 gradeQuestion）
   if (q.type === 'single' || q.type === 'judge') {
     if (!singlePick.value) return { valid: false, message: '请先选择一个选项' }
-    const ans = q.answer?.ids || []
-    return { valid: true, correct: ans.length === 1 && singlePick.value === ans[0], selected: [singlePick.value] }
-  }
-  if (q.type === 'multi') {
+  } else if (q.type === 'multi') {
     if (!multiPick.value.length) return { valid: false, message: '请至少选择一个选项' }
-    const ans = q.answer?.ids || []
-    const sel = [...multiPick.value]
-    return { valid: true, correct: ans.length === sel.length && ans.every((id) => sel.includes(id)), selected: sel }
-  }
-  if (q.type === 'fill') {
-    const blanks = q.answer?.blanks || []
-    if (!blanks.length) return { valid: false, message: '题目缺少答案（blank）' }
-    const results = blanks.map((b) => {
-      const raw = (fillValues[b.id] || '').trim()
-      return { id: b.id, value: raw, correct: fillBlankCorrect(b, raw) }
-    })
-    return { valid: true, correct: results.every((r) => r.correct), results }
-  }
-  if (q.type === 'short') {
+  } else if (q.type === 'fill') {
+    if (!(q.answer?.blanks || []).length) return { valid: false, message: '题目缺少答案（blank）' }
+  } else if (q.type === 'short') {
     if (!showRef.value) return { valid: false, message: '请先查看参考答案' }
     if (!selfGrade.value) return { valid: false, message: '请自评：不会 / 会' }
-    return { valid: true, correct: selfGrade.value === '会', self: selfGrade.value }
+  } else {
+    return { valid: false, message: '暂不支持的题型：' + (q.type || '未知') }
   }
-  return { valid: false, message: '暂不支持的题型：' + (q.type || '未知') }
+  const res = gradeQuestion(q, {
+    selected: singlePick.value,
+    picked: [...multiPick.value],
+    fillValues: { ...fillValues },
+    shortSelf: selfGrade.value,
+    shortText: shortText.value
+  }, { mode: 'practice' })
+  const out = { valid: true, correct: !!res.correct }
+  if (res.detail?.selected) out.selected = res.detail.selected
+  if (res.detail?.blanks) out.results = res.detail.blanks
+  if (res.detail?.self_grade) out.self = res.detail.self_grade
+  return out
 }
 
 function buildDetail(it, res) {
@@ -691,6 +684,7 @@ function buildDetail(it, res) {
 function commit(it, grade, elapsed, res) {
   graded.value = true
   gradeResult.value = res
+  rememberAnswer()
   focusNextBtn()
   round.value.correct += res.correct ? 1 : 0
   round.value.ms += elapsed
@@ -757,24 +751,29 @@ function shortSubmit(grade) {
 
 function next() {
   cancelAutoNext()
+  rememberAnswer()
   // 背题模式无 commit 计时：切题时把本页停留累进 round.ms（练习模式已在 commit 里记，此处不加防 double count）
   if (recite.value) round.value.ms += Date.now() - startedAt.value
   if (curIdx.value < pool.value.length - 1) {
     curIdx.value++
     resetAnswer()
+    restoreCachedAnswer()
     startedAt.value = Date.now()
     focusCard()
   } else {
     rounds.value.push({ ...round.value, rate: round.value.total ? Math.round((round.value.correct / round.value.total) * 100) : 0 })
     phase.value = 'done'
+    resetSessionState() // 本轮已收口，不再"继续上次"
   }
 }
 
 function prev() {
   if (curIdx.value > 0) {
+    rememberAnswer()
     if (recite.value) round.value.ms += Date.now() - startedAt.value
     curIdx.value--
     resetAnswer()
+    restoreCachedAnswer()
     startedAt.value = Date.now()
     focusCard()
   }
@@ -784,6 +783,7 @@ function startRedo() {
   const last = rounds.value[rounds.value.length - 1]
   if (!last || !last.wrong.length) return
   mode.value = 'practice' // 错题重做是作答判分，强制回练习模式
+  resetSessionState()
   pool.value = last.wrong
   curIdx.value = 0
   round.value = { total: pool.value.length, correct: 0, wrong: [], ms: 0 }
@@ -806,6 +806,7 @@ async function startFromIds(ids) {
       error.value = '重练题目已不存在（可能被删除），请从错题本重新发起。'
       return
     }
+    resetSessionState()
     curIdx.value = 0
     round.value = { total: pool.value.length, correct: 0, wrong: [], ms: 0 }
     resetAnswer()
@@ -844,7 +845,10 @@ onMounted(async () => {
     } else {
       error.value = '没有收到重练题目，请从错题本重新发起。'
     }
+    return
   }
+  const snap = await promptResume(SNAP_MODE, { title: '继续上次刷题？' })
+  if (snap) await resumeSession(snap)
 })
 
 function fmtMs(ms) {
@@ -859,30 +863,6 @@ function fmtMs(ms) {
 </script>
 
 <style scoped>
-/* v-html 注入的题干 / 选项 / 解析 / 答案渲染样式，原子类无法覆盖，保留 :deep() */
-.stem :deep(p) { margin: 10px 0; }
-.stem :deep(figure) { margin: 14px 0; text-align: center; }
-.stem :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #fffdf7; }
-.stem :deep(.math-block) { margin: 12px 0; padding: 12px; background: var(--bg-accent); border: 1px solid var(--line); border-radius: 8px; text-align: center; }
-.stem :deep(.qb-fill-input) {
-  min-width: 92px; padding: 6px 10px; margin: 0 4px;
-  border: 1px solid var(--line-strong); border-bottom: 2px solid var(--primary);
-  border-radius: 8px; font-size: 14px; color: var(--text); background: var(--card);
-  outline: none; transition: border-color .15s ease, box-shadow .15s ease; box-shadow: var(--shadow-sm);
-}
-.stem :deep(.qb-fill-input:focus) { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(31,77,58,.15); }
-/* 背题模式：填空答案章（嵌在题干空位处） */
-.stem :deep(.blank-recite) {
-  display: inline-block; padding: 0 8px; margin: 0 2px;
-  border-bottom: 2px solid var(--success); border-radius: 4px;
-  background: var(--success-bg); color: var(--text); font-weight: 500; line-height: 1.5;
-}
-.opt-body :deep(p) { margin: 0; }
-.answer-view :deep(.option) { padding: 6px 8px; border-radius: 8px; }
-.answer-view :deep(.option.correct) { color: var(--success); font-weight: 600; }
-.answer-view :deep(.key) { font-weight: 700; color: var(--primary); margin-right: 6px; }
-.answer-view :deep(p) { margin: 4px 0; }
-.analysis :deep(p) { margin: 6px 0; }
 /* 自动下一题倒计时条：长在结果条底部，只负责展示，计时由 JS 定时器驱动 */
 .auto-next-track {
   position: absolute; left: 0; right: 0; bottom: 0; height: 3px;

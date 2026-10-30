@@ -13,8 +13,8 @@
  * - parseDocxHtml(html) -> { blocks }（block 形状与 parseTemplateFile 一致）
  * - parseDocxFile(arrayBuffer, mammoth) -> Promise<{ blocks, warnings:{images, formulas} }>
  */
+import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
 import {
-  TYPE_LABELS,
   textToDoc,
   optionMatch,
 } from './parseTemplate.js'
@@ -225,7 +225,7 @@ export function parseDocxHtml(html) {
         const sm2 = rest.match(RE_SUBNUM)
         if (sm2) {
           const name = tm[1]
-          subOverride = name.includes('选择') ? 'choice' : ({ '单选': 'single', '多选': 'multi', '判断': 'judge', '填空': 'fill', '问答': 'short', '简答': 'short' })[name]
+          subOverride = name.includes('选择') ? 'choice' : TYPE_ALIASES[name]
           subM = sm2
         }
       }

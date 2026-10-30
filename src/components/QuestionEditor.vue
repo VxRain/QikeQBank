@@ -4,12 +4,7 @@
       <div class="flex items-center gap-1.5 flex-wrap">
         <label class="text-[13px] text-text-secondary">题型</label>
         <select :value="local.type" @change="onMainTypeChange($event.target.value)" class="select px-2 py-1.5 text-[12px] w-auto">
-          <option value="single">单选</option>
-          <option value="multi">多选</option>
-          <option value="judge">判断</option>
-          <option value="fill">填空</option>
-          <option value="short">问答</option>
-          <option value="material">材料（父子题）</option>
+          <option v-for="t in QUESTION_TYPES" :key="t.key" :value="t.key">{{ t.key === 'material' ? `${t.label}（父子题）` : t.label }}</option>
         </select>
         <template v-if="local.type==='material'">
           <label class="text-[13px] text-text-secondary ml-3">总分</label>
@@ -69,11 +64,7 @@
           <QuestionForm :key="child._uid" :question="child.data" :show-score="false" @update="v=>onChildUpdate(cIdx,v)" />
         </div>
         <div class="flex gap-1.5 flex-wrap mt-2">
-          <button class="btn btn-small" @click="addChild('single')"><i class="i-lucide-plus" />单选</button>
-          <button class="btn btn-small" @click="addChild('multi')"><i class="i-lucide-plus" />多选</button>
-          <button class="btn btn-small" @click="addChild('judge')"><i class="i-lucide-plus" />判断</button>
-          <button class="btn btn-small" @click="addChild('fill')"><i class="i-lucide-plus" />填空</button>
-          <button class="btn btn-small" @click="addChild('short')"><i class="i-lucide-plus" />问答</button>
+          <button v-for="t in CHILD_TYPES" :key="t.key" class="btn btn-small" @click="addChild(t.key)"><i class="i-lucide-plus" />{{ t.label }}</button>
         </div>
       </div>
     </template>
@@ -90,6 +81,8 @@ import TiptapDocEditor from './TiptapDocEditor.vue'
 import QuestionForm from './QuestionForm.vue'
 import PasteBox from './PasteBox.vue'
 import { settings } from '@/stores/settings.js'
+import { QUESTION_TYPES, QUESTION_TYPE_MAP, CHILD_QUESTION_TYPES as CHILD_TYPES, typeLabel } from '@/constants/questions.js'
+import { createDefaultQuestion } from '@/utils/gradeQuestion.js'
 
 const props = defineProps({ modelValue: Object })
 const emit = defineEmits(['update:modelValue'])
@@ -115,39 +108,15 @@ function createDoc(text){
     ? { type:'doc', content:[{ type:'paragraph', content:[{type:'text', text:t}]}]}
     : { type:'doc', content:[{ type:'paragraph' }]}
 }
+// 各题型默认模板的唯一实现在 utils/gradeQuestion.js（注册表 createDefault），这里只做分发；
+// 未知题型保留历史兜底（1 个选项的单选），避免将来脏数据把编辑器打空。
 function createDefault(type){
-  if(type==='material'){
-    // v2: 母题无 score
-    return { type:'material', difficulty:3, stem:createDoc('阅读下列材料：'),
-      children:[
-        { type:'single', score:5, stem:createDoc('子题1'),
-          options:[
-            {id:'o1',content:createDoc('选项A')},{id:'o2',content:createDoc('选项B')},
-            {id:'o3',content:createDoc('选项C')},{id:'o4',content:createDoc('选项D')}
-          ], answer:{ids:['o1']} },
-        { type:'fill', score:5,
-          stem:{type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'填空 '},{type:'blank',attrs:{id:'b1'}},{type:'text',text:' 元'}]}]},
-          answer:{blanks:[{id:'b1',answers:['0']}]} }
-      ], plain_text:'' }
+  if (QUESTION_TYPE_MAP[type]) return createDefaultQuestion(type)
+  return {
+    difficulty:2, score:5, analysis:null, plain_text:'',
+    type:'single', stem:createDoc('题干'),
+    options:[{id:'o1',content:createDoc('选项A')}], answer:{ids:['o1']}
   }
-  const base = { difficulty:2, score:5, analysis:null, plain_text:'' }
-  const opts4 = [
-    {id:'o1',content:createDoc('选项A')},{id:'o2',content:createDoc('选项B')},
-    {id:'o3',content:createDoc('选项C')},{id:'o4',content:createDoc('选项D')}
-  ]
-  if(type==='single') return { ...base, type:'single', stem:createDoc('题干'), options:opts4, answer:{ids:['o1']} }
-  if(type==='multi') return { ...base, type:'multi', difficulty:3, stem:createDoc('多选题干'), options:opts4, answer:{ids:['o1','o2']} }
-  if(type==='judge') return { ...base, type:'judge', difficulty:1, score:2, stem:createDoc('判断题'),
-    options:[{id:'o1',content:createDoc('正确')},{id:'o2',content:createDoc('错误')}], answer:{ids:['o1']} }
-  if(type==='fill') return { ...base, type:'fill',
-    stem:{type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'填空 '},{type:'blank',attrs:{id:'b1'}},{type:'text',text:' 元'}]}]},
-    answer:{blanks:[{id:'b1',answers:['0']}]} }
-  if(type==='short') return { ...base, type:'short', difficulty:3, score:10, stem:createDoc('问答题干'), answer:{reference:createDoc('参考答案')}, analysis:null }
-  return { ...base, type:'single', stem:createDoc('题干'),
-    options:[{id:'o1',content:createDoc('选项A')}], answer:{ids:['o1']} }
-}
-function typeLabel(t){
-  return ({single:'单选',multi:'多选',judge:'判断',fill:'填空',short:'问答'})[t] || t
 }
 
 // ---------- 主试题 ----------
