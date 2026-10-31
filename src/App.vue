@@ -248,6 +248,13 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted-light); }
 
+/* 难度点阵：5 个点，亮起数 = difficulty。
+   放全局而不是某个页面的 scoped：列表页与刷题页都要用，
+   scoped 会让第二处静默失效（DOM 看着正常、没有点阵样式）。 */
+.difficulty-dots { display: inline-flex; gap: 2px; align-items: center; }
+.difficulty-dots .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--line); }
+.difficulty-dots .dot.on { background: var(--primary); }
+
 /* 键盘焦点态：统一主色光环 */
 :focus-visible {
   outline: 2px solid var(--primary);

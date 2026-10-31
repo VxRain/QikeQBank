@@ -47,13 +47,17 @@
           :key="o.id"
           type="button"
           class="option-btn"
-          :title="interactiveHint"
+          :title="optionTitle(o)"
           :disabled="locked"
-          :class="isPicked(o.id) && 'option-btn-on'"
+          :class="optionClass(o.id)"
           @click="pick(o.id)"
         >
           <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
           <span class="opt-body" v-html="optHtml(o)"></span>
+          <!-- 判分后选项自身标绿/红（FE-P1-06）：不依赖下方答案对照行，
+               眼睛落在选项上就能看出对错 -->
+          <i v-if="markOf(o.id) === 'correct'" class="i-lucide-circle-check shrink-0 text-[15px] text-success ml-auto" aria-label="正确答案" />
+          <i v-else-if="markOf(o.id) === 'wrong'" class="i-lucide-circle-x shrink-0 text-[15px] text-danger ml-auto" aria-label="你选错了" />
         </button>
       </div>
 
@@ -174,6 +178,40 @@ function optHtml(o) {
 }
 function isPicked(id) {
   return q.value.type === 'multi' ? props.picked.includes(id) : props.selected === id
+}
+
+/**
+ * 判分后的选项标记（FE-P1-06）：'correct' | 'wrong' | ''
+ *
+ * 口径与判分一致：只看**正确答案集合**与**我的选择**，
+ * - 正确选项 → correct（无论我选没选，都要标出来，否则用户不知道漏选了哪个）
+ * - 我选了但不对 → wrong
+ * - 其它 → 不标
+ *
+ * 只在 `locked`（已判分/已交卷）且有答案时生效；作答中绝不泄露答案。
+ */
+function markOf(id) {
+  if (!props.locked) return ''
+  const ans = q.value.answer?.ids
+  if (!Array.isArray(ans) || !ans.length) return ''
+  if (ans.includes(id)) return 'correct'
+  return isPicked(id) ? 'wrong' : ''
+}
+
+/** 选项样式：判分后覆盖选中态，让学生一眼看到红/绿（选中态不能盖掉判分色） */
+function optionClass(id) {
+  const m = markOf(id)
+  if (m === 'correct') return 'option-btn-right'
+  if (m === 'wrong') return 'option-btn-wrong'
+  return isPicked(id) ? 'option-btn-on' : ''
+}
+
+function optionTitle(o) {
+  const m = markOf(o.id)
+  if (m === 'correct') return '正确答案'
+  if (m === 'wrong') return '你选择了这个（不是正确答案）'
+  // 注意：模板里能直接写 interactiveHint（props 自动解包），但 script 里必须走 props.
+  return props.interactiveHint
 }
 
 function pick(id) {

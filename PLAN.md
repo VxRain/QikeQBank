@@ -479,6 +479,25 @@ export function persistBankFilter(page, id)
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
 
+### 刷题反馈与完成闭环（FE-P1-06）
+- **选项自身标色**：判分后选项直接显示对错（`.option-btn-right` / `.option-btn-wrong` + 图标 + `aria-label`），
+  不依赖下方答案对照行。`markOf()` 的口径：正确选项一律绿（漏选的也要绿，否则看不出漏了哪个）、
+  我选了但不对的标红；**`!locked` 时恒返回空**，作答中绝不泄露答案。
+- **完成页三入口**：「同配置再来一轮」（保留题库/题型/题量，`?again=1` 直接开新轮）/
+  「去复习」/「去错题本」（均带当前题库范围）。
+- **弱项专练**：`utils/practiceLoop.js` 的 `rankWeakTypes` 排序优先级 = 正确率最低 → 错题数多 → 样本大；
+  门槛 `count >= 3` 且 `rate < 0.6`（1 题答错不算弱项、已达标的题型不推）。数据取自
+  `records_overview.by_type`（`review_stats.by_type` 只有题量，没有「做过多少、对了多少」），
+  **只在完成页出现时拉取**，作答过程中不打扰。入口跳 `/practice?types=<type>`。
+- **单题计时 + 难度标识**（原文可选项）：卡头显示点阵难度（材料子题取子题难度）；右侧显示本题用时
+  （进入本题起算，切走再切回不重置；判分后停表）。难度点阵样式从 `List.vue` 的 scoped 提到 `App.vue` 全局
+  ——scoped 会让第二处静默失效（DOM 正常、没有点阵样式）。
+- **修掉一个 e2e 抓到的真缺陷**：完成页点「弱项专练」是 `router.push('/practice?types=…')`，
+  命中**同一条路由** → 组件不重新挂载 → `onMounted` 的深链逻辑不再执行，表现为「点了没反应」
+  （hash 已带 `types=multi`，题型却还是上一轮的）。现在补 `watch(route.query.*)` 重新应用深链参数。
+- 守卫：`tests/unit/practice-loop.test.js`（26 条：排序/阈值/入口/闭环 URL/参数解析 + 7 条视图接线静态守卫，
+  含「同路由深链必须 watch」）；e2e `practice` 8 → 27。
+
 ### 材料子题编辑（FE-P1-05）
 - 子题排序：上移 / 下移（首末位**禁用而非隐藏**，位置不跳动）+ 拖拽（`dragstart`/`drop`）；三条路径都经
   `utils/arrayMove.js::moveItem`（与题库拖拽**同一实现**，避免两边语义漂移），并在变更后重编子题 id。
@@ -596,14 +615,14 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 255 条 / 9 模块 / **17.2s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 274 条 / 9 模块 / **22.0s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页/另存为副本（FE-P1-03/04/05） | 43 | ~1.9s |
   | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~1.1s |
   | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01）+ 快捷入口/搜索/排序/拖拽/复制/导出（FE-P1-02） | 67 | ~1.9s |
   | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 + 状态三态 + 材料子题排序·改题型·复制（FE-P1-03/05） | 27 | ~2.4s |
-  | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 | 8 | ~0.6s |
+  | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 + 选项标色/完成闭环/弱项专练/计时与难度（FE-P1-06） | 27 | ~5.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 | 20 | ~2.5s |
   | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~0.7s |

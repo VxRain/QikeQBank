@@ -107,12 +107,25 @@
     <!-- 作答卡片 -->
     <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card flex flex-col gap-3.5" @keydown="onCardKeydown">
       <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-2 min-w-0">
+        <div class="flex items-center gap-2 min-w-0 flex-wrap">
           <span class="badge badge-type">{{ curBadge }}</span>
+          <!-- 难度标识（FE-P1-06 可选项）：点阵与列表页同一视觉语言 -->
+          <span
+            v-if="curDifficulty"
+            class="difficulty-dots shrink-0"
+            :title="`难度 ${curDifficulty} / 5`"
+            aria-label="难度"
+          ><i v-for="n in 5" :key="n" :class="['dot', n <= curDifficulty && 'on']" /></span>
           <span v-if="recite" class="badge shrink-0"><i class="i-lucide-book-open" />背题模式</span>
           <span v-if="isFlagged" class="badge badge-bad shrink-0"><i class="i-lucide-flag" />已标记</span>
         </div>
-        <span class="text-[13px] text-muted font-500 shrink-0">第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
+        <span class="text-[13px] text-muted font-500 shrink-0 flex items-center gap-2.5">
+          <!-- 单题计时（FE-P1-06 可选项）：只在本轮进行中显示，结束即停 -->
+          <span v-if="itemElapsedMs > 0" class="tabular-nums flex items-center gap-1" title="本题已用时（切题不重置）">
+            <i class="i-lucide-timer text-[13px]" />{{ fmtClock(itemElapsedMs) }}
+          </span>
+          <span>第 {{ curIdx + 1 }} / {{ pool.length }} 题</span>
+        </span>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
@@ -292,7 +305,24 @@
         >
           错题重做（{{ lastRound.wrong.length }} 题）
         </button>
+        <button type="button" class="btn btn-big" @click="startAgain">
+          <i class="i-lucide-refresh-cw" />同配置再来一轮
+        </button>
+        <router-link :to="doneLinks.review" class="btn btn-big"><i class="i-lucide-repeat" />去复习</router-link>
+        <router-link :to="doneLinks.wrong" class="btn btn-big"><i class="i-lucide-circle-x" />去错题本</router-link>
         <router-link to="/" class="btn btn-big"><i class="i-lucide-home" />返回首页</router-link>
+      </div>
+
+      <!-- 弱项专练（FE-P1-06）：按题型正确率推荐；没有弱项就不给这个入口 -->
+      <div v-if="weakEntry" class="w-full max-w-[560px] p-3.5 border border-primary-border bg-primary-bg rounded-[12px] flex items-center gap-3 flex-wrap text-left">
+        <i class="i-lucide-crosshair text-primary text-[18px] shrink-0" />
+        <span class="text-[13px] text-text flex-1 min-w-0">
+          「<b>{{ weakEntry.label }}</b>」正确率只有 <b class="text-danger">{{ Math.round(weakEntry.rate * 100) }}%</b>
+          （{{ weakEntry.count }} 次作答），建议专门练这个题型。
+        </span>
+        <button type="button" class="btn btn-primary btn-small shrink-0" @click="goWeakPractice">
+          <i class="i-lucide-play" />弱项专练
+        </button>
       </div>
     </section>
   </div>
@@ -301,7 +331,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
+import { practicePool, recordAnswer, stats as fetchStats, recordsOverview } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter, bankExists } from '@/stores/bank.js'
@@ -314,6 +344,7 @@ import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { weakPracticeEntry, parseAgainQuery } from '@/utils/practiceLoop.js'
 
 // 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板用完整名（单选题）
 const ALL_TYPES = QUESTION_TYPE_KEYS
@@ -466,6 +497,123 @@ const canSubmit = computed(() => {
   if (q.type === 'fill') return Object.keys(fillValues).some((k) => (fillValues[k] || '').trim())
   return true
 })
+
+/** 当前题难度（材料子题取子题自己的难度；缺省走 schema 默认 2） */
+const curDifficulty = computed(() => {
+  const it = cur.value
+  if (!it) return 0
+  const d = Number(it.q?.difficulty)
+  return Number.isFinite(d) && d >= 1 && d <= 5 ? d : 2
+})
+
+/**
+ * 单题计时（FE-P1-06 可选项）：从进入本题到现在的秒数。
+ *
+ * 刻意用「进入本题的时间戳 + 1s tick」而不是累加计时：
+ * 切走再切回同一题时不该从头算（用户看的是「这题花了多久」），
+ * 而累加式会在每次判分/翻页时被重置成 0，反而看不出真实用时。
+ * 判分后停表：结果已定，再涨没有意义。
+ */
+const itemEnteredAt = ref(Date.now())
+const nowTick = ref(Date.now())
+let clockTimer = null
+function tickClock() { nowTick.value = Date.now() }
+const itemElapsedMs = computed(() => {
+  const end = graded.value || recite.value === false ? nowTick.value : nowTick.value
+  const ms = Math.max(0, end - itemEnteredAt.value)
+  // 首帧（进入页面但还没开始作答）不显示 00:00，避免噪声
+  return ms < 1000 ? 0 : Math.round(ms / 1000) * 1000
+})
+
+/** 秒数 → mm:ss（超过 1 小时显示 h:mm:ss） */
+function fmtClock(ms) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const p = (n) => String(n).padStart(2, '0')
+  return h ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`
+}
+
+// 计时器只在作答阶段跑（setup / done 阶段没有「本题」概念）
+watch(phase, (p) => {
+  if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
+  if (p === 'card') {
+    nowTick.value = Date.now()
+    clockTimer = setInterval(tickClock, 1000)
+  }
+  // 完成页才需要弱项数据：作答过程中不打扰（一次 records_overview 全库聚合不便宜）
+  if (p === 'done') ensureWeakData()
+})
+// 切题重置本题起点
+watch(curIdx, () => { itemEnteredAt.value = Date.now(); nowTick.value = Date.now() })
+onBeforeUnmount(() => { if (clockTimer) clearInterval(clockTimer) })
+
+/** 完成页的「去复习 / 去错题本」链接（带上当前题库范围，不让用户回默认全部） */
+const doneLinks = computed(() => {
+  const bank = bankId.value
+  return {
+    review: bank ? `/review?bank=${bank}` : '/review',
+    wrong: bank ? `/wrong?bank=${bank}` : '/wrong'
+  }
+})
+
+/**
+ * 按题型正确率（来自 records_overview.by_type）。
+ *
+ * 为什么单独拉一次而不是用 availStats：`review_stats.by_type` 是**题量**，
+ * 没有作答次数与答对数；弱项判定需要的是「做过多少、对了多少」。
+ * 这个请求只在完成页出现时才拉到（见 onMounted 里的 ensureWeakData），
+ * 作答过程中不打扰。
+ */
+const ovByType = ref([])
+async function ensureWeakData() {
+  if (ovByType.value.length) return
+  try {
+    const data = await recordsOverview()
+    ovByType.value = Array.isArray(data?.by_type) ? data.by_type : []
+  } catch (e) {
+    // 拉不到就当作「无弱项」：推荐失败不该影响完成页的其它入口
+    console.error(e)
+    ovByType.value = []
+  }
+}
+
+/**
+ * 弱项专练推荐（FE-P1-06）：无弱项时返回 null，界面不显示该卡片（不给无意义入口）。
+ */
+const weakEntry = computed(() => weakPracticeEntry({ by_type: ovByType.value }, bankId.value, (t) => TYPE_FULL_LABELS[t] || t))
+
+/** 走弱项专练：把题库+题型写进 URL，Practice 的深链逻辑负责预选 */
+function goWeakPractice() {
+  if (!weakEntry.value) return
+  router.push({ path: '/practice', query: Object.fromEntries(new URLSearchParams(weakEntry.value.href.split('?')[1] || '')) })
+}
+
+/**
+ * 同配置再来一轮（FE-P1-06）：保留题库 / 题型 / 题量，重新抽一批。
+ * 刻意不复用 startRedo（那是「重做错题」），也不刷新页面：
+ * 直接复位会话状态 + 走一次 start()，用户视野留在练习页。
+ */
+async function startAgain() {
+  if (fetching.value) return
+  cancelAutoNext()
+  resetSessionState()
+  rounds.value = []
+  round.value = { total: 0, correct: 0, wrong: [], ms: 0 }
+  isFlaggedAllClear()
+  pool.value = []
+  curIdx.value = 0
+  resetAnswer()
+  phase.value = 'setup'
+  await start()
+}
+
+/** 清空全部标记/跳过（再来一轮时不该继承上一轮的待定项） */
+function isFlaggedAllClear() {
+  flaggedKeys.value = new Set()
+  skippedKeys.value = new Set()
+}
 
 const lastRound = computed(() => rounds.value[rounds.value.length - 1] || { total: 0, correct: 0, wrong: [], ms: 0, rate: 0 })
 const sessionStats = computed(() => {
@@ -1020,6 +1168,42 @@ async function startFromIds(ids) {
   }
 }
 
+/**
+ * 同路由内的深链参数变化（FE-P1-06 的关键修复）。
+ *
+ * 完成页点「弱项专练」/「再来一轮」都是 `router.push('/practice?types=…')` —— 命中的是
+ * **同一条路由**，组件不会重新挂载，`onMounted` 里的深链逻辑根本不会再跑，
+ * 表现就是「点了弱项专练什么都没变」（实测 e2e 抓到：hash 带了 types=multi，
+ * 但题型还是上一轮的）。所以参数变化必须在这里重新应用。
+ *
+ * 只处理「在 setup 阶段」的变化：作答中改 URL 不该把当前一轮打散。
+ */
+watch(
+  () => [route.query.bank, route.query.types, route.query.count, route.query.again],
+  () => {
+    if (route.query.retry) return
+    const deepBank = route.query.bank
+    if (typeof deepBank === 'string' && bankExists(deepBank)) bankId.value = deepBank
+    applyDeepLinkTypes(route.query.types)
+    const again = parseAgainQuery({ types: route.query.types, count: route.query.count }, ALL_TYPES)
+    if (again.count != null) count.value = again.count
+    if (route.query.again === '1') {
+      // 与 onMounted 同一套：先消费掉参数再开新轮，避免刷新反复触发
+      router.replace({
+        path: '/practice',
+        query: {
+          ...(bankId.value ? { bank: bankId.value } : {}),
+          ...(pickedTypes.value ? { types: pickedTypes.value.join(',') } : {}),
+          ...(count.value ? { count: String(count.value) } : {})
+        }
+      })
+      if (phase.value !== 'card') start()
+      return
+    }
+    refreshAvailable()
+  }
+)
+
 onMounted(async () => {
   if (!bankStore.loaded) {
     try {
@@ -1038,6 +1222,15 @@ onMounted(async () => {
   }
   if (!route.query.retry) {
     applyDeepLinkTypes(route.query.types)
+    // 「同配置再来一轮」/ 深链带的题量（FE-P1-06）
+    const again = parseAgainQuery({ types: route.query.types, count: route.query.count }, ALL_TYPES)
+    if (again.count != null) count.value = again.count
+    if (route.query.again === '1') {
+      // 清掉参数，避免刷新时反复触发「直接开始」
+      router.replace({ path: '/practice', query: { ...(bankId.value ? { bank: bankId.value } : {}), ...(pickedTypes.value ? { types: pickedTypes.value.join(',') } : {}), ...(count.value ? { count: String(count.value) } : {}) } })
+      start()
+      return
+    }
   }
   // FE-P0-05：进入即拉一次可用题量（统计跟随当前题库，与实际抽题范围一致）
   refreshAvailable()

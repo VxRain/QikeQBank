@@ -125,7 +125,7 @@ const MODULE_BASELINE = {
   list: 43,
   batch: 15,
   form: 27,
-  practice: 8,
+  practice: 27,
   review: 18,
   exam: 20,
   wrong: 21,
@@ -1195,6 +1195,108 @@ const MODULES = [
       await page.locator('a').filter({ hasText: '题库' }).first().click()
       await flush(page)
       ok('练习离开提示进度已存', /刷题进度已保存/.test(await page.locator('body').innerText()))
+
+      // ══ FE-P1-06 刷题反馈与完成闭环 ══
+      // 重新开一轮（上一段已经把会话留在 card 阶段，这里从 setup 重新开始）
+      await page.evaluate(() => { sessionStorage.clear() })
+      await goto(page, '#/practice')
+      // 单题计时与难度标识：进入作答卡后才显示
+      await page.getByRole('button', { name: /^开始刷题$/ }).click()
+      await waitRouteAfterClick(page, '#/practice')
+      const cardText = await page.locator('body').innerText()
+      ok('作答卡显示难度点阵', (await page.locator('.difficulty-dots').count()) >= 1)
+      // 计时器 1s 才出首个可读值（避免一进页面就显示 00:00 的噪声），所以这里等它出现
+      const clockShown = await waitUntil(page, () => page.locator('[title="本题已用时（切题不重置）"]').count().then((n) => n === 1), 4000)
+      ok('作答卡显示单题计时', clockShown)
+
+      // 选项自身标绿/红：先选一个错答案再提交，正确答案必须绿、我选的必须红
+      const optBtns = page.locator('.option-btn')
+      ok('选项按钮已渲染', (await optBtns.count()) >= 2, `${await optBtns.count()} 个`)
+      // 选「最后一个」选项：mock 题目的正确答案都是 o1（A），所以必然答错
+      await optBtns.last().click()
+      await flush(page)
+      await page.getByRole('button', { name: /提交判分/ }).click()
+      await flush(page)
+      const rightCount = await page.locator('.option-btn-right').count()
+      const wrongCount = await page.locator('.option-btn-wrong').count()
+      ok('判分后正确选项本身标绿（不依赖下方答案对照）', rightCount >= 1, `${rightCount} 个绿`)
+      ok('判分后错选的选项本身标红', wrongCount >= 1, `${wrongCount} 个红`)
+      ok('标色的选项带无障碍标签', (await page.locator('.option-btn-right [aria-label="正确答案"]').count()) >= 1)
+      // 作答中不得泄露答案：新起一题、未判分时不该有任何标色
+      await page.getByRole('button', { name: /^下一题$/ }).click()
+      await flush(page)
+      ok('未判分的题不泄露对错标色',
+        (await page.locator('.option-btn-right').count()) === 0 && (await page.locator('.option-btn-wrong').count()) === 0)
+
+      // 走完本轮 → 完成页三入口
+      // 坑：未选答案时「提交判分」是 disabled，直接 click 会等满默认 30s（实测本模块 1s → 34s）。
+      // 所以每一步都必须先判断「可点」再点；多选题需先选一项才可提交。
+      for (let i = 0; i < 40; i++) {
+        const next = page.getByRole('button', { name: /^下一题$/ })
+        if (await next.count()) { await next.first().click(); await flush(page); continue }
+        const submit = page.getByRole('button', { name: /提交判分/ })
+        if (await submit.count()) {
+          if (await submit.first().isDisabled()) {
+            const opts = page.locator('.option-btn')
+            if (await opts.count()) { await opts.first().click(); await flush(page); continue }
+            const fill = page.locator('.qb-fill-input').first()
+            if (await fill.count()) { await fill.fill('答案'); await flush(page); continue }
+          }
+          await submit.first().click(); await flush(page); continue
+        }
+        // 简答自评
+        const okBtn = page.getByRole('button', { name: /^会$/ })
+        if (await okBtn.count()) { await okBtn.first().click(); await flush(page); continue }
+        break
+      }
+      const doneText = await page.locator('body').innerText()
+      ok('完成页出现', /本轮练习结束|本轮背题结束/.test(doneText), doneText.slice(0, 100).replace(/\n/g, ' | '))
+      ok('完成页有「同配置再来一轮」', (await page.getByRole('button', { name: /同配置再来一轮/ }).count()) === 1)
+      ok('完成页有「去复习」', (await page.getByRole('link', { name: /去复习/ }).count()) === 1)
+      ok('完成页有「去错题本」', (await page.getByRole('link', { name: /去错题本/ }).count()) === 1)
+      const reviewHref = await page.getByRole('link', { name: /去复习/ }).getAttribute('href')
+      const wrongHref = await page.getByRole('link', { name: /去错题本/ }).getAttribute('href')
+      ok('「去复习」链接指向 /review（带题库范围时带 bank）', /#\/review(\?bank=.*)?$/.test(reviewHref || ''), String(reviewHref))
+      ok('「去错题本」链接指向 /wrong', /#\/wrong(\?bank=.*)?$/.test(wrongHref || ''), String(wrongHref))
+
+      // 弱项专练：mock 的 by_type 里 multi 1/5=20% 最低且作答 5≥3 → 应出现推荐
+      const weakCard = page.locator('[class*="bg-primary-bg"]').filter({ hasText: /正确率只有/ })
+      ok('完成页按正确率给出弱项专练入口', (await weakCard.count()) >= 1, String(await weakCard.count()))
+      const weakTxt = await weakCard.first().innerText()
+      ok('弱项推荐带题型与正确率', /多选题|multi/.test(weakTxt) && /20%/.test(weakTxt), weakTxt.replace(/\n/g, ' | '))
+      await weakCard.first().getByRole('button', { name: /弱项专练/ }).click()
+      await waitRouteAfterClick(page, '#/practice')
+      const weakHash = await page.evaluate(() => location.hash)
+      ok('弱项专练带 types 参数回到刷题页', /types=multi/.test(weakHash), weakHash)
+
+      // 同配置再来一轮：应回到作答卡（不是 setup、不是完成页）
+      await page.evaluate(() => { sessionStorage.clear() })
+      // 带查询串的 deep link 没有 ROUTE_TITLE 键，直接等「标题 + inflight」这套就绪信号
+      await page.evaluate(() => { location.hash = '#/practice?again=1&types=single&count=5' })
+      await page.waitForFunction(
+        (suffix) => location.hash.startsWith('#/practice') && document.title === `刷题 · ${suffix}` && (window.__inflight || 0) === 0,
+        APP_SUFFIX,
+        { timeout: 8000, polling: 25 }
+      )
+      await flush(page)
+      const againText = await page.locator('body').innerText()
+      ok('「再来一轮」直接开新轮（不进 setup 面板）',
+        !/开始刷题/.test(againText) || /第 1 \/ \d+ 题/.test(againText), againText.slice(0, 120).replace(/\n/g, ' | '))
+      // 等作答卡真的渲染出来再断言：goto/路由就绪只代表组件挂载，
+      // 抽查题与 runConfig 写回还晚一拍（实测读到上一轮的 count=0）
+      // 用「作答卡已渲染」的稳定标志：进度计数出现即代表抽题完成、进入 card 阶段。
+      // （不能等 .option-btn：简答/填空题没有选项按钮，题目类型由 mock 决定，不可依赖）
+      await page
+        .waitForFunction(() => /第 \d+ \/ \d+ 题/.test(document.body.innerText), null, { timeout: 8000, polling: 25 })
+        .catch(() => {})
+      await flush(page)
+      // 题型徽章用全称（单选题）；这里断言「只出现单选题且没有其它题型徽章」
+      const againBadges = await page.locator('.badge-type').evaluateAll((els) => els.map((e) => e.textContent.trim()))
+      ok('「再来一轮」沿用题型（只选了单选）',
+        againBadges.length > 0 && againBadges.every((t) => t === '单选题'), JSON.stringify(againBadges))
+      ok('「再来一轮」沿用题量参数（count=5 已消费进配置）',
+        (await page.evaluate(() => JSON.parse(localStorage.getItem('qbank.runConfig.v1.practice') || '{}').count)) === 5,
+        String(await page.evaluate(() => localStorage.getItem('qbank.runConfig.v1.practice'))))
     }
   },
 
