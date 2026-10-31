@@ -207,6 +207,24 @@ pub fn sync_s3_pull(app: AppHandle, state: State<'_, AppState>) -> Result<Value,
     })
 }
 
+/// 未同步变更数（FE-P1-10）：本地 `synced_at` 晚于已推送水位线的行数。
+///
+/// ── 为什么不复用 `export_delta_at` 再数 ──
+/// 那会把整批行（含题干/选项 JSON）拉进内存再只为了 count，题库大时纯属浪费。
+/// 这里对每张同步表各发一条 `COUNT(*)`，走 `idx_*_synced` 索引。
+///
+/// ── 口径 ──
+/// 与其他统计一致：只数**有效内容**（banks/questions/records/review_state/settings/assets 登记），
+/// 不含 `delete_log` 墓碑（删除已经表现为行消失，重复计入会让数字虚高）。
+/// 没有水位线时（从未推送过）返回 `null`，UI 显示「未知」而不是报一个假的 0。
+#[tauri::command]
+pub fn sync_s3_pending(state: State<'_, AppState>) -> Result<Value, String> {
+    guarded("统计未同步变更", || {
+        let conn = lock_conn(&state);
+        ok(sync::pending_changes(&conn)?)
+    })
+}
+
 #[tauri::command]
 pub fn sync_s3_status(state: State<'_, AppState>) -> Result<Value, String> {
     guarded("读取同步状态", || {

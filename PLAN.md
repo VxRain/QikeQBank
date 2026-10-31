@@ -288,6 +288,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `sync_s3_push` | — | `export_delta_at(watermark)` → 裁剪 `review_state`（仅本批 records∪questions 的题号）→ NDJSON+gzip → PUT 新序号对象。设置无 `synced_at`，按内容指纹（key/value/updated_at）判重，未变化时不写对象。**只上传本批增量题目 + `s3_asset_pending` 引用的图片，禁止扫描全库**；失败项进 pending。返回 `{skipped, seq, key, rows, bytes, assets_uploaded, asset_errors}`。**`s3_push_watermark` 只在 PUT 成功后推进** |
 | `sync_s3_pull` | — | **每轮先推**（保证随后抬水位不误伤本地未推改动）→ 未引导则用快照 `replace_snapshot` → 按设备分链重放（`SyncRole::Leaf`，保留来源戳、无回声）→ 标记设置已同步（防下轮保护性 push 回声）。图片只下载「本次应用的 base/log bundle refs + `s3_asset_download_pending`」，不再全库扫描题目；升级后首次 pull 做一次 seed（`s3_asset_download_seeded`）把历史缺图写入待办。返回 `{applied_logs, applied, conflicts, assets_pulled, asset_errors, warnings}`。`conflicts` 是被 LWW 判负或按规则丢弃的行数（只给计数，不给行内容：前端用它提示「其中 N 条以云端为准」，避免把设置页做成调试面板）。断链时自动「先推 → 拉最新快照 → 重放」，无快照则从最早可得对象续传并给 `warnings`（只含「上传/下载」动作，不含内部术语） |
 | `sync_s3_status` | — | `{device_id, push_seq, push_watermark, cursors, bootstrapped, last_push_at, last_pull_at}`（**UI 只展示 `last_*` 相对时间**，其余为排障用） |
+| `sync_s3_pending` | — | **FE-P1-10 新增**。未同步变更数：`{known, total, by_table, watermark}`。对 banks/questions/practice_records/review_state/app_settings 各发一条 `COUNT(*) WHERE synced_at > 水位线`（走 `idx_*_synced`），**不**拉整批行再数。**没有水位线（从未推送过）→ `known:false` 且 total/by_table 为 null**，UI 显示「未知」而不是假的 0（没推过意味着全部未同步）。**不数 `delete_log`**：删除在内容表里表现为行消失，把墓碑算进去会让「未同步 N 项」混进用户看不见的东西 |
 | `sync_s3_compact` | — | 用本机当前状态生成全量快照，`covered` 记各设备已覆盖序号；返回 `{base, rows, bytes}`。**不含图片**（图片走 repair）。**UI 不暴露**：首次上传自动留锚点、检测到前缀被清空时自动补，均由后端调用 |
 | `sync_s3_repair_assets` | — | **显式补图**：分页 LIST `assets/` 得到桶内 sha 集合 → 与本地 `assets` 登记表求差 → 只 PUT 缺失项。不扫描题目 JSON、不逐图 HEAD。返回 `{bucket_assets, registered, missing, uploaded, asset_errors}`。用于云端图片丢失/前缀清空后的恢复 |
 
@@ -480,6 +481,31 @@ export function persistBankFilter(page, id)
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
 
+### 设置增强（FE-P1-10）
+- **默认值单一来源**：`stores/settings.js` 新增 `DEFAULTS`（`Object.freeze`），reactive 初值与
+  「恢复默认」共用同一份。两处各写一份字面量的后果是：点「恢复默认」得到的是既非旧值也非新默认的第三种状态。
+- **恢复默认**：`resetSettingsToDefault()` 逐字段写回 `DEFAULTS`，只重置偏好（不动题库/流水/密钥）。
+  设置页二次确认走 `ui.confirmDialog`（`danger`），文案写明「题库、作答记录与云端配置都不受影响」。
+- **导出 / 导入**（`utils/settingsIO.js`）：
+  - 导出白名单制（`EXPORTABLE_KEYS`），新增设置项必须显式加入——**S3 密钥类字段永不进包**；文件带
+    `schema: qikeqbank.settings.v1` 与「仅含设置、不含题库数据与密钥」说明。落盘复用 `banks_export_md`。
+  - 导入**逐字段归一**（单个字段非法只丢该字段，不整包拒绝），且**只产出文件里出现过的键**
+    （不悄悄补默认值，否则用户以为「我只改了一项」却动了全部）。越界值钳制并计入 `warnings`，
+    确认框里展示「将覆盖 N 项 + 钳制提示」。不认识的 `schema` 明确拒绝，不猜版本。
+- **快捷键帮助**：设置页底栏「快捷键」按钮 → `emit('open-shortcuts')` → App.vue 收起设置并打开**同一个**
+  `ShortcutsDialog`（与 FE-P0-08 命令面板的 `?` 入口共享，不新写一份清单——两处清单分叉是必然漂移）。
+- **S3 面板细化**：上次同步给「相对时间 + 绝对时间」双显示；新增 `sync_s3_pending` 显示未同步变更数
+  （可展开看分表：题库/试题/作答记录/复习状态/设置）；冲突计数可展开并说明「本地改动被云端覆盖」
+  的语义与当前可用的应对（先「仅上传」）；逐条取舍待后续版本。
+- **修掉一个已在 P1-08 出现过的同类缺陷**：`:disabled="ioBusy"` 里 `ioBusy` 是字符串 ref，
+  初始 `''` 被当成「有该属性」→ 导出/导入/恢复默认三个按钮**永久禁用**。
+  这次把它升级成**仓库级守卫** `tests/unit/vue-boolean-attr.test.js`：扫描全部 `.vue`，
+  凡是把字符串型 ref 直接绑到 `:disabled` / `:aria-checked` 等布尔属性就报错
+  （允许 `!!x` / `!x` / `x ===` / `x.length` 等显式布尔化）。
+- 守卫：`tests/unit/settings-io.test.js` 22 条（白名单/round-trip/逐字段归一/不补默认值/schema 拒绝/
+  S3 密钥不外泄/DEFAULTS 单一来源/快捷键复用同一 Dialog）+ `vue-boolean-attr.test.js`（仓库级）；
+  cargo 新增 `pending_changes` 两条（无水印报未知、有水印按表计数）；e2e `search` 36 → 59。
+
 ### 复习准备页拆分与预测（FE-P1-09）
 - `review_forecast` 新命令：`{overdue, today, learning, forecast:[{date,count}]}`。
   `overdue` 与 `today` **互斥**；`learning`（FSRS state 1/3）**可与前两者重叠**，UI 写成「其中学习中 N」，
@@ -670,7 +696,7 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 333 条 / 9 模块 / **33.2s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 356 条 / 9 模块 / **38.8s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页/另存为副本（FE-P1-03/04/05） | 43 | ~1.9s |
@@ -681,7 +707,7 @@ export function persistBankFilter(page, id)
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 + 到期拆分·7 天预测·多选题库·稍后/暂停（FE-P1-09） | 41 | ~2.2s |
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 + 100 分标准卷/暂停继续/按库趋势（FE-P1-07） | 38 | ~9.0s |
   | `wrong` | 错题本：搜索 / 排序 / 统计 + 移出规则/导出 MD·JSON/行内编辑（FE-P1-08） | 39 | ~1.5s |
-  | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |
+  | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 + 设置导出·导入·恢复默认·快捷键·S3 详情（FE-P1-10） | 59 | ~13.0s |
   - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 13.9s**）只在提交前 / 发版前 / 真跨模块改动时跑。
   - 新增页面行为时：把断言加到对应模块；新模块必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
   - **等待约定（重要，别退回固定 sleep / 文案标记）**：`goto(page, hash)` 不接受任何标记参数，就绪判定统一走 `requireRoute()`：**`document.title === meta.title + ' · ' + APP_NAME` 且 `window.__inflight === 0`**。

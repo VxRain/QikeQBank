@@ -57,6 +57,46 @@
           正在与云端同步，首次同步可能需要一点时间，请稍候…
         </div>
         <div v-if="lastResult" class="text-[12px] text-success leading-relaxed whitespace-pre-line">{{ lastResult }}</div>
+
+        <!-- FE-P1-10 同步详情：上次时间（相对+绝对）/ 未同步变更 / 冲突 -->
+        <div v-if="configured" class="flex flex-col gap-1.5 px-2.5 py-2 bg-bg-accent border border-line rounded-[8px] text-[12px]">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-muted">上次同步</span>
+            <span class="text-text-secondary text-right">
+              {{ statusText.replace(/^上次同步：/, '') }}
+              <span v-if="lastSyncAbs" class="text-muted-light ml-1">（{{ lastSyncAbs }}）</span>
+            </span>
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-muted">未同步变更</span>
+            <button
+              v-if="pendingRows.length"
+              type="button"
+              class="text-primary bg-transparent border-0 p-0 cursor-pointer text-[12px] flex items-center gap-1"
+              :aria-expanded="pendingOpen"
+              @click="pendingOpen = !pendingOpen"
+            >{{ pendingText }}<i :class="pendingOpen ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button>
+            <span v-else class="text-text-secondary">{{ pendingText }}</span>
+          </div>
+          <div v-if="pendingOpen && pendingRows.length" class="flex flex-wrap gap-x-3 gap-y-1 pl-1 text-muted">
+            <span v-for="r in pendingRows" :key="r.key">{{ r.label }} {{ r.count }}</span>
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-muted">冲突</span>
+            <button
+              v-if="conflictCount > 0"
+              type="button"
+              class="text-danger bg-transparent border-0 p-0 cursor-pointer text-[12px] flex items-center gap-1"
+              :aria-expanded="conflictOpen"
+              @click="conflictOpen = !conflictOpen"
+            >{{ conflictCount }} 项<i :class="conflictOpen ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button>
+            <span v-else class="text-text-secondary">无</span>
+          </div>
+          <div v-if="conflictOpen && conflictCount > 0" class="text-muted leading-[1.6] pl-1">
+            上次同步时有 {{ conflictCount }} 项本地改动被云端版本覆盖（同一条记录两端都改过时以较新的为准）。
+            逐条对比与取舍待后续版本提供；如需保留本地版本，请先「仅上传」再做其它设备操作。
+          </div>
+        </div>
       </div>
 
       <!-- 配置：一次性设置，平时折叠 -->
@@ -135,7 +175,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { s3ConfigGet, s3ConfigSet, s3Test, s3Push, s3Status, s3RepairAssets } from '@/api/sync.js'
+import { s3ConfigGet, s3ConfigSet, s3Test, s3Push, s3Status, s3Pending, s3RepairAssets } from '@/api/sync.js'
 import { settings } from '@/stores/settings.js'
 import { autoSync, beginCloudTask, endCloudTask, resetAutoSyncClock, runSync } from '@/stores/autoSync.js'
 import { toast } from '@/stores/ui.js'
@@ -148,6 +188,8 @@ const busy = ref('')
 const configured = ref(false)
 const hasSecret = ref(false)
 const status = ref(null)
+// FE-P1-10：未同步变更数（known=false 表示从未推送过）
+const pending = ref(null)
 const lastResult = ref('')
 // 相对时间要随时间前进刷新（面板打开时每 30 秒一次）
 const now = ref(Date.now())
@@ -244,6 +286,41 @@ const statusText = computed(() => {
   return `上次同步：${relTime(last)}`
 })
 
+/** 上次同步的绝对时间（相对时间之外再给一个可核对的绝对值） */
+const lastSyncAbs = computed(() => {
+  const up = status.value?.last_push_at
+  const down = status.value?.last_pull_at
+  const last = [up, down].filter(Boolean).sort().pop()
+  if (!last) return ''
+  const d = new Date(last)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+})
+
+/** 未同步变更的展示文案 */
+const pendingText = computed(() => {
+  if (!pending.value) return '未同步变更：—'
+  if (!pending.value.known) return '未同步变更：未知（还没推送过）'
+  const n = Number(pending.value.total) || 0
+  return n > 0 ? `未同步变更：${n} 项` : '未同步变更：无'
+})
+
+/** 未同步变更的分项（展开看是哪些表） */
+const pendingRows = computed(() => {
+  const by = pending.value?.by_table
+  if (!by) return []
+  const NAMES = { banks: '题库', questions: '试题', records: '作答记录', review_state: '复习状态', settings: '设置' }
+  return Object.entries(by)
+    .filter(([, n]) => Number(n) > 0)
+    .map(([k, n]) => ({ key: k, label: NAMES[k] || k, count: Number(n) }))
+})
+
+/** 冲突：上次同步里「以云端为准覆盖本地」的条数（autoSync 运行时最及时） */
+const conflictCount = computed(() => Number(autoSync.lastConflicts) || 0)
+const conflictOpen = ref(false)
+const pendingOpen = ref(false)
+
 function applyConfig(cfg) {
   if (!cfg) return
   configured.value = Boolean(cfg.configured)
@@ -263,8 +340,20 @@ async function refresh() {
   try {
     applyConfig(await s3ConfigGet())
     status.value = await s3Status()
+  await refreshPending()
+    await refreshPending()
+    await refreshPending()
   } catch {
     /* 未配置或后端不可用时静默，面板仍可填写 */
+  }
+}
+
+/** 未同步变更数：失败不影响面板其它部分（它只是辅助信息） */
+async function refreshPending() {
+  try {
+    pending.value = await s3Pending()
+  } catch {
+    pending.value = null
   }
 }
 
@@ -275,6 +364,7 @@ async function persistConfig() {
   const res = await s3ConfigSet(payload)
   applyConfig(res)
   status.value = await s3Status()
+  await refreshPending()
 }
 
 async function saveAndTest() {
@@ -300,6 +390,8 @@ async function upload() {
   try {
     const res = await s3Push()
     status.value = await s3Status()
+  await refreshPending()
+    await refreshPending()
     showWarnings(res)
     if (res.skipped) {
       const n = Number(res.assets_uploaded || 0)
@@ -344,6 +436,8 @@ async function repairAssets() {
   try {
     const res = await s3RepairAssets()
     status.value = await s3Status()
+  await refreshPending()
+    await refreshPending()
     const reg = Number(res.registered || 0)
     const missing = Number(res.missing || 0)
     const uploaded = Number(res.uploaded || 0)

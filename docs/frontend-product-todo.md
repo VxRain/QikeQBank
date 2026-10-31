@@ -100,7 +100,7 @@
 | FE-P1-07 | 模考标准卷 / 暂停 / 成绩趋势 | M–L | 部分 | [x] |
 | FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [x] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [x] |
-| FE-P1-10 | 设置增强 | S–M | 部分 | [ ] |
+| FE-P1-10 | 设置增强 | S–M | 部分 | [x] |
 | FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [ ] |
 | FE-P1-12 | 前端渲染性能 | S | 否 | [ ] |
 
@@ -659,12 +659,23 @@
 - 守卫：`tests/unit/review-plan.test.js` 26 条（三桶互斥 / 总量不含 learning / 柱状图归一与 0 值 / 多选语义 / 搁置边界 / 暂停文案 + 4 条视图接线静态守卫，含「learning 必须是『其中』表述」）；cargo 新增 `review_forecast_buckets_are_disjoint_and_respect_multi_bank_filter`（断言三桶不重叠、forecast 从明天起、多库/单库/全部三者一致、草稿不进桶）；e2e `review` 18 → 41。
 - 待 FE-P0-12：材料题「按母题计 vs 按子题计」的统计口径未定，本轮只在界面说明，不实现换算。
 
-### [ ] FE-P1-10 设置增强
+### [x] FE-P1-10 设置增强
 
 - 「恢复默认设置」；设置导入/导出。
 - 快捷键帮助弹窗（与 FE-P0-08 共用）。
 - S3 同步显示上次同步时间、进度、未同步变更数；冲突计数可展开查看摘要。
 - **文件**：`src/components/settings/*`、`src/components/S3SyncPanel.vue`。
+
+**已完成（2026-10-31）**
+- **默认值单一来源**：`stores/settings.js` 新增 `DEFAULTS`（`Object.freeze`），reactive 初值与「恢复默认」共用同一份。两处各写一份字面量的后果是：点「恢复默认」得到既非旧值也非新默认的第三种状态。
+- **恢复默认**：`resetSettingsToDefault()` 逐字段写回 `DEFAULTS`，只重置偏好（题库/流水/密钥不动）。设置页二次确认走 `ui.confirmDialog({danger:true})`，文案写明「题库、作答记录与云端配置都不受影响」。
+- **导出**（`utils/settingsIO.js`）：白名单制（`EXPORTABLE_KEYS`），新增设置项必须显式加入——**S3 密钥类字段永不进包**；文件带 `schema: qikeqbank.settings.v1` 与「仅含设置、不含题库数据与密钥」说明。落盘复用既有 `banks_export_md`（不新增命令、不改 schema）。
+- **导入**：**逐字段归一**（单个字段非法只丢该字段，不整包拒绝——整包拒绝会让用户以为功能坏了），且**只产出文件里出现过的键**（不悄悄补默认值，否则用户以为「我只改了一项」却动了全部）。越界值钳制并计入 `warnings`，确认框展示「将覆盖 N 项 + 钳制提示」。不认识的 `schema` 明确拒绝，不猜版本；非法 JSON/空文件/非对象各给可读错误。
+- **快捷键帮助**：设置页底栏「快捷键」按钮 → `emit('open-shortcuts')` → App.vue 收起设置并打开**同一个** `ShortcutsDialog`（与 FE-P0-08 命令面板的 `?` 入口共享；两处各写一份清单是必然漂移，守卫断言 App 里只有 1 个实例）。
+- **S3 面板细化**：上次同步给「相对时间 + 绝对时间」双显示；新增后端 `sync_s3_pending` → 未同步变更数，可展开看分表（题库/试题/作答记录/复习状态/设置），走 `idx_*_synced` 计数而不拉整批行；**没有水位线时报 `known:false`**（显示「未知」，不报假 0）；**不数 `delete_log`**（删除在内容表里表现为行消失，数墓碑会让数字混进用户看不见的东西）。冲突计数可展开，说明「本地改动被云端覆盖」的语义与当前应对（先「仅上传」），逐条取舍待后续版本。
+- **修掉同类缺陷并升级为仓库级守卫**：`:disabled="ioBusy"` 里 `ioBusy` 是字符串 ref，初始 `''` 被当成「有该属性」→ 导出/导入/恢复默认三按钮**永久禁用**（与 P1-08 的 `exporting` 同一个坑）。新增 `tests/unit/vue-boolean-attr.test.js` 扫描全部 `.vue`：字符串型 ref 直接绑到 `:disabled` / `:aria-checked` 等布尔属性即失败（允许 `!!x` / `!x` / `x ===` / `x.length`）；并含一条「注入违规必须被抓出」的自检，防止规则写成永远通过。
+- 守卫：`tests/unit/settings-io.test.js` 22 条 + `vue-boolean-attr.test.js`；cargo 新增 `pending_changes` 两条（无水印报未知 / 有水印按表计数）；e2e `search` 36 → 59。
+- 未做：冲突「逐条对比与取舍」需要后端返回冲突明细，属 PLAN §9 待定事项，不在本项范围。
 
 ### [ ] FE-P1-11 可访问性与弹层一致性
 
@@ -988,3 +999,4 @@
 | v13 | 2026-10-31 | **FE-P1-07 完成**（模考 100 分标准卷 / 暂停继续 / 成绩趋势按题库）。新增 `utils/examPaper.js`：按分值分配 + 子集和 DP（贪心在 6/6/6/8 这类题池会失败），配比自动缩放到合计 100，凑不出如实报不可达并停在准备页。暂停靠后移 `startedAt` 真正冻结限时（只停刷新会让继续时跳掉暂停时长），并把暂停态写进草稿以便关窗恢复。`exam_sessions` 加可选 `bank_id`，场次题库写在 `detail.bank_id`（schema 零改动）。单测 +21（381）、cargo +1（158）、e2e exam 20→38，全量 292 |
 | v14 | 2026-10-31 | **FE-P1-08 完成**（顽固错题阈值 / 导出 / 行内详情）。阈值取 0 = 永不自动移出（复用已同步的 `wrongLeaveAfterCorrect`，不新增开关）；后端 `WRONG_WHERE` 改 `(?3 = 0 OR ...)`，写成 `< 0` 会恒假让错题本全空。新增 `utils/wrongExport.js` 导出 MD/JSON（MD 人读、JSON 带 schema 且不含内部 id），落盘复用 `banks_export_md` 不新增命令。**修掉 e2e 抓到的 Vue 陷阱**：`:disabled` 绑定字符串 ref 求值为 `''` 时按钮永久禁用（导出按钮点不动），改 `!!exporting` 并加规则守卫。单测 +26（407），e2e wrong 21→39，全量 310 |
 | v15 | 2026-10-31 | **FE-P1-09 完成**（复习预测 / 多选题库 / 按题型 / 稍后搁置）。新增 `review_forecast` 命令：逾期与今日互斥、学习中可与两者重叠（UI 写「其中」）、forecast 为明天起 7 天。三条复习命令均支持 `bank_ids`（`json_each` 展开，一个占位符不拼 SQL）。题型筛选只改提示不改拉题，页面标注「材料题按母题计，口径待 FE-P0-12」。稍后只动内存队列不动 due_at。单测 +26（433）、cargo +1（159）、e2e review 18→41，全量 333 |
+| v16 | 2026-10-31 | **FE-P1-10 完成**（设置增强）。`DEFAULTS` 成为默认值单一来源；恢复默认走 `confirmDialog` 只重置偏好；导出白名单制（密钥永不进包），导入逐字段归一且只覆盖文件里出现过的键；快捷键按钮复用同一个 `ShortcutsDialog`（App 里仅 1 实例）；新增 `sync_s3_pending` 报未同步变更数（无水印报 `known:false` 而非假 0，不数 delete_log）。**同类缺陷第三次出现后升级为仓库级守卫** `vue-boolean-attr.test.js`：字符串 ref 绑布尔属性即失败（本轮据此修掉设置页三按钮永久禁用）。单测 +24（457）、cargo +2（161）、e2e search 36→59，全量 356 |

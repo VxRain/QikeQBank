@@ -32,6 +32,15 @@ export async function s3Status() {
   return unwrap(await cmd('sync_s3_status'))
 }
 
+/**
+ * 未同步变更数（FE-P1-10）。
+ * `known=false` 表示从未推送过（此时 total 为 null，UI 应显示「未知」而不是 0）。
+ * @returns {Promise<{known:boolean, total:number|null, by_table:Record<string,number>|null, watermark?:string}>}
+ */
+export async function s3Pending() {
+  return unwrap(await cmd('sync_s3_pending'))
+}
+
 // 显式补图：本地登记表 − 桶内已有，只上传缺失项；不扫描题库、不逐图 HEAD。
 export async function s3RepairAssets() {
   return unwrap(await cmd('sync_s3_repair_assets'))

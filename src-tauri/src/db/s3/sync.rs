@@ -18,10 +18,11 @@ use crate::db::assets::{
 };
 use crate::db::{
     apply_bundle, db_meta_value, export_delta_at, generate_id, next_sync_stamp, now_iso,
-    replace_snapshot, sha256_hex, sync_assets_missing_impl, upsert_db_meta, SyncRole, SEED_EPOCH,
+    replace_snapshot, sha256_hex, sync_assets_missing_impl, to_str, upsert_db_meta, SyncRole,
+    SEED_EPOCH,
 };
 use chrono::Utc;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
@@ -1353,6 +1354,47 @@ pub fn probe(store: &dyn ObjectStore, cfg: &S3Config) -> Result<Value, String> {
     }))
 }
 
+/// 未同步变更数（FE-P1-10）。
+///
+/// 返回 `{"known":bool, "total":n, "by_table":{...}}`：
+/// - `known=false`（没有水位线，即从未推送过）→ total/by_table 都给 null，
+///   让 UI 显示「未知」。报 0 会骗人：没推过意味着**全部**都是未同步的。
+/// - `known=true` → 各表 `synced_at > watermark` 的计数。
+///
+/// 只数内容表，不含 `delete_log`：删除在内容表里表现为行消失，
+/// 把墓碑也数进去会让「未同步 3 项」里混进已经看不见的东西，用户无从核对。
+pub(crate) fn pending_changes(conn: &Connection) -> Result<Value, String> {
+    let watermark = db_meta_value(conn, WATERMARK_KEY)?.unwrap_or_default();
+    if watermark.is_empty() {
+        return Ok(json!({
+            "known": false,
+            "total": Value::Null,
+            "by_table": Value::Null,
+        }));
+    }
+    let mut by_table = serde_json::Map::new();
+    let mut total: i64 = 0;
+    for (key, sql) in [
+        ("banks", "SELECT COUNT(*) FROM banks WHERE synced_at > ?1"),
+        ("questions", "SELECT COUNT(*) FROM questions WHERE synced_at > ?1"),
+        ("records", "SELECT COUNT(*) FROM practice_records WHERE synced_at > ?1"),
+        ("review_state", "SELECT COUNT(*) FROM review_state WHERE synced_at > ?1"),
+        ("settings", "SELECT COUNT(*) FROM app_settings WHERE updated_at > ?1"),
+    ] {
+        let n: i64 = conn
+            .query_row(sql, params![watermark], |r| r.get(0))
+            .map_err(to_str)?;
+        total += n;
+        by_table.insert(key.to_string(), json!(n));
+    }
+    Ok(json!({
+        "known": true,
+        "total": total,
+        "by_table": Value::Object(by_table),
+        "watermark": watermark,
+    }))
+}
+
 pub fn status(conn: &Connection, device: &str) -> Result<Value, String> {
     let cursors = load_cursors(conn)?;
     Ok(json!({
@@ -2172,4 +2214,50 @@ mod tests {
         let _ = fs::remove_dir_all(&rb);
     }
 
+
+    /// FE-P1-10：未同步变更数。
+    ///
+    /// 两条关键口径：
+    /// ① 没水位线（从未推送过）→ known=false，**不是 0**（那会把「全是未同步」说成「没有」）；
+    /// ② 只数内容表，不含 delete_log 墓碑（删除在内容表里表现为行消失）。
+    #[test]
+    fn pending_changes_reports_unknown_without_watermark() {
+        let conn = crate::db::test_support::test_conn();
+        let r = pending_changes(&conn).unwrap();
+        assert_eq!(r["known"], json!(false));
+        assert!(r["total"].is_null(), "没有水位线时应报未知而不是 0");
+        assert!(r["by_table"].is_null());
+    }
+
+    #[test]
+    fn pending_changes_counts_rows_after_watermark() {
+        let mut conn = crate::db::test_support::test_conn();
+        let bank = crate::db::banks_create_impl(&conn, "待同步库", None).unwrap();
+        let bid = bank["id"].as_str().unwrap().to_string();
+        let mut q = crate::db::test_support::sample_question();
+        q["id"] = json!("q_pending");
+        q["bank_id"] = json!(bid);
+        crate::db::questions_create_impl(&conn, q).unwrap();
+
+        // 先记下当前最大 synced_at 作为水位线，然后什么都不做 → 应为 0
+        let max: String = conn
+            .query_row("SELECT MAX(synced_at) FROM questions", [], |r| r.get(0))
+            .unwrap();
+        upsert_db_meta(&conn, WATERMARK_KEY, &max).unwrap();
+        let zero = pending_changes(&conn).unwrap();
+        assert_eq!(zero["known"], json!(true));
+        assert_eq!(zero["total"], json!(0), "水位线之后没有新行");
+
+        // 再建一条题 → 只有 questions 计数增加
+        let mut q2 = crate::db::test_support::sample_question();
+        q2["id"] = json!("q_pending2");
+        q2["bank_id"] = json!(bid);
+        crate::db::questions_create_impl(&conn, q2).unwrap();
+        let one = pending_changes(&conn).unwrap();
+        assert_eq!(one["total"], json!(1));
+        assert_eq!(one["by_table"]["questions"], json!(1));
+        assert_eq!(one["by_table"]["banks"], json!(0));
+
+        let _ = &mut conn;
+    }
 }

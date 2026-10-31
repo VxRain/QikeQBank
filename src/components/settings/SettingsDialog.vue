@@ -92,10 +92,25 @@
             </div>
           </div>
 
-          <!-- 底栏 -->
-          <footer class="sd-foot">
+          <!-- 底栏（FE-P1-10）：快捷键帮助 / 导出 / 导入 / 恢复默认 -->
+          <footer class="sd-foot flex-wrap">
             <span class="sd-foot-note">修改即时生效 · 自动保存</span>
-            <button type="button" class="btn btn-primary" @click="close">完成</button>
+            <span class="flex items-center gap-1.5 flex-wrap ml-auto">
+              <button type="button" class="btn btn-small" title="快捷键帮助（?）" @click="emit('open-shortcuts')">
+                <i class="i-lucide-keyboard" />快捷键
+              </button>
+              <button type="button" class="btn btn-small" title="把当前设置导出为 JSON 文件" :disabled="!!ioBusy" @click="onExport">
+                <i class="i-lucide-download" />{{ ioBusy === 'export' ? '导出中…' : '导出' }}
+              </button>
+              <button type="button" class="btn btn-small" title="从 JSON 文件导入设置（只覆盖文件里出现的项）" :disabled="!!ioBusy" @click="onImportClick">
+                <i class="i-lucide-upload" />导入
+              </button>
+              <button type="button" class="btn btn-small btn-danger" title="把所有设置恢复为默认值" :disabled="!!ioBusy" @click="onReset">
+                <i class="i-lucide-rotate-ccw" />恢复默认
+              </button>
+              <input ref="fileEl" type="file" accept="application/json,.json" class="hidden" @change="onFilePicked" />
+              <button type="button" class="btn btn-primary" @click="close">完成</button>
+            </span>
           </footer>
         </div>
       </div>
@@ -107,12 +122,15 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import SettingRow from './SettingRow.vue'
 import { SETTINGS_SECTIONS, isItemVisible, matchItem } from './registry.js'
-import { ui } from '@/stores/ui.js'
+import { ui, confirmDialog, toast } from '@/stores/ui.js'
+import { settings, resetSettingsToDefault, applySettingsPatch } from '@/stores/settings.js'
+import { exportSettings, parseSettingsImport, settingsFileName } from '@/utils/settingsIO.js'
+import { exportBankMarkdown } from '@/api/banks.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'open-shortcuts'])
 
 const sections = SETTINGS_SECTIONS
 
@@ -120,6 +138,86 @@ const sections = SETTINGS_SECTIONS
 let lastSectionId = sections[0]?.id || ''
 const activeId = ref(lastSectionId)
 const query = ref('')
+// ── FE-P1-10 设置导出 / 导入 / 恢复默认 ──
+const fileEl = ref(null)
+const ioBusy = ref('')
+
+/** 导出：写进 export/ 目录（复用既有写文件命令，不新增命令、不改 schema） */
+async function onExport() {
+  if (ioBusy.value) return
+  ioBusy.value = 'export'
+  try {
+    const { text, count } = exportSettings(settings)
+    const { path } = await exportBankMarkdown(settingsFileName('json'), text)
+    toast(`已导出 ${count} 项设置\n文件：${path}`, 'success', 6000)
+  } catch (e) {
+    console.error(e)
+    toast('导出设置失败：' + (e?.message || e), 'error')
+  } finally {
+    ioBusy.value = ''
+  }
+}
+
+function onImportClick() {
+  if (ioBusy.value) return
+  fileEl.value?.click()
+}
+
+/**
+ * 选文件 → 解析 → **先确认再应用**。
+ *
+ * 为什么必须二次确认：导入会一次改掉一批设置（错题移出阈值、FSRS 参数等），
+ * 且用户看不到「改了什么」的对照表；直接应用等于替用户做了个不可撤销的决定。
+ * 确认框里把「将改动的项数 + 钳制提示」写清楚。
+ */
+async function onFilePicked(e) {
+  const file = e?.target?.files?.[0]
+  if (!file) return
+  // 同一个文件连选两次也要能触发（否则第二次 change 不 fiery）
+  try { e.target.value = '' } catch { /* 忽略 */ }
+  ioBusy.value = 'import'
+  try {
+    const text = await file.text()
+    const r = parseSettingsImport(text)
+    if (!r.ok) {
+      toast('导入失败：' + (r.error || '内容无法识别'), 'error', 5000)
+      return
+    }
+    const warn = r.warnings.length ? `\n注意：${r.warnings.join('；')}` : ''
+    const ok = await confirmDialog({
+      title: '导入设置',
+      message: `将从文件覆盖 ${r.count} 项设置（文件里没出现的项保持不变）。${warn}`,
+      okText: '导入',
+      cancelText: '取消'
+    })
+    if (!ok) return
+    const applied = applySettingsPatch(r.patch)
+    toast(`已导入 ${applied} 项设置`, 'success')
+  } catch (err) {
+    console.error(err)
+    toast('导入失败：' + (err?.message || err), 'error')
+  } finally {
+    ioBusy.value = ''
+  }
+}
+
+/** 恢复默认：危险操作，必须二次确认，并说明会影响哪些可见行为 */
+async function onReset() {
+  if (ioBusy.value) return
+  const ok = await confirmDialog({
+    title: '恢复默认设置',
+    message:
+      '将把所有设置恢复为默认值（含间隔复习参数、错题移出规则、自动同步开关）。\n' +
+      '题库、作答记录与云端配置都不受影响。此操作不可撤销。',
+    okText: '恢复默认',
+    cancelText: '取消',
+    danger: true
+  })
+  if (!ok) return
+  resetSettingsToDefault()
+  toast('已恢复默认设置', 'success')
+}
+
 const cardEl = ref(null)
 const searchEl = ref(null)
 const paneEl = ref(null)

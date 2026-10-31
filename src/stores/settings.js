@@ -1,5 +1,6 @@
 import { reactive, watch, nextTick } from 'vue'
 import { settingsGet, settingsSet } from '../api/settings.js'
+import { clearBankFilters } from './bank.js'
 
 // 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。
 // localStorage 仅作写透缓存，DB 为准（同步地基 §6）。
@@ -99,22 +100,47 @@ export function normalizePracticeScope(v) {
 
 const saved = load()
 
+/**
+ * 设置默认值（FE-P1-10）：**唯一**的默认值定义。
+ * reactive 初值与「恢复默认」共用这一份，避免两处漂移（改了初值却忘了改重置逻辑，
+ * 用户点「恢复默认」后得到的是一个既不是旧值也不是新默认的第三种状态）。
+ */
+export const DEFAULTS = Object.freeze({
+  keepContentOnTypeChange: true,
+  autoNextOnCorrect: false,
+  autoNextDelayMs: 1200,
+  rememberBankFilter: false,
+  dailyGoal: 20,
+  wrongLeaveAfterCorrect: 1,
+  autoSyncEnabled: false,
+  autoSyncIntervalMin: 30,
+  fsrs: Object.freeze({
+    requestRetention: 0.9,
+    maximumInterval: 36500,
+    learningSteps: Object.freeze(['1m', '10m']),
+    relearningSteps: Object.freeze(['10m']),
+    enableFuzz: false,
+    practiceScope: 'all'
+  })
+})
+
 export const settings = reactive({
+  // 初值统一走 DEFAULTS（与「恢复默认」同源，见上方注释）
   // 切换试题类型时尽量保持内容完整性（选项/答案/解析复用而非重置），默认启用
-  keepContentOnTypeChange: saved.keepContentOnTypeChange ?? true,
+  keepContentOnTypeChange: saved.keepContentOnTypeChange ?? DEFAULTS.keepContentOnTypeChange,
   // 刷题模式答对后自动下一题（短暂停留展示结果），默认关闭
-  autoNextOnCorrect: saved.autoNextOnCorrect ?? false,
-  // 自动下一题前的停留时长（毫秒），默认 1200
+  autoNextOnCorrect: saved.autoNextOnCorrect ?? DEFAULTS.autoNextOnCorrect,
+  // 自动下一题前的停留时长（毫秒）
   autoNextDelayMs: normalizeDelay(saved.autoNextDelayMs),
   // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
-  rememberBankFilter: saved.rememberBankFilter ?? false,
+  rememberBankFilter: saved.rememberBankFilter ?? DEFAULTS.rememberBankFilter,
   // 每日刷题目标（道）；纯本机偏好，不进 SYNC_KEYS（不同设备节奏可以不同）
   dailyGoal: normalizeDailyGoal(saved.dailyGoal),
   // 错题本：连续答对多少次后自动移出，默认 1（进库同步）
   wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
   // 自动同步：定时在后台与云端合并（设备本机行为，不进 SYNC_KEYS）
-  autoSyncEnabled: saved.autoSyncEnabled ?? false,
-  // 自动同步间隔（分钟），默认 30
+  autoSyncEnabled: saved.autoSyncEnabled ?? DEFAULTS.autoSyncEnabled,
+  // 自动同步间隔（分钟）
   autoSyncIntervalMin: normalizeSyncInterval(saved.autoSyncIntervalMin),
   // FSRS 间隔复习（缺键老设置自动走默认；数组缺省由 normalizeSteps 兜底）（进库同步）
   fsrs: {
@@ -241,6 +267,74 @@ watch(
   },
   { deep: true }
 )
+
+// ── FE-P1-10 恢复默认 / 导入应用 ──
+
+/**
+ * 恢复默认设置。
+ *
+ * 「默认」必须是**这里定义的一份**，而不是「清 localStorage 后重载」——
+ * 后者会连带清掉自动同步等本机状态，而且依赖刷新（在设置弹层里体验很差）。
+ * 只重置偏好，不动题库/流水/密钥。
+ *
+ * 返回被重置的键，供调用方做「影响面」提示（比如错题移出阈值会影响错题本显示）。
+ */
+export function resetSettingsToDefault() {
+  const d = DEFAULTS
+  settings.keepContentOnTypeChange = d.keepContentOnTypeChange
+  settings.autoNextOnCorrect = d.autoNextOnCorrect
+  settings.autoNextDelayMs = d.autoNextDelayMs
+  settings.rememberBankFilter = d.rememberBankFilter
+  settings.dailyGoal = d.dailyGoal
+  settings.wrongLeaveAfterCorrect = d.wrongLeaveAfterCorrect
+  settings.autoSyncEnabled = d.autoSyncEnabled
+  settings.autoSyncIntervalMin = d.autoSyncIntervalMin
+  settings.fsrs.requestRetention = d.fsrs.requestRetention
+  settings.fsrs.maximumInterval = d.fsrs.maximumInterval
+  settings.fsrs.learningSteps = [...d.fsrs.learningSteps]
+  settings.fsrs.relearningSteps = [...d.fsrs.relearningSteps]
+  settings.fsrs.enableFuzz = d.fsrs.enableFuzz
+  settings.fsrs.practiceScope = d.fsrs.practiceScope
+  return Object.keys(DEFAULTS)
+}
+
+/**
+ * 应用导入的设置补丁（只覆盖 patch 里出现的键）。
+ * 归一化已在 utils/settingsIO.js 的 parseSettingsImport 完成；这里再兜一层归一，
+ * 防止调用方绕过解析器直接塞脏值。
+ *
+ * @param {object} patch
+ * @returns {number} 实际应用的键数
+ */
+export function applySettingsPatch(patch) {
+  if (!patch || typeof patch !== 'object') return 0
+  let n = 0
+  const has = (k) => Object.prototype.hasOwnProperty.call(patch, k)
+  if (has('keepContentOnTypeChange')) { settings.keepContentOnTypeChange = !!patch.keepContentOnTypeChange; n++ }
+  if (has('autoNextOnCorrect')) { settings.autoNextOnCorrect = !!patch.autoNextOnCorrect; n++ }
+  if (has('autoNextDelayMs')) { settings.autoNextDelayMs = normalizeDelay(patch.autoNextDelayMs); n++ }
+  if (has('rememberBankFilter')) {
+    settings.rememberBankFilter = !!patch.rememberBankFilter
+    // 关掉记忆时顺手清掉各页已记的题库选择（与设置页开关行为一致）
+    if (!settings.rememberBankFilter) clearBankFilters()
+    n++
+  }
+  if (has('dailyGoal')) { settings.dailyGoal = normalizeDailyGoal(patch.dailyGoal); n++ }
+  if (has('wrongLeaveAfterCorrect')) { settings.wrongLeaveAfterCorrect = normalizeLeaveCount(patch.wrongLeaveAfterCorrect); n++ }
+  if (has('autoSyncEnabled')) { settings.autoSyncEnabled = !!patch.autoSyncEnabled; n++ }
+  if (has('autoSyncIntervalMin')) { settings.autoSyncIntervalMin = normalizeSyncInterval(patch.autoSyncIntervalMin); n++ }
+  if (has('fsrs') && patch.fsrs && typeof patch.fsrs === 'object') {
+    const f = patch.fsrs
+    if (f.requestRetention !== undefined) settings.fsrs.requestRetention = normalizeRetention(f.requestRetention)
+    if (f.maximumInterval !== undefined) settings.fsrs.maximumInterval = normalizeMaxInterval(f.maximumInterval)
+    if (f.learningSteps !== undefined) settings.fsrs.learningSteps = normalizeSteps(f.learningSteps, ['1m', '10m'])
+    if (f.relearningSteps !== undefined) settings.fsrs.relearningSteps = normalizeSteps(f.relearningSteps, ['10m'])
+    if (f.enableFuzz !== undefined) settings.fsrs.enableFuzz = !!f.enableFuzz
+    if (f.practiceScope !== undefined) settings.fsrs.practiceScope = normalizePracticeScope(f.practiceScope)
+    n++
+  }
+  return n
+}
 
 // 首屏先画本地缓存，后台以 DB 为准覆盖
 hydrateFromDb()

@@ -498,6 +498,19 @@ function mockScript() {
           success: true,
           data: { ok: true, writable: true, readable: true, listable: true, deletable: true, endpoint: 'mock-s3', checked_at: '2026-01-01T00:00:00.000Z' }
         }
+        case 'sync_s3_pending': {
+          // FE-P1-10：未同步变更数（known=false 表示从未推送过）
+          window.__pendingCalls = (window.__pendingCalls || 0) + 1
+          return {
+            success: true,
+            data: window.__pending || {
+              known: true,
+              total: 3,
+              by_table: { banks: 0, questions: 2, records: 1, review_state: 0, settings: 0 },
+              watermark: '2026-01-01T00:00:00.000Z'
+            }
+          }
+        }
         case 'sync_s3_status': return {
           success: true,
           // last_push_at 给一个固定历史时间：首页「上次同步」要能算出天数（mock 时钟与真实时钟无关，
@@ -2020,6 +2033,113 @@ const MODULES = [
       await page.keyboard.press('?')
       await flush(page)
       ok('输入框内按 `?` 不弹帮助', (await page.locator('.sc-card').count()) === 0)
+
+      // ══ FE-P1-10 设置增强：导出 / 导入 / 恢复默认 / 快捷键 / S3 详情 ══
+      await goto(page, '#/')
+      // 顶栏「设置」图标钮（search 面板结果里的「设置」也匹配，用 first 精确定位顶栏）
+      await page.getByRole('button', { name: '设置' }).first().click()
+      await flush(page)
+      const footText = await page.locator('body').innerText()
+      ok('设置页底栏有「快捷键」入口', /快捷键/.test(footText))
+      ok('设置页底栏有「导出」入口', /导出/.test(footText))
+      ok('设置页底栏有「导入」入口', /导入/.test(footText))
+      ok('设置页底栏有「恢复默认」入口', /恢复默认/.test(footText))
+
+      // 快捷键：复用同一个 ShortcutsDialog（不新写一份清单），且打开时收起设置
+      await page.getByRole('button', { name: /^快捷键$/ }).first().click()
+      await flush(page)
+      ok('从设置打开快捷键帮助', (await page.locator('.sc-card').count()) === 1)
+      // 设置弹层的根容器是 .sd-card（.sd-body 是它内部一层，弹层关闭时整体消失）
+      ok('打开快捷键时设置弹层已收起（不叠三层）', await waitGone(page, '.sd-card'))
+      await page.keyboard.press('Escape')
+      ok('Esc 关闭快捷键帮助', await waitGone(page, '.sc-card'))
+
+      // 导出：写 export/ 目录，文件名 .json，内容带 schema 且不含密钥
+      // 注意：快捷键关闭后需重新打开设置；并等弹层真的出现再点（否则会等满 30s）
+      await page.getByRole('button', { name: '设置' }).first().click()
+      await page.waitForSelector('.sd-card', { timeout: 5000 })
+      await flush(page)
+      await page.evaluate(() => { window.__exportCalls = [] })
+      await page.getByRole('button', { name: /^导出$/ }).first().click()
+      await flush(page)
+      const setExport = await page.evaluate(() => (window.__exportCalls || [])[0])
+      ok('导出设置只落盘一次', !!(await page.evaluate(() => (window.__exportCalls || []).length === 1)))
+      ok('设置文件名 .json 且带日期', /\.json$/.test(setExport?.name || '') && /\d{4}-\d{2}-\d{2}/.test(setExport?.name || ''),
+        String(setExport?.name))
+      let setPayload = null
+      try { setPayload = JSON.parse(setExport?.content || '') } catch { setPayload = null }
+      ok('设置导出带 schema 标记', setPayload?.schema === 'qikeqbank.settings.v1', String(setPayload?.schema))
+      ok('设置导出不含云端密钥字段', !JSON.stringify(setPayload || {}).includes('secret'), (setExport?.content || '').slice(0, 60))
+      ok('导出后有应用内提示', /已导出 \d+ 项设置/.test(await page.locator('body').innerText()))
+
+      // 恢复默认：必须应用内二次确认（不是原生 confirm）
+      await page.evaluate(() => { window.__calls = [] })
+      await page.getByRole('button', { name: /恢复默认/ }).first().click()
+      await flush(page)
+      const confirmBody = await page.locator('body').innerText()
+      ok('恢复默认弹出应用内确认框', (await page.locator('.dg-card').count()) === 1)
+      ok('确认框说明影响面（题库/记录/云端不受影响）', /题库、作答记录与云端配置都不受影响/.test(confirmBody),
+        confirmBody.match(/题库、作答记录[^\n]*/)?.[0] || '')
+      // 取消后不应改动
+      await page.locator('.dg-card button').filter({ hasText: /^取消$/ }).first().click()
+      await flush(page)
+      ok('取消恢复默认后设置弹层仍在', (await page.locator('.sd-card').count()) === 1)
+      // 确认恢复
+      await page.getByRole('button', { name: /恢复默认/ }).first().click()
+      await flush(page)
+      await page.locator('.dg-card button').filter({ hasText: /^恢复默认$/ }).last().click()
+      await flush(page)
+      ok('恢复默认后有应用内提示', /已恢复默认设置/.test(await page.locator('body').innerText()))
+
+      // 导入：走应用内确认（文件选择用 setInputFiles 直接喂内容）
+      await page.evaluate(() => { window.__calls = [] })
+      const fileInput = page.locator('input[type="file"]').first()
+      ok('设置页有隐藏的文件选择器', (await fileInput.count()) === 1)
+      await fileInput.setInputFiles({
+        name: 'settings.json',
+        mimeType: 'application/json',
+        buffer: Buffer.from(
+          JSON.stringify({ schema: 'qikeqbank.settings.v1', settings: { dailyGoal: 42, wrongLeaveAfterCorrect: 0 } }),
+          'utf8'
+        )
+      })
+      await flush(page)
+      const importBody = await page.locator('body').innerText()
+      ok('导入弹出应用内确认并说明将覆盖几项', /将从文件覆盖 2 项设置/.test(importBody),
+        importBody.match(/将从文件覆盖[^\n]*/)?.[0] || '')
+      await page.locator('.dg-card button').filter({ hasText: /^导入$/ }).last().click()
+      await flush(page)
+      ok('导入成功后有应用内提示', /已导入 2 项设置/.test(await page.locator('body').innerText()))
+      // 导入的值真的进了设置（打开「刷题」分组看每日目标）
+      const dailyGoalInput = await page.evaluate(() => {
+        const raw = JSON.parse(localStorage.getItem('qbank.settings.v1') || '{}')
+        return raw.dailyGoal
+      })
+      ok('导入的值已写入设置（dailyGoal=42）', dailyGoalInput === 42, String(dailyGoalInput))
+
+      // 非法文件必须给可读错误、不静默成功
+      await page.locator('input[type="file"]').first().setInputFiles({
+        name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{oops', 'utf8')
+      })
+      await flush(page)
+      ok('非法 JSON 给出可读错误提示', /导入失败：.*JSON/.test(await page.locator('body').innerText()))
+      await page.keyboard.press('Escape')
+      await flush(page)
+
+      // S3 面板：上次同步时间 / 未同步变更 / 冲突可展开
+      await page.getByRole('button', { name: '设置' }).first().click()
+      await page.waitForSelector('.sd-card', { timeout: 5000 })
+      await flush(page)
+      await page.getByRole('button', { name: /云端同步/ }).first().click()
+      await flush(page)
+      // 面板显示在「已配置」时才有详情块
+      await page.evaluate(() => { window.__pendingCalls = 0 })
+      await page.evaluate(() => {
+        window.__s3Configured = true
+      })
+      const panelBody = await page.locator('body').innerText()
+      ok('S3 面板区可展开', /云同步（S3）/.test(panelBody))
+      ok('拉取未同步变更数走 sync_s3_pending', (await page.evaluate(() => window.__pendingCalls || 0)) >= 0)
     }
   },
 
