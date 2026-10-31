@@ -10,6 +10,8 @@
  * 这里只做展示，不做可答复数换算。
  */
 
+import { barPct } from './barScale.js'
+
 /** 逾期 / 今日 / 学习中的三桶展示（learning 单独标注为"其中"） */
 export function splitDueBuckets(forecast) {
   const f = forecast || {}
@@ -34,7 +36,9 @@ export function splitDueBuckets(forecast) {
 /**
  * 未来 7 天预测 → 柱状图数据（高度按最大值归一）。
  *
- * `pct` 为 0 时仍给一个极小高度（2），否则「那天是 0 题」和「没有数据」在视觉上无法区分。
+ * 柱高口径（峰值归一 / 0 值不给残桩 / 非 0 至少 2%）统一由 `utils/barScale.js` 的
+ * `barPct` 承担，与首页「近 7 天练习趋势」共用，避免两处各写一套让同一用户
+ * 在两个页面看到两套视觉语义。
  *
  * @param {Array<{date:string,count:number}>} forecast
  * @returns {{bars: Array<{date:string,label:string,count:number,pct:number}>, max:number, sum:number}}
@@ -50,7 +54,7 @@ export function forecastBars(forecast) {
   })
   const max = Math.max(1, ...rows.map((r) => r.count))
   const sum = rows.reduce((s, r) => s + r.count, 0)
-  for (const r of rows) r.pct = r.count > 0 ? Math.max(2, Math.round((r.count / max) * 100)) : 0
+  for (const r of rows) r.pct = barPct(r.count, max)
   return { bars: rows, max: rows.every((r) => r.count === 0) ? 0 : max, sum }
 }
 

@@ -57,6 +57,7 @@ QikeQBank/
 │   ├── styles/ perf.css（content-visibility 等渲染性能辅助类）
 │   ├── utils/  gradeQuestion.js（题型注册表 + 统一判分入口）
 │   │           grading.js（判分基元，零依赖） fsrs.js image.js
+│   │           barScale.js（柱高归一口径：峰值归一 / 0 值 0 高度 / 非 0 ≥2%）
 │   │           reviewPreview.js（复习四键间隔预览，只计算不写库）
 │   │           examSheet.js（答题卡分组/三态/标记重映射） examTrend.js（趋势坐标 + 回看行）
 │   │           parseTemplate.js parseDocxTemplate.js parseSheet.js render.js validate.js
@@ -78,6 +79,7 @@ QikeQBank/
                 form-draft（录题娇判定/草稿） form-wiring（Form.vue 接线守卫）
                 run-config（配置归一/可用题量）
                 review-preview（间隔预览/撤销载荷） exam-sheet（答题卡分组） exam-trend（趋势坐标/回看行）
+                bar-scale（柱高归一，首页趋势与复习预测共用）
                 （node:test，零依赖）
 └── tools/e2e-frontend.mjs   浏览器端到端回归（Playwright + 注入 mock IPC，102 项断言，分 7 模块可单跑）
 ```
@@ -477,6 +479,8 @@ export function persistBankFilter(page, id)
 - **今日任务卡**（`total > 0` 时）：待复习到期（含今日到期 / 学习中）+ 今日已刷/目标（`settings.dailyGoal`，默认 20，可点铅笔改，走 `promptDialog`）+ 最弱题型（`records_overview.by_type` 里正确率最低且作答 ≥3 次、且正确率 <60% 的题型）+ 三个入口：「开始今日复习（N）」（`/review`，无到期时禁用）/「弱项专练（题型）」（`/practice?types=<type>`）/「直接刷题」（`/practice`）。首页 → 开始作答 = 1 次点击。
 - **新用户引导**（`total === 0` 时取代任务卡）：三步「建一个题库 → 录入或导入第一题 → 开始刷题」，每步带 `done` 状态与直达按钮；底部「打开模板文件夹」（复用 `open_templates_dir`）与「导入试题」（`/library?import=1`）。
 - **数据安全状态**：只显示「上次同步：今天/N 天前/尚未同步过」（取 `sync_s3_status` 的 `last_push_at`/`last_pull_at` 较新者）；`≥7` 天额外一条 danger 提示。**本地时间点快照/备份面板不做**（JSON 导出导入接口已随 FE-P0-01 移除，等数据保全方案定案），文案明确写明「本地无时间点快照」。
+- **柱状口径（与复习页「未来 7 天预测」同一单一来源）**：柱高一律走 `src/utils/barScale.js::barPct`——**峰值归一**（谁最大谁满格，不按绝对刻度，否则轻度用户看到 7 根 1~2px 的线、整块像「没数据」）、**0 值 0 高度**、**非 0 至少 2%**（1/300 四舍五入成 0 会被误读成「那天没有安排」）、**封顶 100%**（防 count>max 时溢出轨道）。绝对量靠标题旁文字锚定（首页看柱下数字，复习页看「共 N 题 · 峰值 M/天」）。
+  历史：两处曾各写一套（复习页 0 值 0 高度、首页 0 值 2% 残桩 + `min-h-[2px]`），同一份数据在两个页面有两种视觉语义；现由 `tests/unit/bar-scale.test.js` 锁住「两处都走 barPct」与「柱子不带 `min-h-*`」（后者只能静态查模板：DOM 正确、样式错误，JS 单测看不见）。
 - 纯逻辑全在 `src/utils/dailyTask.js`（`dailyProgress` / `weakestType` / `syncFreshness` / `newUserSteps` / `entryHref`），由 `tests/unit/daily-task.test.js`（19 条）锁住「数据缺失不冒充 0」的分支。
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。

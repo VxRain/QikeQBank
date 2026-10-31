@@ -233,7 +233,7 @@
           :title="`${b.date} 刷题 ${b.count}，正确 ${b.correct}`"
         >
           <div class="w-full max-w-[46px] h-[120px] flex items-end bg-bg-accent border border-line rounded-[8px] p-[3px] shadow-sm">
-            <div class="relative w-full bg-primary-bg rounded-[6px] min-h-[2px] overflow-hidden" :style="{ height: b.pct + '%' }">
+            <div class="relative w-full bg-primary-bg rounded-[6px] overflow-hidden" :style="{ height: b.pct + '%' }">
               <div class="absolute left-0 right-0 bottom-0 bg-primary rounded-[6px]" :style="{ height: b.correctPct + '%' }"></div>
             </div>
           </div>
@@ -330,6 +330,7 @@ import { settings, normalizeDailyGoal } from '@/stores/settings.js'
 import { toast } from '@/stores/ui.js'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 import { dailyProgress, weakestType, syncFreshness, newUserSteps, entryHref } from '@/utils/dailyTask.js'
+import { barPct } from '@/utils/barScale.js'
 import { useDialogA11y } from '@/composables/useDialogA11y.js'
 
 const router = useRouter()
@@ -476,7 +477,8 @@ const bars = computed(() => {
     date: r.date,
     count: r.count,
     correct: r.correct,
-    pct: Math.max(2, Math.round((r.count / max) * 100)),
+    // 与复习页「未来 7 天预测」同一口径（峰值归一、0 值 0 高度），见 utils/barScale.js
+    pct: barPct(r.count, max),
     correctPct: r.count > 0 ? Math.round((r.correct / r.count) * 100) : 0,
     dateLabel: String(r.date || '').slice(5).replace('-', '/') || '-'
   }))

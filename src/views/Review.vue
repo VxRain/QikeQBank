@@ -48,10 +48,13 @@
             <template v-else>未来 7 天没有安排</template>
           </div>
         </div>
-        <div v-if="forecast.bars.length" class="flex items-end gap-2 h-[72px]">
+        <!-- 不要给这行加固定高度：列内容 = 轨道 48 + 数字 + 日期（≈90px），
+             配 items-end 时超出部分会向**上**溢出，压到标题与「共 N 题 · 峰值」那一行。
+             轨道自身有确定高度，行高交给内容自然撑开即可。 -->
+        <div v-if="forecast.bars.length" class="flex items-end gap-2">
           <div v-for="b in forecast.bars" :key="b.date" class="flex-1 flex flex-col items-center justify-end gap-1 min-w-0" :title="`${b.date} 到期 ${b.count} 题`">
-            <div class="w-full max-w-[40px] h-[48px] flex items-end bg-bg-accent border border-line rounded-[6px] p-[2px]">
-              <div class="w-full bg-primary rounded-[4px]" :style="{ height: b.pct + '%' }" :class="b.pct === 0 && 'min-h-0'" />
+            <div class="w-full max-w-[40px] h-[56px] flex items-end bg-bg-accent border border-line rounded-[6px] p-[2px]">
+              <div class="w-full bg-primary rounded-[4px]" :style="{ height: b.pct + '%' }" />
             </div>
             <div class="text-[11px] text-text-secondary tabular-nums">{{ b.count }}</div>
             <div class="text-[10px] text-muted-light whitespace-nowrap">{{ b.label }}</div>
