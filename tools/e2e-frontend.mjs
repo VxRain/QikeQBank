@@ -122,7 +122,7 @@ function makeRecorder() {
  * 少跑就是异常，分支导致的变化应该改基准数（说明确实是不同路径）。
  */
 const MODULE_BASELINE = {
-  list: 43,
+  list: 44,
   batch: 15,
   form: 27,
   practice: 27,
@@ -946,6 +946,37 @@ const MODULES = [
       ok('创建副本后直接进编辑页（改副本不用再找一次）', /^#\/edit\//.test(dupHash), dupHash)
       await goto(page, '#/banks')
       await goto(page, '#/library?bank=bank_default')
+
+      // FE-P1-12：1000 题数据集下滚动不得出现长任务（>50ms）。
+      // 这条不是精确基准，而是「不退化成同步重排」的守门断言：
+      // 实测（tools/perf-render.mjs）100 行/页滚动 20 屏 0 长任务；
+      // 一旦有人往行里塞同步重活（比如每行渲染富文本预览），这里会立刻红。
+      const scrollStat = await page.evaluate(async () => {
+        const longTasks = []
+        let obs = null
+        try {
+          obs = new PerformanceObserver((l) => {
+            for (const e of l.getEntries()) longTasks.push(e.duration)
+          })
+          obs.observe({ entryTypes: ['longtask'] })
+        } catch {
+          return { supported: false, count: 0, max: 0 }
+        }
+        const scroller = document.scrollingElement
+        const max = scroller.scrollHeight - window.innerHeight
+        for (let i = 0; i < 20; i++) {
+          scroller.scrollTop = (max * i) / 19
+          await new Promise((r) => requestAnimationFrame(r))
+        }
+        scroller.scrollTop = 0
+        await new Promise((r) => requestAnimationFrame(r))
+        obs.disconnect()
+        return { supported: true, count: longTasks.length, max: Math.round(Math.max(0, ...longTasks)) }
+      })
+      if (scrollStat.supported) {
+        ok('1000 题滚动无长任务（不出现同步重排）', scrollStat.count === 0,
+          `${scrollStat.count} 个长任务，最长 ${scrollStat.max}ms`)
+      }
 
       ok('1000 题下统计列只覆盖当前页（行数 == 页大小）',
         bigStats.length === pageRows && pageRows > 0 && pageRows <= 100,

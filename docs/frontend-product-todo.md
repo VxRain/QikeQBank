@@ -102,7 +102,7 @@
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [x] |
 | FE-P1-10 | 设置增强 | S–M | 部分 | [x] |
 | FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [x] |
-| FE-P1-12 | 前端渲染性能 | S | 否 | [ ] |
+| FE-P1-12 | 前端渲染性能 | S | 否 | [x] |
 
 ### 1.2 P2 索引
 
@@ -697,7 +697,7 @@
 - e2e `search` 59 → 68：关闭设置后焦点回到触发按钮、Toast 容器属性、设置弹层 Tab 连按 25 次不逃逸、快捷键弹层 Tab 15 次不逃逸且 Esc 可关。
 - 说明：InfoTip 是 tooltip 而非 dialog，保持 `@keydown.esc` 关闭、不加焦点圈（加圈会把悬停提示变成模态，反而更差）。
 
-### [ ] FE-P1-12 前端渲染性能
+### [x] FE-P1-12 前端渲染性能
 
 - `src/utils/render.js` 图片加 `loading="lazy"` / `decoding="async"`。
 - 长列表 `content-visibility: auto`；必要时虚拟滚动。
@@ -705,7 +705,40 @@
 - `QuestionPreview` 在大文档/多图场景下减少重复 asset 展开（可缓存解析结果）。
 - **验收**：500 题列表滚动无明显掉帧；含 20 张图的题目首次渲染不卡住输入。
 
----
+**已完成（2026-10-31）**
+
+**① 回归确认（不重复实现）——FE-ARCH-08 已落地的两项**
+- `render.js` 的行内图与图片块都带 `loading="lazy"` + `decoding="async"`。
+- `perf.css` 的 `.cv-auto`（`content-visibility:auto` + `contain-intrinsic-size:auto 120px`），作用于 `QuestionPreview` 根节点与材料题子题块（`sub-q cv-auto`）。**刻意不加在 `<tr>` 上**：WebView2 的表格布局要先测量所有行才能定列宽，给 `<tr>` 加 `content-visibility` 实测无收益且有 0 高度风险（依据写在 `perf.css` 注释里，守卫测试也校验这段注释还在）。
+
+**② 全局搜索只取 summary（回归确认）**
+- `stores/search.js` 的题目搜索固定 `summary: true`，首屏不拉选项/解析全文；展开某条时才 `questions_get(id)` 按需取全量。
+
+**③ QuestionPreview 渲染结果缓存（本轮新增）**
+- 新增按「渲染输入签名」记忆的 HTML 缓存，键为 `${assetCacheGen()}::${signature}`：
+  - **为什么要含 asset 代次**：渲染结果依赖 asset 解析后的 URL。`assets_gc` 后路径可能失效（`api/assets.js` 的 `clearAssetCache` 会 `cacheGen += 1`），只按签名记忆会一直吐出带死链的旧 HTML。代次进键 → 清理时自然全量失效，不用遍历删除。
+  - **容量上限 100 条，FIFO 淘汰**：大文档 HTML 不小，无界 Map 会随「预览过的题数」一直涨；这里没有命中率要求，FIFO 比 LRU 简单且不会把热点条目踢掉。
+- 新增 **asset 快路**：`hasAssetRefs(q) && !allAssetsResolved([q])` 才走「深拷贝 + expandQuestions」；asset 已全部解析（最常见情况）时直接用原对象，**零深拷贝、零 IPC**。
+- 顺带修掉本次改动自己引入的 TDZ（`memo` 声明写在了首次 `refresh()` 之后 → 整页 `Cannot access 'memo' before initialization` 白屏）。守卫测试里加了「`memo` 必须在首次 `refresh()` 之前」的顺序断言。
+
+**④ 500 题列表 / 20 图题目：可复现实测（`tools/perf-render.mjs`）**
+用与 e2e 同一套 mock IPC + 真实 Chromium 跑出数字（`node tools/perf-render.mjs`，`--json` 出机器可读结果）：
+
+| 场景 | 实测 |
+|---|---|
+| 单页 100 行（页大小上限），滚动 20 屏 | 319ms，**长任务 0 个** |
+| 合成 500 行单页（余量测量） | 首帧布局 107ms，**长任务 0 个** |
+| 20 张图的题目首次渲染 | 首帧 0.0ms / 中位 0.1ms / 最慢 0.2ms |
+| 10 个 mathBlock（KaTeX） | 8ms |
+
+**⑤ 虚拟滚动结论：不做（有依据）**
+- 当前列表是**服务端分页**的（每页 20/50/100，上限与后端 `limit.min(500)` 对齐），页面里同时在 DOM 的永远只有一页行数。
+- 实测 100 行/页滚动 20 屏 **0 长任务**；即使把单页拉到 500 行，首帧布局 107ms 且**仍无长任务**（低于主线程卡顿阈值 50ms/帧的累计影响）。
+- 因此引入虚拟滚动的成本（变高管理、行高测量、无障碍/焦点/Tab 顺序全要重做、与现有 `content-visibility` 叠加行为不确定）**远大于收益**。
+- 若未来出现「单页 > 500 行」或「行内渲染富文本预览」这类需求，先用 `node tools/perf-render.mjs --json` 复测：**出现长任务再上虚拟滚动**，不要凭感觉提前优化。
+- 该结论由 `tests/unit/render-perf-guard.test.js` 守住：文档里必须留「虚拟滚动 + 长任务」的字样与数字，且 `List.vue` / `package.json` 不得出现虚拟滚动实现/依赖。
+
+**守卫**：`tests/unit/render-perf-guard.test.js` 14 条（lazy/async、cv-auto 与「不放在 tr 上」的依据、搜索 summary、缓存键含 asset 代次、FIFO 上限、asset 快路、memo 声明顺序、签名只含影响 HTML 的字段、虚拟滚动结论与数字必须留在文档里）；e2e `list` 43 → 44（1000 题滚动无长任务的运行时守门断言）。
 
 ## 4. P2 任务（差异化 / 规模化）
 
@@ -1014,3 +1047,4 @@
 | v15 | 2026-10-31 | **FE-P1-09 完成**（复习预测 / 多选题库 / 按题型 / 稍后搁置）。新增 `review_forecast` 命令：逾期与今日互斥、学习中可与两者重叠（UI 写「其中」）、forecast 为明天起 7 天。三条复习命令均支持 `bank_ids`（`json_each` 展开，一个占位符不拼 SQL）。题型筛选只改提示不改拉题，页面标注「材料题按母题计，口径待 FE-P0-12」。稍后只动内存队列不动 due_at。单测 +26（433）、cargo +1（159）、e2e review 18→41，全量 333 |
 | v16 | 2026-10-31 | **FE-P1-10 完成**（设置增强）。`DEFAULTS` 成为默认值单一来源；恢复默认走 `confirmDialog` 只重置偏好；导出白名单制（密钥永不进包），导入逐字段归一且只覆盖文件里出现过的键；快捷键按钮复用同一个 `ShortcutsDialog`（App 里仅 1 实例）；新增 `sync_s3_pending` 报未同步变更数（无水印报 `known:false` 而非假 0，不数 delete_log）。**同类缺陷第三次出现后升级为仓库级守卫** `vue-boolean-attr.test.js`：字符串 ref 绑布尔属性即失败（本轮据此修掉设置页三按钮永久禁用）。单测 +24（457）、cargo +2（161）、e2e search 36→59，全量 356 |
 | v17 | 2026-10-31 | **FE-P1-11 完成**（可访问性与弹层一致性）。新增 `useDialogA11y` 统一 Esc/Tab 圈/初始焦点/关闭后归位 + 滚动锁定，补齐 5 个原本完全没有焦点圈的弹层；SearchPalette 的 Esc 逐级语义经 `escDisabled` 保留；Esc 用 capture 注册并让位给上层弹层。Toast 改 live region（`role=status` + `aria-live=polite`，刻意不用 assertive）+ `.sr-only` 类型前缀。守卫 20 条，含「接了 composable 就必须 import / 用了 computed 就必须 import」（本轮实际漏过导致白屏）。e2e search 59→68，全量 365 |
+| v18 | 2026-10-31 | **FE-P1-12 完成**（渲染性能收尾），**12 条 P1 全部完成**。回归确认 FE-ARCH-08 的 lazy/async 与 cv-auto、搜索 summary；新增 QuestionPreview 渲染结果缓存（键含 `assetCacheGen()`，GC 后整体失效；上限 100 FIFO）+ asset 快路（已解析时零深拷贝零 IPC）；修掉自己引入的 `memo` TDZ 白屏。新增 `tools/perf-render.mjs` 实测：100 行滚动 20 屏 319ms/长任务 0，500 行单页首帧 107ms/长任务 0，20 图首帧 0.0ms。**虚拟滚动结论：不做**（服务端分页 + 无长任务，成本大于收益；结论与数字写进文档并由守卫校验）。单测 +14（491），e2e list 43→44，全量 366 |
