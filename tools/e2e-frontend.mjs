@@ -20,6 +20,7 @@
  *   review   复习：间隔预览 / 撤销 / 最后一题
  *   exam     模考：答题卡 / 交卷 / 历史回看
  *   wrong    错题本：搜索 / 排序 / 统计
+ *   search   全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部
  *
  * 用法：
  *   pnpm test:e2e                      全量（提交前 / 发版前）
@@ -104,6 +105,7 @@ function makeRecorder() {
   const ok = (name, cond, detail = '') => {
     results.push({ name, pass: !!cond, detail })
     if (!cond) console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`)
+    if (process.env.E2E_TRACE) console.log(`  · ${name}${detail ? ` — ${detail}` : ''}`)
     return !!cond
   }
   return { results, ok }
@@ -127,7 +129,8 @@ const MODULE_BASELINE = {
   review: 18,
   exam: 20,
   wrong: 21,
-  banks: 16
+  banks: 16,
+  search: 36
 }
 
 /** 注入 mock IPC：覆盖本批功能涉及的全部命令 */
@@ -218,6 +221,11 @@ function mockScript() {
         case 'questions_list': {
           // 真实实现一遍筛选/排序/分页，E2E 才能验「参数真的生效」而不是只看请求发出去了
           window.__listArgs = args
+          // summary: true 的返回口径：后端只挑摘要字段，不含 options/analysis 富文本。
+          // 这里如实模拟 —— 否则「用摘要渲染题面」这类真实缺陷在 e2e 里永远走不到。
+          if (args?.summary) {
+            window.__summaryAsked = (window.__summaryAsked || 0) + 1
+          }
           let items = qs.slice()
           if (args?.query) items = items.filter((q) => String(q.plain_text).includes(args.query))
           if (args?.typeFilter) items = items.filter((q) => q.type === args.typeFilter)
@@ -235,7 +243,22 @@ function mockScript() {
           const total = items.length
           const limit = args?.limit ?? 50
           const offset = args?.offset ?? 0
-          return { success: true, data: { total, items: items.slice(offset, offset + limit) } }
+          const slice = items.slice(offset, offset + limit)
+          if (args?.summary) {
+            const SUMMARY_FIELDS = ['id', 'bank_id', 'type', 'difficulty', 'score', 'status', 'plain_text', 'created_at', 'updated_at', 'fsrs', 'wrong_count']
+            return {
+              success: true,
+              data: {
+                total,
+                items: slice.map((q) => {
+                  const out = {}
+                  for (const k of SUMMARY_FIELDS) if (q[k] !== undefined) out[k] = q[k]
+                  return out
+                })
+              }
+            }
+          }
+          return { success: true, data: { total, items: slice } }
         }
         case 'questions_remove': window.__removes = (window.__removes || 0) + 1; return { success: true, data: { id: args?.id } }
         case 'questions_batch_update': {
@@ -271,7 +294,12 @@ function mockScript() {
           }
           return { success: true, data: { removed, failed } }
         }
-        case 'questions_get': return { success: true, data: qs[0] }
+        case 'questions_get': {
+          // 按 id 返回全量 —— 搜索面板「展开」依赖它取回 summary 里没有的 stem/options
+          window.__getCalls = (window.__getCalls || []).concat(args?.id)
+          const full = qs.find((q) => q.id === args?.id) || qs[0]
+          return { success: true, data: full }
+        }
         case 'questions_create': window.__creates++; window.__lastCreate = args; return { success: true, data: { id: 'qNew' } }
         case 'questions_update': window.__lastUpdate = args; return { success: true, data: {} }
         case 'practice_pool': return { success: true, data: args && args.ids ? args.ids.map((id) => qs.find((q) => q.id === id)).filter(Boolean) : qs }
@@ -480,6 +508,80 @@ const flush = async (page, budget = 1000) => {
 }
 
 /**
+ * 等搜索面板真正出结果。
+ *
+ * 面板对题目请求做了 250ms 防抖（stores/search.js 的 SEARCH_DEBOUNCE），
+ * 单靠 flush 只能等到「当前 inflight 归零」——防抖定时器还没到期，此时断言等于在空结果上跑。
+ * 又不许写固定 sleep（仓库约定），所以等一个**可观察信号**：最近一次 questions_list
+ * 请求的 query 已经等于目标关键词，且 inflight 归零。
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} kw 期望的关键词；传 '' 表示等「空态」（无请求发生）
+ */
+const waitSearch = async (page, kw, timeout = 5000) => {
+  const started = Date.now()
+  try {
+    if (kw) {
+      await page.waitForFunction(
+        (k) => (window.__listArgs || {}).query === k && (window.__inflight || 0) === 0,
+        kw,
+        { timeout, polling: 25 }
+      )
+    } else {
+      await page.waitForFunction(() => (window.__inflight || 0) === 0, null, { timeout, polling: 25 })
+    }
+  } catch (e) {
+    const st = await page.evaluate(() => ({
+      args: window.__listArgs || null,
+      inflight: window.__inflight,
+      body: (document.querySelector('.sp-card')?.innerText || '(面板未打开)').slice(0, 200).replace(/\n/g, ' | ')
+    }))
+    throw new Error(
+      `等待搜索结果超时（${timeout}ms，已等 ${Date.now() - started}ms）：期望 query="${kw}"；` +
+      `实际 args=${JSON.stringify(st.args)} inflight=${st.inflight}；面板=${st.body}`
+    )
+  }
+  await flush(page)
+}
+
+/**
+ * 等某个元素真正从 DOM 消失。
+ *
+ * 为什么不能用 flush：面板/弹层的关闭走的是 `<Transition>`，leave 动画 160ms 期间
+ * 元素仍在 DOM 里（只是透明度在变）。flush 只等一帧，此时 `.sp-card` 还在，
+ * 「点空白关闭」「面板已关」这类断言会假失败 —— 而失败原因完全不在业务代码里。
+ * 这里等的是 DOM 事实（detached），既不是固定 sleep，也不依赖动画时长。
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} sel CSS 选择器
+ */
+const waitGone = async (page, sel, timeout = 3000) => {
+  try {
+    await page.waitForFunction(
+      (q) => document.querySelectorAll(q).length === 0,
+      sel,
+      { timeout, polling: 25 }
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 幂等地打开搜索面板。
+ *
+ * Ctrl+K 是**切换**语义（开着就关），所以测试里不能盲目按 —— 面板已经开着时再按一次
+ * 会把它关掉，随后的 `.sp-input` 直接 30s 超时。这个帮助函数先看 DOM 再决定按不按。
+ */
+const openPalette = async (page) => {
+  if (await page.locator('.sp-card').count()) return
+  await page.keyboard.press('Control+k')
+  await page.waitForFunction(() => !!document.querySelector('.sp-card'), null, { timeout: 5000 })
+  await flush(page)
+}
+
+/**
  * 路由跳转（事件驱动）。
  *
  * 关键：不能只等「IPC 静默」——App.vue 挂载时 loadBanks() 先发 IPC，
@@ -502,6 +604,8 @@ const ROUTE_TITLE = {
   '#/banks': '题库',
   '#/': '首页',
   '#/library?bank=bank_default': '试题列表',
+  // 跨库搜索结果页（全局搜索面板「查看全部」的落地页）：同一条 List 路由，只带 q 不带 bank
+  '#/library?q=第1题': '试题列表',
   '#/create?bank=bank_default': '新增试题',
   '#/practice': '刷题',
   '#/review': '复习',
@@ -662,10 +766,11 @@ const MODULES = [
       await page.locator('select').filter({ hasText: '全部难度' }).first().selectOption('1')
       await flush(page)
       await page.locator('input[placeholder="搜索题干..."]').fill('不存在的关键词')
-      await page.getByRole('button', { name: '搜索' }).first().click()
+      await page.getByRole('button', { name: '搜索', exact: true }).first().click()
       await flush(page)
       const emptyBody = await page.locator('body').innerText()
-      ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件/.test(emptyBody))
+      ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件/.test(emptyBody),
+        emptyBody.replace(/\n/g, ' | ').slice(0, 300))
       ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
       await page.getByRole('button', { name: '清除筛选' }).click()
       await flush(page)
@@ -1035,7 +1140,7 @@ const MODULES = [
 
       // 搜索：q3 → 只剩 1 条
       await page.locator('input[placeholder="搜索题干..."]').fill('q3')
-      await page.getByRole('button', { name: '搜索' }).first().click()
+      await page.getByRole('button', { name: '搜索', exact: true }).first().click()
       await flush(page)
       const wSearchArgs = await page.evaluate(() => window.__wrongArgs)
       ok('搜索参数下发', wSearchArgs?.query === 'q3', String(wSearchArgs?.query))
@@ -1044,7 +1149,7 @@ const MODULES = [
 
       // 搜不到：提示筛选空而不是「暂无错题」
       await page.locator('input[placeholder="搜索题干..."]').fill('zzz-none')
-      await page.getByRole('button', { name: '搜索' }).first().click()
+      await page.getByRole('button', { name: '搜索', exact: true }).first().click()
       await flush(page)
       const wEmpty = await page.locator('body').innerText()
       ok('筛不到时提示「没有符合当前筛选条件」', /没有符合当前筛选条件的错题/.test(wEmpty))
@@ -1076,6 +1181,150 @@ const MODULES = [
       ok('统计失败时仍能看到错题列表', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
       ok('统计失败时不显示错乱统计条', !/错题 6/.test(failStatsBody))
       await page.evaluate(() => { window.__wrongStatsFail = false })
+    }
+  },
+
+  {
+    id: 'search',
+    label: '全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部',
+    // 面板入口在 App.vue（顶栏按钮 + Ctrl/Cmd+K），结果跳转落在 List.vue 的跨库模式，
+    // 快捷键弹层也是同一批文件 —— 改这些任何一个都该跑这个模块。
+    owns: [
+      'src/components/search/',
+      'src/stores/search.js',
+      'src/components/ui/ShortcutsDialog.vue',
+      'src/components/settings/registry.js',
+      'src/components/settings/SettingsDialog.vue',
+      'src/router/index.js',
+      'src/App.vue'
+    ],
+    async run({ page, ok }) {
+      // ── FE-P0-08：全局搜索升级为命令面板 ──
+      await goto(page, '#/banks')
+
+      // 1) Ctrl+K 在任意页面唤起
+      await page.keyboard.press('Control+k')
+      await page.waitForFunction(() => !!document.querySelector('.sp-card'), null, { timeout: 5000 }).catch(() => {})
+      ok('Ctrl+K 唤起搜索面板', (await page.locator('.sp-card').count()) === 1)
+      // 再按一次应关闭（切换语义），随后用幂等帮助函数重新打开
+      await page.keyboard.press('Control+k')
+      ok('Ctrl+K 再按一次关闭面板', await waitGone(page, '.sp-card'))
+      await openPalette(page)
+
+      // 2) 输入即分组：题干关键词 → 试题分组 + 查看全部
+      await page.locator('.sp-input').fill('第1题')
+      await waitSearch(page, '第1题')
+      const firstArgs = await page.evaluate(() => window.__listArgs)
+      ok('搜索请求带 summary: true（只取摘要字段）', firstArgs?.summary === true, JSON.stringify(firstArgs?.summary))
+      ok('搜索请求 limit 为 8（不是整库）', firstArgs?.limit === 8, String(firstArgs?.limit))
+      const gBody1 = await page.locator('.sp-card').innerText()
+      ok('结果按「试题」分组显示', /试题/.test(gBody1), gBody1.replace(/\n/g, ' | ').slice(0, 160))
+      ok('命中关键词被高亮（mark）', (await page.locator('.sp-card mark').count()) >= 1)
+      ok('提供「查看全部」入口', /查看全部结果/.test(gBody1), gBody1.match(/查看全部[^\n]*/)?.[0] || '(未找到)')
+
+      // 3) 题库 / 页面 / 设置也能命中（分组由路由表 + 设置 registry 派生）
+      await page.locator('.sp-input').fill('第二')
+      await waitSearch(page, '第二')
+      ok('题库分组出现（搜到「第二题库」）', /第二题库/.test(await page.locator('.sp-card').innerText()))
+
+      await page.locator('.sp-input').fill('错题')
+      await waitSearch(page, '错题')
+      const gBody2 = await page.locator('.sp-card').innerText()
+      ok('页面分组出现（「错题」指向错题本页）', /页面/.test(gBody2) && /错题本/.test(gBody2), gBody2.replace(/\n/g, ' | ').slice(0, 200))
+
+      await page.locator('.sp-input').fill('复习')
+      await waitSearch(page, '复习')
+      const gBody3 = await page.locator('.sp-card').innerText()
+      ok('设置分组出现（复用 registry 的 matchItem）', /设置/.test(gBody3), gBody3.replace(/\n/g, ' | ').slice(0, 200))
+
+      // 4) 展开某题才 questions_get（首屏只有摘要，不整批拉全文）
+      await page.locator('.sp-input').fill('第1题')
+      await waitSearch(page, '第1题')
+      const getsBefore = await page.evaluate(() => (window.__getCalls || []).length)
+      await page.locator('.sp-expand').first().click()
+      await page.waitForFunction(() => (window.__inflight || 0) === 0, null, { timeout: 5000 }).catch(() => {})
+      await flush(page)
+      const getsAfter = await page.evaluate(() => (window.__getCalls || []).length)
+      ok('展开时按需 questions_get（首屏不拉全文）', getsAfter === getsBefore + 1, `${getsBefore} → ${getsAfter}`)
+      ok('展开后渲染题目预览', (await page.locator('.sp-preview').count()) === 1)
+      ok('展开行提供「去编辑」', (await page.locator('.sp-preview').getByRole('button', { name: '去编辑' }).count()) === 1)
+
+      // 5) ↑/↓ 选中 + Esc 逐级（先清空关键词，再关面板）
+      await page.locator('.sp-input').press('ArrowDown')
+      ok('↓ 移动后有选中项', (await page.locator('.sp-row.is-active').count()) >= 1)
+      await page.locator('.sp-input').press('Escape')
+      await flush(page)
+      const afterEsc1 = await page.evaluate(() => ({ open: !!document.querySelector('.sp-card'), val: document.querySelector('.sp-input')?.value }))
+      ok('Esc 第一级：清空关键词但面板仍开着', afterEsc1.open === true && !afterEsc1.val, JSON.stringify(afterEsc1))
+      ok('清空后回到空态（显示最近搜索或提示）', /最近搜索|输入关键词/.test(await page.locator('.sp-card').innerText()))
+
+      // 6) 点击面板外部关闭
+      await page.locator('.sp-input').fill('第2题')
+      await waitSearch(page, '第2题')
+      await page.mouse.click(8, 8)
+      ok('点击空白处关闭面板', await waitGone(page, '.sp-card'), `仍剩 ${await page.locator('.sp-card').count()} 个面板`)
+
+      // 7) Enter 打开选中结果并跳转（题目 → 编辑页）
+      await openPalette(page)
+      await page.locator('.sp-input').fill('第1题')
+      await waitSearch(page, '第1题')
+      await page.locator('.sp-input').press('Enter')
+      // 跳转是异步的：push 之后要等 router 完成导航（标题信号），否则读到的还是旧 hash
+      await page.waitForFunction(() => /^#\/edit\//.test(location.hash), null, { timeout: 5000 }).catch(() => {})
+      await flush(page)
+      const hashAfterEnter = await page.evaluate(() => location.hash)
+      ok('Enter 打开选中结果（跳到编辑页）', /^#\/edit\//.test(hashAfterEnter), hashAfterEnter)
+      ok('跳转后面板自动关闭', await waitGone(page, '.sp-card'))
+
+      // 8) 最近搜索：Enter 选定即记一条，落 localStorage 且上限 5
+      const recent = await page.evaluate(() => localStorage.getItem('qbank.searchRecent.v1'))
+      ok('最近搜索已持久化', !!recent && /第1题/.test(recent), String(recent).slice(0, 80))
+      const recentLen = await page.evaluate(() => JSON.parse(localStorage.getItem('qbank.searchRecent.v1') || '[]').length)
+      ok('最近搜索不超过 5 条', recentLen > 0 && recentLen <= 5, `实际 ${recentLen} 条`)
+      await openPalette(page)
+      await waitSearch(page, '')
+      ok('空态展示最近搜索', /最近搜索/.test(await page.locator('.sp-card').innerText()))
+      ok('最近搜索项可点复用', (await page.locator('.sp-card .i-lucide-history').count()) >= 1)
+
+      // 9)「查看全部」→ List.vue 跨库模式（无 bank，关键词来自 URL）
+      await openPalette(page)
+      await page.locator('.sp-input').fill('第1题')
+      await waitSearch(page, '第1题')
+      await page.locator('.sp-row-all').click()
+      await page.waitForFunction(() => /^#\/library\?q=/.test(location.hash), null, { timeout: 5000 }).catch(() => {})
+      await flush(page)
+      const crossHash = await page.evaluate(() => location.hash)
+      ok('「查看全部」跳到 /library?q=', /^#\/library\?q=/.test(crossHash), crossHash)
+      const crossArgs = await page.evaluate(() => window.__listArgs)
+      ok('跨库模式不下发 bankId', crossArgs?.bankId === undefined, JSON.stringify(crossArgs?.bankId))
+      const crossBody = await page.locator('body').innerText()
+      ok('跨库结果页标出「全部题库」', /全部题库/.test(crossBody), crossBody.match(/全部题库[^\n]*/)?.[0] || '')
+      ok('跨库结果有命中行', (await page.locator('tbody tr').count()) >= 1, `${await page.locator('tbody tr').count()} 行`)
+      ok('跨库结果标注来源题库', /默认题库/.test(crossBody))
+      ok('跨库模式隐藏「新增试题」', (await page.getByRole('button', { name: /新增试题/ }).count()) === 0)
+      ok('跨库模式保留排序与分页控件', /最新创建/.test(crossBody) && /条\/页/.test(crossBody))
+
+      // 10) `?` 打开快捷键帮助；输入框内不误触发
+      await page.keyboard.press('Escape')
+      await flush(page)
+      await page.keyboard.press('?')
+      await flush(page)
+      // <kbd> 是行内块，innerText 会把「Ctrl」「K」拆成两行 —— 先压平空白再断言
+      const scBody = (await page.locator('.sc-card').count())
+        ? (await page.locator('.sc-card').innerText()).replace(/\s+/g, ' ')
+        : ''
+      ok('`?` 打开快捷键帮助', (await page.locator('.sc-card').count()) === 1)
+      ok('快捷键表含全局 Ctrl K', /Ctrl K/.test(scBody), scBody.slice(0, 140))
+      ok('快捷键表含刷题/复习/模考分组', /刷题/.test(scBody) && /复习/.test(scBody) && /模考/.test(scBody))
+      await page.keyboard.press('Escape')
+      ok('Esc 关闭快捷键帮助', await waitGone(page, '.sc-card'))
+
+      // 输入框里打「?」不得弹出帮助（否则练习页填空打问号会被吞）
+      await goto(page, '#/library?bank=bank_default')
+      await page.locator('input[placeholder="搜索题干..."]').fill('?')
+      await page.keyboard.press('?')
+      await flush(page)
+      ok('输入框内按 `?` 不弹帮助', (await page.locator('.sc-card').count()) === 0)
     }
   },
 

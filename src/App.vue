@@ -17,45 +17,24 @@
           ><i :class="item.icon" aria-hidden="true" />{{ item.label }}</router-link>
         </nav>
         <div class="ml-auto flex items-center gap-2">
-          <div class="relative hidden sm:block">
-            <i class="i-lucide-search absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-light text-[14px] pointer-events-none" />
-            <input
-              v-model="searchText"
-              class="input pl-8 pr-7 py-1.5 text-[13px] w-[210px]"
-              type="text"
-              placeholder="全局搜索试题…"
-              autocomplete="off"
-              @input="onSearchInput"
-              @focus="onSearchFocus"
-              @keyup.esc="closeSearch"
-            />
-            <button
-              v-if="searchText"
-              type="button"
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-light hover:text-text"
-              title="清空"
-              @click="clearSearch"
-            ><i class="i-lucide-x text-[14px]" /></button>
-            <div v-if="searchOpen" class="absolute right-0 top-full mt-2 w-[min(400px,calc(100vw-48px))] max-h-[60vh] overflow-auto card !p-2 z-[1001] shadow-lg text-left">
-              <div v-if="searching" class="px-3 py-2.5 text-muted text-[13px]">搜索中…</div>
-              <div v-else-if="searchText.trim() && !searchResults.length" class="px-3 py-2.5 text-muted text-[13px]">没有匹配的试题</div>
-              <div v-for="q in searchResults" :key="q.id">
-                <button type="button" class="w-full text-left px-2.5 py-2 rounded-[8px] hover:bg-bg-accent flex flex-col gap-0.5" @click="toggleSearchPreview(q.id)">
-                  <span class="flex items-center gap-1.5 min-w-0">
-                    <span class="badge badge-type shrink-0">{{ typeLabel(q.type) }}</span>
-                    <span class="text-[13px] text-text truncate">{{ stemText(q) }}</span>
-                  </span>
-                  <span class="text-[12px] text-muted-light pl-1">{{ bankName(q.bank_id) }}</span>
-                </button>
-                <div v-if="expandedId === q.id" class="mx-1 mb-2 p-3 border border-line rounded-[8px] bg-bg">
-                  <QuestionPreview :question="q" />
-                  <div class="flex justify-end mt-2">
-                    <button type="button" class="btn btn-small" @click="goEdit(q.id)">去编辑</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <!--
+            顶栏搜索入口：不再自带下拉结果，点击直接唤起命令面板（Ctrl/Cmd+K）。
+            外观仍像输入框，但它是按钮 —— 两套搜索逻辑（自绘下拉 + 面板）正是 FE-P0-08 要消除的问题。
+          -->
+          <button
+            type="button"
+            class="sp-trigger hidden sm:flex"
+            title="全局搜索（Ctrl+K）"
+            aria-label="全局搜索"
+            @click="openSearch"
+          >
+            <i class="i-lucide-search sp-trigger-icon" aria-hidden="true" />
+            <span class="sp-trigger-text">搜索试题、题库、页面…</span>
+            <kbd class="sp-trigger-kbd">Ctrl K</kbd>
+          </button>
+          <button type="button" class="i-btn px-2.5 py-1.5 text-[13px]" title="快捷键帮助（?）" @click="showShortcuts = true">
+            <i class="i-lucide-keyboard text-[15px]" />
+          </button>
           <button type="button" class="i-btn px-2.5 py-1.5 text-[13px]" title="设置" @click="showSettings = true">
             <i class="i-lucide-settings-2 text-[15px]" />设置
           </button>
@@ -68,23 +47,25 @@
     <DialogHost />
     <ToastHost />
 
-    <SettingsDialog v-model="showSettings" />
+    <SearchPalette v-model="searchOpen" @open-settings="onOpenSettingsFromSearch" />
+    <ShortcutsDialog v-model="showShortcuts" @open-search="openSearch" />
+
+    <SettingsDialog ref="settingsRef" v-model="showSettings" />
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { loadBanks, bankStore } from '@/stores/bank.js'
 import { initAutoSync } from '@/stores/autoSync.js'
-import { toast } from '@/stores/ui.js'
-import { list as listQuestions } from '@/api/questions.js'
+import { toast, ui } from '@/stores/ui.js'
 import { stats as fetchStats } from '@/api/practice.js'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import SettingsDialog from '@/components/settings/SettingsDialog.vue'
-import QuestionPreview from '@/components/QuestionPreview.vue'
-import { typeLabel } from '@/constants/questions.js'
+import SearchPalette from '@/components/search/SearchPalette.vue'
+import ShortcutsDialog from '@/components/ui/ShortcutsDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -92,77 +73,62 @@ const router = useRouter()
 const REPO = 'VxRain/QikeQBank'
 const RELEASES_URL = `https://github.com/${REPO}/releases`
 
-// ── 全局搜索：跨库搜题干，展开行内预览 + 去编辑 ──
-const searchText = ref('')
-const searchResults = ref([])
-const searching = ref(false)
+// ── 全局搜索（FE-P0-08）──
+// 旧实现是顶栏里的一个自绘下拉：只搜题目、8 条上限、无键盘选中、点空白不关、
+// 且请求没带 summary（整批拉回富文本题干 + 选项 + 解析）。
+// 现在统一收敛为 SearchPalette 命令面板：顶栏按钮与 Ctrl/Cmd+K 打开同一面板，
+// 面板内的分组/键盘/高亮/最近搜索规则全在 stores/search.js（纯函数，可单测）。
 const searchOpen = ref(false)
-const expandedId = ref(null)
-let searchTimer = null
-
-function stemText(q) {
-  const s = String(q?.plain_text || '').replace(/\s+/g, ' ').trim()
-  return s ? (s.length > 60 ? s.slice(0, 60) + '…' : s) : '(空题干)'
-}
-function bankName(bid) {
-  return bankStore.banks.find((b) => b.id === bid)?.name || '未知题库'
-}
-async function runSearch() {
-  const kw = searchText.value.trim()
-  if (!kw) {
-    searchResults.value = []
-    searching.value = false
-    return
-  }
-  searching.value = true
-  try {
-    const res = await listQuestions({ query: kw, limit: 8 })
-    searchResults.value = res?.items || []
-  } catch (e) {
-    console.error(e)
-    searchResults.value = []
-  } finally {
-    searching.value = false
-  }
-}
-function onSearchInput() {
-  if (!searchText.value.trim()) {
-    clearSearch()
-    return
-  }
-  searchOpen.value = true
-  expandedId.value = null
-  clearTimeout(searchTimer)
-  searchTimer = setTimeout(runSearch, 250)
-}
-function onSearchFocus() {
-  if (searchText.value.trim()) {
-    searchOpen.value = true
-    runSearch()
-  }
-}
-function toggleSearchPreview(id) {
-  expandedId.value = expandedId.value === id ? null : id
-}
-function closeSearch() {
-  searchOpen.value = false
-  expandedId.value = null
-}
-function clearSearch() {
-  clearTimeout(searchTimer)
-  searchText.value = ''
-  searchResults.value = []
-  searching.value = false
-  expandedId.value = null
-  searchOpen.value = false
-}
-function goEdit(id) {
-  closeSearch()
-  router.push(`/edit/${id}`)
-}
-watch(() => route.fullPath, closeSearch)
-
 const showSettings = ref(false)
+const showShortcuts = ref(false)
+const settingsRef = ref(null)
+
+function openSearch() {
+  // 打开搜索前先收起设置/快捷键弹层，避免三层叠加（z-index 里也压不住焦点）
+  showSettings.value = false
+  showShortcuts.value = false
+  searchOpen.value = true
+}
+
+/** 面板里点「设置」类结果：打开设置并把关键词喂给它的搜索框 */
+function onOpenSettingsFromSearch(payload) {
+  showSettings.value = true
+  settingsRef.value?.focusItem?.(payload?.sectionId, payload?.query)
+}
+
+/**
+ * 全局键位（挂在 window 上，整站生效）：
+ * - Ctrl/Cmd+K 唤起搜索（任何页面、任何焦点位置，除输入框里的组合键仍照常交给编辑器）
+ * - `?` 打开快捷键帮助 —— 只在**没有焦点在输入框 / 没有弹层**时生效，
+ *   否则用户打问号会被吞掉（练习页的填空、录题的题干编辑器都会用到「?」）。
+ * - Esc 关闭快捷键帮助（搜索面板的 Esc 由面板自己管，它还要处理「先清空」一级）
+ */
+function isTypingTarget(t) {
+  if (!t || !t.closest) return false
+  return !!t.closest('input, textarea, select, [contenteditable], .tiptap, .ProseMirror')
+}
+
+function onGlobalKeydown(e) {
+  if (e.isComposing || e.keyCode === 229) return
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && !e.altKey && (e.key || '').toLowerCase() === 'k') {
+    // 即使焦点在编辑器里也拦截：Ctrl+K 不是任何编辑器的既有快捷键
+    e.preventDefault()
+    if (searchOpen.value) searchOpen.value = false
+    else openSearch()
+    return
+  }
+  if (e.key === 'Escape' && showShortcuts.value) {
+    e.preventDefault()
+    showShortcuts.value = false
+    return
+  }
+  if (e.key !== '?' || mod || e.altKey) return
+  if (isTypingTarget(e.target)) return
+  if (searchOpen.value || showSettings.value || ui.dialog) return
+  e.preventDefault()
+  showShortcuts.value = true
+}
 
 // 顶栏导航由路由表派生：有 meta.nav 的路由按 order 升序渲染，新增页面只改 router/index.js。
 const navItems = router.options.routes
@@ -194,10 +160,14 @@ function maybeNotifyFsrsUpgrade() {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown)
   loadBanks()
   maybeNotifyFsrsUpgrade()
   // 自动同步：按设置开关排期（首次延迟 60 秒，避开启动高峰）
   initAutoSync()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
 
@@ -286,6 +256,42 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
   color: var(--primary);
   border-bottom-color: var(--primary);
   background: transparent;
+}
+
+/* 顶栏搜索入口：外观是输入框，实际是打开命令面板的按钮（FE-P0-08） */
+.sp-trigger {
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 8px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.sp-trigger:hover {
+  border-color: var(--line-strong);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
+}
+.sp-trigger-icon { font-size: 14px; color: var(--muted-light); }
+.sp-trigger:hover .sp-trigger-icon { color: var(--primary); }
+.sp-trigger-text { min-width: 0; }
+.sp-trigger-kbd {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted-light);
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 /* 设置弹窗入场动画已随组件迁入 components/settings/SettingsDialog.vue（scoped） */

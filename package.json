@@ -21,6 +21,7 @@
     "test:e2e:review": "node tools/e2e-frontend.mjs review",
     "test:e2e:exam": "node tools/e2e-frontend.mjs exam",
     "test:e2e:wrong": "node tools/e2e-frontend.mjs wrong",
+    "test:e2e:search": "node tools/e2e-frontend.mjs search",
     "test:e2e:changed": "node tools/e2e-frontend.mjs --changed"
   },
   "dependencies": {

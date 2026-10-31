@@ -236,6 +236,31 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   if (props.modelValue) document.body.style.overflow = prevOverflow
 })
+
+/**
+ * 外部入口（全局搜索面板命中设置项时）把设置定位到具体分类 + 预填关键词。
+ *
+ * 暴露函数而不是 prop：面板只会在「点击结果」这一瞬间需要它，
+ * 做成响应式 prop 会让 SettingsDialog 多一个「要不要清空」的状态分支。
+ * 前提是弹层已打开（App.vue 先置 showSettings=true 再调用），这里再等一拍
+ * 确保 watch 已经跑过 query 重置，否则刚写入的关键词会被 watch 清掉。
+ */
+function focusItem(sectionId, kw) {
+  nextTick(() => {
+    if (sectionId) {
+      const s = sections.find((x) => x.id === sectionId)
+      if (s) {
+        activeId.value = sectionId
+        lastSectionId = sectionId
+      }
+    }
+    if (typeof kw === 'string' && kw.trim()) query.value = kw.trim()
+    if (paneEl.value) paneEl.value.scrollTop = 0
+    nextTick(() => searchEl.value?.focus())
+  })
+}
+
+defineExpose({ focusItem })
 </script>
 
 <style scoped>

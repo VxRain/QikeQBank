@@ -7,12 +7,13 @@
         </h2>
         <div class="flex gap-2 items-center">
           <span v-if="bankName" class="badge badge-cur">{{ bankName }}</span>
+          <span v-else-if="isCross" class="badge badge-cur">全部题库</span>
           <span class="badge">{{ filteredCount }} 题</span>
           <router-link to="/banks" class="btn btn-small"><i class="i-lucide-arrow-left" />题库管理</router-link>
         </div>
       </div>
 
-      <div v-if="!bankId" class="text-center py-8 text-muted flex flex-col items-center gap-3">
+      <div v-if="!bankId && !isCross" class="text-center py-8 text-muted flex flex-col items-center gap-3">
         <i class="i-lucide-folder-open text-[28px]" />
         <div class="text-[14px]">请先到题库管理选择一个题库</div>
         <router-link to="/banks" class="btn btn-primary btn-small"><i class="i-lucide-library" />去题库管理</router-link>
@@ -51,18 +52,25 @@
         <button class="btn" @click="reset">
           <i class="i-lucide-rotate-ccw" />重置
         </button>
-        <button
-          class="btn"
-          :title="'导入试题到「' + bankName + '」'"
-          @click="showImport = true"
-        ><i class="i-lucide-file-up" />导入试题</button>
-        <button
-          class="btn btn-primary ml-auto"
-          :title="'新增到「' + bankName + '」'"
-          @click="onAdd"
-        ><i class="i-lucide-plus" />新增试题</button>
+        <!-- 跨库模式（/library?q=，来自全局搜索「查看全部」）：导入/新增都需要题库归属，不在这里提供 -->
+        <template v-if="bankId">
+          <button
+            class="btn"
+            :title="'导入试题到「' + bankName + '」'"
+            @click="showImport = true"
+          ><i class="i-lucide-file-up" />导入试题</button>
+          <button
+            class="btn btn-primary ml-auto"
+            :title="'新增到「' + bankName + '」'"
+            @click="onAdd"
+          ><i class="i-lucide-plus" />新增试题</button>
+        </template>
+        <span v-else class="ml-auto text-[12.5px] text-muted flex items-center gap-1.5">
+          <i class="i-lucide-search" />跨题库搜索结果 · 要编辑或新增请先进入具体题库
+        </span>
       </div>
       <ImportFileBox
+        v-if="bankId"
         :open="showImport"
         :bank-id="bankId"
         :bank-name="bankName"
@@ -123,6 +131,13 @@
                   <div>没有符合当前筛选条件的试题</div>
                   <button type="button" class="btn btn-small" @click="reset"><i class="i-lucide-rotate-ccw" />清除筛选</button>
                 </div>
+                <div v-else-if="isCross" class="flex flex-col items-center gap-3 py-2">
+                  <i class="i-lucide-search-x text-[24px]" />
+                  <div>全部题库里没有匹配「{{ crossQuery }}」的试题</div>
+                  <div class="flex gap-2">
+                    <button type="button" class="btn btn-small" @click="router.push('/banks')"><i class="i-lucide-library" />去题库管理</button>
+                  </div>
+                </div>
                 <div v-else class="flex flex-col items-center gap-3 py-2">
                   <i class="i-lucide-folder-open text-[24px]" />
                   <div>这个题库还没有试题</div>
@@ -139,7 +154,11 @@
                 <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, $event.target.checked)" />
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
-              <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
+              <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">
+                {{ truncate(getPlainText(q), 80) }}
+                <!-- 跨库模式必须标来源题库，否则同一批结果无从分辨归属 -->
+                <span v-if="isCross" class="text-[11.5px] text-muted-light ml-1.5">· {{ bankLabel(q.bank_id) }}</span>
+              </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="difficulty-dots" :title="'难度 ' + (q.difficulty ?? 2) + ' / 5'"><i v-for="n in 5" :key="n" :class="['dot', n <= (q.difficulty ?? 2) && 'on']" /></span></td>
               <td class="px-3.5 py-3 border-b border-line">{{ displayScore(q) }}</td>
               <td class="px-3.5 py-3 border-b border-line">
@@ -229,6 +248,24 @@ const isFiltered = computed(
 // 本页题库上下文：只从 ?bank= 来（从题库页进入），无选择器；直访无 bank 则提示去挑库
 const bankId = ref('')
 const bankName = computed(() => bankStore.banks.find((x) => x.id === bankId.value)?.name || '')
+
+/**
+ * 跨库模式（/library?q=xxx）—— 全局搜索面板「查看全部」的落地页。
+ *
+ * 为什么不新增 /search 路由：跨库搜题所需的一切（排序白名单、难度/状态筛选、
+ * 每页条数、页码收敛）List.vue 都已经实现；再建一个结果页就是把同一套逻辑抄第二份。
+ * 这里只做「无 bank + 有关键词」一个分支：
+ * - 请求不带 bankId → 后端本来就把 bankId 当可选参数（跨库查询），零后端改动
+ * - 筛选条件不落 localStorage（loadFilter/saveFilter 无 bankId 时直接返回默认）
+ * - 导入/新增入口隐藏（两者都需要题库归属）
+ */
+const crossQuery = ref('')
+const isCross = computed(() => !bankId.value && crossQuery.value.trim() !== '')
+
+/** 跨库结果行上的题库名（题库列表还没加载完时给个中性占位，不显示裸 id） */
+function bankLabel(id) {
+  return bankStore.banks.find((b) => b.id === id)?.name || '未知题库'
+}
 
 async function onImportDone() {
   showImport.value = false
@@ -462,7 +499,8 @@ function getPlainText(q) {
 }
 
 async function fetchList() {
-  if (!bankId.value) return
+  // 既没有题库上下文、也不是跨库搜索 → 页面此时显示「先选题库」，不发请求
+  if (!bankId.value && !isCross.value) return
   loading.value = true
   error.value = ''
   try {
@@ -471,7 +509,8 @@ async function fetchList() {
     if (type.value) params.type = type.value
     if (difficulty.value) params.difficulty = difficulty.value
     if (status.value) params.status = status.value
-    params.bankId = bankId.value
+    // 跨库模式刻意不下发 bankId：后端把它当可选参数，缺省即全库查询
+    if (bankId.value) params.bankId = bankId.value
     params.limit = pageSize.value
     params.offset = (page.value - 1) * pageSize.value
     params.summary = true
@@ -505,7 +544,7 @@ async function fetchList() {
   }
 }
 
-/** 把当前筛选条件写进 localStorage（按 页:题库 分键） */
+/** 把当前筛选条件写进 localStorage（按 页:题库 分键）；跨库模式不落盘，避免与具体题库互相污染 */
 function persistFilter() {
   if (!bankId.value) return
   saveFilter('list', bankId.value, {
@@ -548,7 +587,8 @@ function onAdd() {
 
 function reset() {
   const def = emptyFilter()
-  query.value = def.query
+  // 跨库模式的关键词来自 URL（搜索面板「查看全部」），重置筛选不该把它清掉
+  query.value = isCross.value ? crossQuery.value : def.query
   type.value = def.type
   difficulty.value = def.difficulty
   status.value = def.status
@@ -576,6 +616,29 @@ async function onDelete(q) {
   }
 }
 
+/**
+ * 从 URL 同步页面上下文（?bank= 题库归属 / ?q= 跨库关键词）。
+ *
+ * 为什么是一个函数而不是「onMounted 里读一次」：
+ * 全局搜索面板会把用户从 /library?q=a 直接带到 /library?q=b，甚至 /library?q= → /library?bank=x，
+ * 这些跳转**命中的是同一条路由**，组件不会重新挂载 —— 只在 onMounted 里读 query 会得到一个
+ * 永远不更新的页面（表现为换了关键词列表不变、或切回带 bank 的地址却仍提示「先选题库」）。
+ *
+ * @returns {{bankChanged:boolean, qChanged:boolean, nextBank:string, nextQ:string}|null}
+ *   无变化返回 null，调用方据此跳过重复请求。
+ */
+function readRouteContext() {
+  const qb = route.query.bank
+  const nextBank = typeof qb === 'string' && bankExists(qb) ? qb : ''
+  const nextQ = typeof route.query.q === 'string' ? route.query.q : ''
+  if (nextBank === bankId.value && nextQ === crossQuery.value) return null
+  const bankChanged = nextBank !== bankId.value
+  const qChanged = nextQ !== crossQuery.value
+  bankId.value = nextBank
+  crossQuery.value = nextQ
+  return { bankChanged, qChanged, nextBank, nextQ }
+}
+
 onMounted(async () => {
   if (!bankStore.loaded) {
     try {
@@ -584,12 +647,11 @@ onMounted(async () => {
       console.error(e)
     }
   }
-  // 题库上下文只认 ?bank=（须仍存在），直访无 bank 则提示去题库页挑库
-  const qb = route.query.bank
-  bankId.value = typeof qb === 'string' && bankExists(qb) ? qb : ''
-  // 刷新/返回后恢复上次筛选（按 页:题库 分键，不同题库互不影响）
+  // 题库上下文只认 ?bank=（须仍存在），跨库关键词只认 ?q=
+  readRouteContext()
+  // 刷新/返回后恢复上次筛选（按 页:题库 分键，不同题库互不影响）；跨库模式用 URL 关键词
   const saved = normalizeFilter(loadFilter('list', bankId.value))
-  query.value = saved.query
+  query.value = isCross.value ? crossQuery.value : saved.query
   type.value = saved.type
   difficulty.value = saved.difficulty
   status.value = saved.status
@@ -598,10 +660,41 @@ onMounted(async () => {
   await fetchList()
 })
 
-// optional: auto search debounce could be added, but keep explicit search for now
-watch(type, () => {
-  // already triggered by @change, keep for programmatic changes
-})
+/**
+ * 同一路由内的上下文变化（?bank= / ?q=）：
+ * - 换题库 → 恢复该题库自己的筛选记忆（与首次进入行为一致）
+ * - 换关键词（跨库模式）→ 直接用新关键词重查，不继承上一批筛选条件
+ */
+watch(
+  () => [route.query.bank, route.query.q],
+  ([, q]) => {
+    const next = readRouteContext()
+    if (!next) return
+    if (next.bankChanged) {
+      const saved = normalizeFilter(loadFilter('list', bankId.value))
+      query.value = saved.query
+      type.value = saved.type
+      difficulty.value = saved.difficulty
+      status.value = saved.status
+      sort.value = saved.sort
+      pageSize.value = saved.pageSize
+    } else if (next.qChanged) {
+      query.value = next.nextQ
+      type.value = ''
+      difficulty.value = ''
+      status.value = ''
+    }
+    page.value = 1
+    if (!bankId.value && !crossQuery.value.trim()) {
+      // 两个上下文都没了 → 回到「先选题库」空态，不发请求
+      questions.value = []
+      total.value = 0
+      clearSelection()
+      return
+    }
+    fetchList()
+  }
+)
 </script>
 
 <style scoped>

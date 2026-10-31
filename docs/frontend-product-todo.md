@@ -34,7 +34,7 @@
 - [ ] `pnpm lint`（clippy `-D warnings`）0 警告
 - [ ] `node tools/smoke-test.mjs` 通过
 - [ ] 涉及页面行为：跑对应模块的 `pnpm test:e2e:<模块>`（**默认动作**）；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e` 只在提交前 / 发版前 / 真跨模块改动时跑。浏览器结论必须由脚本证伪，不接受口头「实测通过」
-- 模块名（三处文档必须逐字一致）：`list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本)
+- 模块名（三处文档必须逐字一致）：`list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本) / `search`(全局搜索)
 - [ ] 涉及命令签名 / 数据结构：同步更新 `PLAN.md §4/§7` ↔ Rust command ↔ `src/api/*.js`
 - [ ] 涉及表结构：同步更新 `PLAN.md §3` ↔ `src-tauri/src/db/schema.rs` ↔ `tools/` 两脚本（逐字符一致）
 - [ ] 新增交互不出现 `alert/confirm/prompt`，统一走 `src/stores/ui.js`
@@ -72,7 +72,7 @@
 | FE-P0-05 | 刷题/复习配置记忆 + 可用题量预览 | P0 | S | 否 | 1 | [x] |
 | FE-P0-06 | 练习导航 + 复习间隔预览/撤销 | P0 | M | 部分 | 1–2 | [x] |
 | FE-P0-07 | 模考答题卡 + 历史回看 | P0 | M–L | 是 | 2 | [x] |
-| FE-P0-08 | 全局搜索升级为命令面板 | P0 | M | 否 | 1 | [ ] |
+| FE-P0-08 | 全局搜索升级为命令面板 | P0 | M | 否 | 1 | [x] |
 | FE-P0-09 | 列表排序/筛选/页码收敛 | P0 | M | 是 | 1–2 | [x] |
 | FE-P0-10 | 批量操作接口 + 批量编辑 | P0 | M | 是 | 2 | [x] |
 | FE-P0-11 | 错题本搜索/排序/统计 | P0 | M | 是 | 2 | [x] |
@@ -310,7 +310,7 @@
 
 ---
 
-### [ ] FE-P0-08 全局搜索升级为命令面板
+### [x] FE-P0-08 全局搜索升级为命令面板
 
 **问题**
 - 结果固定 8 条，没有「查看全部结果」、关键词高亮、最近搜索、键盘上下选择。
@@ -335,6 +335,44 @@
 **依赖 / 备注**
 - 与 FE-ARCH-04 路由 meta 配合，页面结果可从路由表生成。
 - 设置项搜索复用现有 registry，避免第三套搜索逻辑。
+
+**已完成（落地说明）**
+
+- **文件**：`src/stores/search.js`（分组构造 / 键盘规则 / 高亮 / 最近搜索，全部纯函数）、
+  `src/components/search/SearchPalette.vue`（遮罩 + 居中卡片 + 入场动画）、
+  `src/components/ui/ShortcutsDialog.vue`（`?` 打开）、`src/App.vue`（Ctrl/Cmd+K 全局键位 + 顶栏入口，
+  **旧下拉搜索整段删除**）、`src/views/List.vue`（跨库模式）、
+  `src/components/settings/SettingsDialog.vue`（新增 `focusItem`，供搜索命中设置项时定位）。
+- **四组结果**：题目（`summary: true` 摘要）/ 题库（`bankStore.banks`）/ 页面（由 `router/index.js`
+  路由表 + `PAGE_ALIASES` 别称派生，跳过 `:param` 路由）/ 设置（复用 `registry.js` 的
+  `matchItem` + `isItemVisible`）。**没有第三套匹配逻辑**。
+- **取数**：首屏只发一次 `questions_list({query, limit: 8, summary: true})`；点开某条才
+  `questions_get(id)` 取全文并按 id 缓存，同一题不重复 IPC。
+- **键盘**：↑/↓ 环绕移动（`nextActive`）、Enter 打开、→ 展开/收起题面预览、Tab 留在面板内；
+  Esc 逐级（`escStep`：有关键词先清空，再按一次才关闭）；点击遮罩/空白关闭。
+- **最近搜索**：`localStorage` 键 `qbank.searchRecent.v1`，去重（大小写不敏感）+ 置顶 + 上限 5；
+  只在「用户选定」时记录（Enter / 展开 / 点击结果），不在每个字符上记，避免噪声。
+- **「查看全部」**：跳 `/library?q=<kw>`，**不新增路由**。`List.vue` 新增「无 bank + 有 q」分支：
+  请求不带 `bankId`（后端本就把它当可选参数，**零后端改动**），排序/类型/难度/状态/每页条数
+  全部沿用，页码走 `clampPage` 收敛；导出/新增入口在该分支隐藏（都需要题库归属）；
+  行尾标注来源题库。同路由内 `?bank=`/`?q=` 变化由 `watch(route.query)` 重查（否则换词不刷新）。
+- **快捷键帮助**：分「全局 / 搜索面板 / 刷题 / 复习 / 模考 / 录题」六组；输入框聚焦或弹层打开时
+  `?` 不劫持（练习页填空、录题编辑器要能打问号）。
+- **守卫测试**：
+  - `tests/unit/search-store.test.js`（34 项）：分组构造、首屏 `summary: true`、展开才 `get(id)`、
+    ↑/↓ 边界环绕、最近 5 条去重与上限、Esc 两级、高亮切分；另含 `PAGE_ALIASES` 的键必须存在于
+    `router/index.js` 的跨文件守卫。
+  - `tests/unit/shortcuts.test.js`（17 项）：快捷键表与 Practice/Review/Exam/QuestionRunner/Form/App
+    的实际 `keydown` 分支逐条互校 —— 改了绑定忘了改表，单测立刻失败。
+  - e2e 新增 `search` 模块（36 项，~3.9s）：Ctrl+K 唤起/再按关闭、`summary`+`limit:8` 下发、
+    四组结果、高亮、按需 `questions_get`、↑/↓ 与 Esc 两级、点空白关闭、最近搜索落盘、
+    Enter 跳转、跨库「查看全部」、`?` 弹层与输入框内不误触发。
+- **验证**：`pnpm build` ✓；`pnpm lint`（clippy `-D warnings`）0 警告 ✓；
+  `cargo test` 全绿 ✓；`node tools/smoke-test.mjs` ✓；`pnpm test:e2e:search` 36/36 ✓；
+  `pnpm test:e2e:list` 21/21 ✓；全量 `pnpm test:e2e` 164/164（9 模块，13.9s）✓；
+  `pnpm test:unit` 229 项全绿 ✓。
+- **备注**：`/` 唤起按文档标注为「可选」，本期**未做**（`/` 在多个输入框与练习页里是正常字符，
+  单独占用增益不足）；设置页的快捷键入口留给 FE-P1-10（与 `ShortcutsDialog.vue` 共用即可）。
 
 ---
 
