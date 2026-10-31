@@ -6,6 +6,8 @@
  * 这些分支写在组件里只能靠手测。全部收成纯函数，由 tests/unit/banks-view.test.js 锁住。
  */
 
+import { moveItem } from '../utils/arrayMove.js'
+
 /** 排序方式（顺序即下拉选项顺序）；custom = 用户拖拽出来的顺序 */
 export const BANK_SORT_OPTIONS = Object.freeze([
   { value: 'custom', label: '自定义顺序' },
@@ -104,16 +106,12 @@ export function canDragBanks({ sort = DEFAULT_BANK_SORT, query = '' } = {}) {
 
 /**
  * 拖拽落位：把 from 位置的元素移到 to 位置。
+ * 实现委托给 utils/arrayMove.js —— 材料子题排序用的是同一套语义，
+ * 各写一份必然漂移（一边允许原地不动、另一边抛异常这类分歧手测发现不了）。
  * @returns {string[]|null} 新 id 顺序；from/to 非法返回 null（调用方据此跳过持久化）
  */
 export function moveId(ids, from, to) {
-  const list = Array.isArray(ids) ? ids.slice() : []
-  if (!Number.isInteger(from) || !Number.isInteger(to)) return null
-  if (from < 0 || to < 0 || from >= list.length || to >= list.length) return null
-  if (from === to) return null
-  const [item] = list.splice(from, 1)
-  list.splice(to, 0, item)
-  return list
+  return moveItem(ids, from, to)
 }
 
 /** 题库卡快捷入口：目标页 + ?bank= 参数（统一在这里拼，避免四份手写字符串） */

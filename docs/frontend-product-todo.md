@@ -95,7 +95,7 @@
 | FE-P1-02 | 题库页快捷入口 / 搜索 / 排序 / 复制 | M | 部分 | [x] |
 | FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [x] |
 | FE-P1-04 | 单题统计 | S–M | 是 | [x] |
-| FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [ ] |
+| FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [x] |
 | FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [ ] |
 | FE-P1-07 | 模考标准卷 / 暂停 / 成绩趋势 | M–L | 部分 | [ ] |
 | FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [ ] |
@@ -575,12 +575,21 @@
 - 守卫：cargo +1（157）；e2e `list` 32 → 37。
 - 顺带修掉 e2e 基建坑：`element.click().catch(()=>{})` 在元素不存在时会等满默认 30s（把 list 从 1.4s 拖到 31.7s），改为「先判断再点」，模块回到 1.7s。
 
-### [ ] FE-P1-05 材料子题排序 / 改题型 / 复制题目
+### [x] FE-P1-05 材料子题排序 / 改题型 / 复制题目
 
 - 子题支持上移/下移/拖拽排序。
 - 接上 `onChildTypeChange`（目前是死代码），子题可改题型并复用 `preserveTypeChange`。
 - 单题支持「另存为副本」；材料题支持「复制子题」。
 - **文件**：`src/components/QuestionEditor.vue`、`src/views/Form.vue`。
+
+**已完成（2026-10-31）**
+- **子题排序**：上移 / 下移（首末位**禁用而非隐藏**，按钮位置不跳动）+ 拖拽手柄（`dragstart`/`drop`，含 Firefox 必需的 `setData`）。三条路径共用 `utils/arrayMove.js::moveItem`——**与题库拖拽是同一实现**，单测直接对照 `moveId` 与 `moveItem` 的输出，杜绝两边语义漂移。
+- **子题改题型**：接通原本是死代码的 `onChildTypeChange`，每个子题新增题型下拉；设置 `keepContentOnTypeChange` 开启时复用 `preserveTypeChange`（不丢已填选项/答案/解析），关闭时退化为 `preservedStem` 只保留题干。
+- **子题复制**：副本插在原题之后，全部子题 id 重编。
+- **另存为副本（单题）**：列表行新增「副本」按钮 → 拉全量 → `asNewCopy`（清 `id` / `plain_text` / `created_at` / `updated_at`，材料题子题 id 一并清掉交给后端重编）→ `questions_create` → **直接跳 `/edit/<新 id>`**（副本的价值就是「在它基础上改」，多跳一步没意义）。
+- **关键不变量（本轮真正的风险点）**：后端 `ensure_child_ids` 生成 `<父 id>_c<n>`，而 `exam_detail` / `practice` 的 `child_id` 引用靠它。复制时不重编 → 同一材料出现两个相同 `child_id`，历史回看张冠李戴；排序不重编 → 界面「第 1 问」挂着 `c3` 的记录。两种缺陷在界面上都看不出来，因此 `tests/unit/material-children.test.js`（26 条）逐条锁：id 唯一、编号连续、深拷贝隔离、纯函数不改入参，另加 5 条静态守卫校验编辑器接线（含「`onChildTypeChange` 必须被控件调用」）。
+- 守卫：单测 +26（334）；e2e `list` 37→43、`form` 14→27（子题排序/改题型/复制、载荷 id 连续唯一、列表副本入口与载荷形态）。
+- 已知限制：子题拖拽用原生 HTML5 DnD，未做触摸屏长按拖拽；触屏用户可用上移/下移按钮（功能等价）。
 
 ### [ ] FE-P1-06 刷题反馈与完成闭环
 
@@ -937,3 +946,4 @@
 | v8 | 2026-10-31 | **FE-P1-02 完成**（题库页快捷入口 / 搜索 / 排序 / 拖拽持久化 / 复制 / 导出）。后端新增 `banks_duplicate`（事务内新库+题目副本，题目与子题 id 全部重排，不继承流水/复习态）与 `banks_export_md`（落盘 export/，文件名后端重拼）。导出**不用 JSON**：`export_dbjson` 已随 FE-P0-01 移除且 PLAN §4 禁止以「备份」措辞新增，改导出与导入模板同格式的 Markdown，「导出→再导入」闭环由单测直接跑 `parseTemplateFile` 验证。栅格改 auto-fit。单测 +49（banks-view 28 / export-bank 21），e2e banks 33 → 67 |
 | v9 | 2026-10-31 | **FE-P1-03 完成**（难度/状态元数据产品化）。状态三态 published/draft/archived 落地：录题页下拉 + 列表徽章与筛选；抽取池口径统一到 8 处（`practice_pool` / `review_due` / `review_stats` 的 total·by_type·due_total·due_today·learning_due），历史指标刻意不按状态过滤。列表新增「最近编辑」「作答/正确率」列（未作答显示 `0 · —` 而非 `0 · 0%`）。**修掉 e2e 暴露的真缺陷**：QuestionForm 深拷贝不含顶部控件的 question，用户选「草稿」后任何表单编辑都把 status 顶回 published；现由 QuestionEditor 独占 status/type/version。单测 +4（308），e2e list 21→32、form 9→14 |
 | v10 | 2026-10-31 | **FE-P1-04 完成**（单题统计）。`questions_list` 加 `stats?`，实现改成独立索引点查（`IN (?,…)` 仅当前页 id）而非原文的 LEFT JOIN——JOIN 会把流水行放大再排序，1000 题翻页明显变慢。验收可证伪化：cargo 单测断言占位符个数==页大小 + `EXPLAIN QUERY PLAN` 走 `idx_records_question` 无全表扫描；e2e 加 1000 题翻页断言。列表行压缩版 + 展开行完整四项。顺带修 e2e `click().catch()` 空等 30s 的坑（list 31.7s → 1.7s）。cargo 157、e2e list 32→37 全量 236 |
+| v11 | 2026-10-31 | **FE-P1-05 完成**（材料子题排序/改题型/复制 + 单题另存为副本）。子题上移·下移·拖拽三条路径共用 `utils/arrayMove.js::moveItem`（与题库拖拽同一实现，单测对照输出防语义漂移）；接通原死代码 `onChildTypeChange` 并复用 `preserveTypeChange`；子题复制与增删移动后**全部重编 id**（`<父>_c<n>`），否则同一材料出现重复 `child_id` 会让历史回看张冠李戴。列表新增「副本」入口，创建后直跳编辑页。单测 +26（334），e2e list 37→43、form 14→27，全量 255 |

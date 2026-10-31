@@ -122,9 +122,9 @@ function makeRecorder() {
  * 少跑就是异常，分支导致的变化应该改基准数（说明确实是不同路径）。
  */
 const MODULE_BASELINE = {
-  list: 37,
+  list: 43,
   batch: 15,
-  form: 14,
+  form: 27,
   practice: 8,
   review: 18,
   exam: 20,
@@ -848,6 +848,42 @@ const MODULES = [
       // 统计列在 1000 题下仍只查当前页：行数与页大小一致，未做过的题显示 0 · —
       const bigStats = await page.locator('tbody tr td:nth-child(8)').evaluateAll((els) => els.map((e) => e.innerText.trim()))
       const pageRows = await page.locator('tbody tr').count()
+      // ══ FE-P1-05 列表「另存为副本」══
+      await page.evaluate(() => window.__setCount(10))
+      await goto(page, '#/banks')
+      await goto(page, '#/library?bank=bank_default')
+      const dupBtn = page.getByRole('button', { name: /^副本$/ }).first()
+      ok('列表行有「另存为副本」入口', (await dupBtn.count()) === 1)
+      const createsBeforeDup = await page.evaluate(() => window.__creates)
+      // 先装载等待再点击：跳转可能在 click 的同一批微任务里完成，
+      // 「先 click 再 waitForFunction」会与路由跳转抢跑到一个空窗口上（实测偶发失败）。
+      // /edit/:id 带参数、没有 ROUTE_TITLE 键，所以直接等「标题 + inflight」这套就绪信号。
+      // 坑：waitForFunction 的函数体会被序列化到浏览器执行，Node 作用域的 APP_SUFFIX
+      // 在里面是 undefined（ReferenceError 会让谓词永远为 false，只表现为超时）。
+      // 必须经参数传进去。
+      const navToEdit = page.waitForFunction(
+        (suffix) =>
+          location.hash.startsWith('#/edit/') &&
+          document.title === `编辑试题 · ${suffix}` &&
+          (window.__inflight || 0) === 0,
+        APP_SUFFIX,
+        { timeout: 6000, polling: 25 }
+      )
+      await dupBtn.click()
+      await navToEdit.catch(async () => {
+        throw new Error(`未跳转到编辑页，实际 hash=${await page.evaluate(() => location.hash)}`)
+      })
+      await flush(page)
+      const dupPayload = await page.evaluate(() => window.__lastCreate)
+      ok('副本走 questions_create', (await page.evaluate(() => window.__creates)) > createsBeforeDup)
+      ok('副本载荷不带原题 id（否则会被当成更新）', dupPayload?.data?.id === undefined, JSON.stringify(dupPayload?.data?.id))
+      ok('副本载荷不带派生字段 plain_text', dupPayload?.data?.plain_text === undefined)
+      ok('副本继承原题题库归属', !!dupPayload?.data?.bank_id, String(dupPayload?.data?.bank_id))
+      const dupHash = await page.evaluate(() => location.hash)
+      ok('创建副本后直接进编辑页（改副本不用再找一次）', /^#\/edit\//.test(dupHash), dupHash)
+      await goto(page, '#/banks')
+      await goto(page, '#/library?bank=bank_default')
+
       ok('1000 题下统计列只覆盖当前页（行数 == 页大小）',
         bigStats.length === pageRows && pageRows > 0 && pageRows <= 100,
         `统计 ${bigStats.length} 行 / 共 ${pageRows} 行`)
@@ -1066,6 +1102,66 @@ const MODULES = [
       const saved = await page.evaluate(() => window.__lastCreate)
       ok('保存时下发 status=draft', (await page.evaluate(() => window.__creates)) > beforeSave && saved?.data?.status === 'draft',
         JSON.stringify(saved?.data?.status))
+
+      // ══ FE-P1-05 材料子题：排序 / 改题型 / 复制 ══
+      // 切到材料题并建 3 个子题，再逐项验操作（子题控件只在这个题型下渲染）
+      await goto(page, '#/create?bank=bank_default')
+      const editorTypeSel = page.locator('select').first()
+      await editorTypeSel.selectOption('material')
+      await flush(page)
+      // 起始已有 1 个子题，再补 2 个 → 共 3 个
+      await page.getByRole('button', { name: /^单选$/ }).first().click()
+      await flush(page)
+      await page.getByRole('button', { name: /^单选$/ }).first().click()
+      await flush(page)
+      const childCards = () => page.locator('[role="group"][aria-label="调整子题顺序"]')
+      ok('材料题渲染出 3 个子题排序组', (await childCards().count()) === 3, `${await childCards().count()} 组`)
+
+      // 上/下移按钮在首末位禁用（位置不跳动）
+      const ups = page.getByRole('button', { name: '上移' })
+      const downs = page.getByRole('button', { name: '下移' })
+      ok('第 1 个子题「上移」禁用', await ups.nth(0).isDisabled())
+      ok('最后 1 个子题「下移」禁用', await downs.nth(2).isDisabled())
+      ok('中间子题「上移/下移」都可用', !(await ups.nth(1).isDisabled()) && !(await downs.nth(1).isDisabled()))
+
+      // 上移第 2 个子题 → 顺序变化，且子题 id 按新位置重编
+      const childTitle = (i) => page.locator('b').filter({ hasText: new RegExp(`^子题 ${i} · `) }).first()
+      const beforeMove = await page.locator('.bg-bg-accent').filter({ has: page.locator('.ProseMirror') }).evaluateAll((els) => els.length)
+      ok('子题卡片渲染', beforeMove >= 3, `${beforeMove}`)
+      await ups.nth(1).click()
+      await flush(page)
+      // 移动后第 1 位仍是「子题 1」标题（标题是渲染时按序号算的，序号不跟着内容走）
+      ok('上移后子题序号仍然连续', (await childTitle(1).count()) === 1 && (await childTitle(2).count()) === 1 && (await childTitle(3).count()) === 1)
+
+      // 子题改题型：下拉必须是活的（原文指出 onChildTypeChange 是死代码）
+      const childTypeSels = page.locator('[title="改子题题型（已填内容按「切换题型时保留内容」设置复用）"]')
+      ok('每个子题都有题型下拉', (await childTypeSels.count()) === 3, `${await childTypeSels.count()} 个`)
+      await childTypeSels.nth(0).selectOption('judge')
+      await flush(page)
+      const afterType = await page.locator('body').innerText()
+      // 标题用 typeLabel 的短名（判断 / 单选），不是「判断题」
+      ok('改子题题型后标题跟着变（证明 onChildTypeChange 已接通）', /子题 1 · 判断/.test(afterType),
+        afterType.match(/子题 1 · [^\n]*/)?.[0] || '')
+
+      // 复制子题：数量 +1，副本紧跟原件
+      await page.getByRole('button', { name: /^复制$/ }).first().click()
+      await flush(page)
+      ok('复制子题后子题数变 4', (await childCards().count()) === 4, `${await childCards().count()} 组`)
+
+      // 保存并检查下发载荷：子题 id 必须是 <父 id>_c<n> 连续编号
+      await page.locator('.ProseMirror').first().click()
+      await page.keyboard.type('材料正文')
+      await flush(page)
+      const createsBefore5 = await page.evaluate(() => window.__creates)
+      await page.getByRole('button', { name: /^保存$/ }).first().click()
+      await flush(page)
+      const matPayload = await page.evaluate(() => window.__lastCreate)
+      ok('材料题保存成功', (await page.evaluate(() => window.__creates)) > createsBefore5)
+      const childIds = (matPayload?.data?.children || []).map((c) => c.id)
+      ok('4 个子题全部带 id', childIds.length === 4 && childIds.every(Boolean), JSON.stringify(childIds))
+      ok('子题 id 唯一（复制不允许撞 id）', new Set(childIds).size === childIds.length, JSON.stringify(childIds))
+      ok('子题 id 间距连续（c1..c4）',
+        childIds.length === 4 && childIds.every((id, i) => id.endsWith(`_c${i + 1}`)), JSON.stringify(childIds))
     }
   },
 

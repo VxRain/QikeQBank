@@ -479,6 +479,19 @@ export function persistBankFilter(page, id)
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
 
+### 材料子题编辑（FE-P1-05）
+- 子题排序：上移 / 下移（首末位**禁用而非隐藏**，位置不跳动）+ 拖拽（`dragstart`/`drop`）；三条路径都经
+  `utils/arrayMove.js::moveItem`（与题库拖拽**同一实现**，避免两边语义漂移），并在变更后重编子题 id。
+- 子题改题型：接通了原本是死代码的 `onChildTypeChange`——复用 `preserveTypeChange`，设置
+  `keepContentOnTypeChange` 关闭时退化为 `preservedStem` 保留题干。
+- 子题复制：副本插在原题之后；**全部子题 id 重编**（`<父 id>_c1..cN`）。
+- 另存为副本（单题）：列表行「副本」按钮 → 拉全量 → `asNewCopy`（清 `id`/`plain_text`/`created_at`/`updated_at`，
+  材料题子题 id 也清）→ `questions_create` → 直接进 `/edit/<新 id>`，因为副本的价值就是「在它基础上改」。
+- **为什么子题 id 必须重编**：后端 `ensure_child_ids` 生成 `<父 id>_c<n>`，而 `exam_detail` / `practice` 的
+  `child_id` 引用就靠它。复制时不重编会出现两个相同 `child_id`，历史回看张冠李戴——界面上完全看不出来。
+  排序不重编则「第 1 问」会挂着 `c3` 的记录，界面编号与回看编号对不上。
+  这三条不变量由 `tests/unit/material-children.test.js` 锁死。
+
 ### 状态三态（FE-P1-03）
 - `questions.status` 只有 `TEXT NOT NULL DEFAULT 'published'`、**无 CHECK 约束**，所以三态是**约定**：
   `published` 已发布（唯一会被抽题的状态）/ `draft` 草稿 / `archived` 停用。
@@ -583,13 +596,13 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 236 条 / 9 模块 / **18.4s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 255 条 / 9 模块 / **17.2s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
-  | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页（FE-P1-03/04） | 37 | ~1.7s |
+  | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页/另存为副本（FE-P1-03/04/05） | 43 | ~1.9s |
   | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~1.1s |
   | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01）+ 快捷入口/搜索/排序/拖拽/复制/导出（FE-P1-02） | 67 | ~1.9s |
-  | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 + 状态三态下发（FE-P1-03） | 14 | ~1.4s |
+  | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 + 状态三态 + 材料子题排序·改题型·复制（FE-P1-03/05） | 27 | ~2.4s |
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 | 8 | ~0.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 | 20 | ~2.5s |

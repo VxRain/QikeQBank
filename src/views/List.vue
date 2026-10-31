@@ -180,6 +180,7 @@
                 <div class="flex gap-1.5 flex-wrap">
                   <router-link :to="`/edit/${q.id}`" class="btn btn-small" title="编辑"><i class="i-lucide-pencil" />编辑</router-link>
                   <button type="button" class="btn btn-small" :title="previewId === q.id ? '收起预览' : '预览渲染效果'" @click="togglePreview(q.id)"><i :class="previewId === q.id ? 'i-lucide-eye-off' : 'i-lucide-eye'" />预览</button>
+                  <button type="button" class="btn btn-small" title="另存为副本（新题，不影响原题）" @click="onDuplicateOne(q.id)"><i class="i-lucide-copy" />副本</button>
                   <button type="button" class="btn btn-small" title="移动到其他题库" @click="onMoveOne(q.id)"><i class="i-lucide-folder-input" />移动</button>
                   <button class="btn btn-small btn-danger" @click="onDelete(q)"><i class="i-lucide-trash-2" />删除</button>
                 </div>
@@ -233,12 +234,13 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { list, get, remove, batchUpdate, batchRemove } from '@/api/questions.js'
+import { list, get, create, remove, batchUpdate, batchRemove } from '@/api/questions.js'
 import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
 import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
+import { asNewCopy } from '@/utils/materialChildren.js'
 import {
   SORT_OPTIONS,
   DIFFICULTY_CHOICES,
@@ -660,6 +662,35 @@ function search() {
 function onAdd() {
   if (!bankId.value) return
   router.push(`/create?bank=${bankId.value}`)
+}
+
+/**
+ * 另存为副本（FE-P1-05）：单题复制成一条新题。
+ *
+ * 为什么不复用「新增试题 + 粘贴」：那要经过编辑器与草稿链路，用户得手动确认；
+ * 列表里点一下就该得到一份可直接编辑的副本。这里拉全量 → asNewCopy（清 id /
+ * plain_text / 时间戳，材料题子题 id 也清掉交给后端重编）→ create。
+ * 归属沿用原题的题库，拷贝过去不跨库（跨库场景用户会自己用「移动」）。
+ */
+const duplicating = ref('')
+async function onDuplicateOne(id) {
+  if (duplicating.value) return
+  duplicating.value = id
+  try {
+    const full = await get(id)
+    const payload = asNewCopy(full)
+    payload.bank_id = payload.bank_id || bankId.value || undefined
+    const created = await create(payload)
+    toast('已创建副本，可直接编辑', 'success')
+    await fetchList()
+    // 建完直接进编辑页：副本的价值就是「在它基础上改」，多跳一步没有意义
+    if (created?.id) router.push(`/edit/${created.id}`)
+  } catch (e) {
+    console.error(e)
+    toast('创建副本失败：' + (e?.message || e), 'error')
+  } finally {
+    duplicating.value = ''
+  }
 }
 
 function reset() {
