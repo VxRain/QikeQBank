@@ -32,63 +32,133 @@
         <i class="i-lucide-folder-open" />暂无题库，点击右上新建
       </div>
 
-      <!-- 列表视图：每行一库，信息与操作横向铺开，密度高于卡片 -->
-      <div v-else-if="view === 'list'" class="flex flex-col gap-2">
-        <div
-          v-for="b in bankStore.banks"
-          :key="b.id"
-          role="button"
-          tabindex="0"
-          class="bank-row card card-interactive flex items-center gap-4 cursor-pointer !px-4 !py-3"
-          :title="`进入「${b.name}」`"
-          @click="onEnter(b)"
-          @keyup.enter="onEnter(b)"
-        >
-          <i class="i-lucide-folder text-[19px] shrink-0 text-muted-light" />
-          <div class="flex items-center gap-2.5 min-w-0 w-[240px] shrink-0">
-            <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
+      <div v-else class="flex flex-col gap-2.5">
+        <!-- 搜索 + 排序：题库多了才出现（少于 4 个时这些控件只是噪声） -->
+        <div v-if="bankStore.banks.length > 3 || query || sort !== DEFAULT_BANK_SORT" class="flex flex-wrap items-center gap-2">
+          <div class="relative">
+            <i class="i-lucide-search absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-light text-[14px]" />
+            <input
+              v-model="query"
+              class="input w-[220px] !pl-8"
+              type="text"
+              placeholder="搜索题库名称或描述"
+              aria-label="搜索题库"
+            />
           </div>
-          <p class="m-0 flex-1 min-w-0 text-[12px] text-muted leading-[1.6] truncate">
-            {{ b.description || ' ' }}
-          </p>
-          <span class="text-[12px] text-muted-light shrink-0 tabular-nums">{{ b.question_count ?? 0 }} 题</span>
-          <span class="bank-actions flex items-center gap-1 shrink-0">
-            <button type="button" class="btn btn-tiny !px-2" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus" /></button>
-            <button type="button" class="btn btn-tiny !px-2" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up" /></button>
-            <button type="button" class="btn btn-tiny !px-2" title="重命名 / 修改描述" @click.stop="openRename(b)"><i class="i-lucide-pen-line" /></button>
-            <button type="button" class="btn btn-tiny btn-danger !px-2" title="删除题库" @click.stop="onRemoveBank(b)"><i class="i-lucide-trash-2" /></button>
+          <select v-model="sort" class="select min-w-[150px]" aria-label="题库排序">
+            <option v-for="o in BANK_SORT_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+          <span v-if="visibleBanks.length !== bankStore.banks.length" class="badge">{{ visibleBanks.length }} / {{ bankStore.banks.length }}</span>
+          <span v-if="sort === 'custom' && dragEnabled" class="text-[12px] text-muted-light flex items-center gap-1.5">
+            <i class="i-lucide-grip-vertical" />拖动卡片可调整顺序
+          </span>
+          <span v-else-if="dragDisabledReason" class="text-[12px] text-muted-light flex items-center gap-1.5">
+            <i class="i-lucide-info" />{{ dragDisabledReason }}
           </span>
         </div>
-      </div>
 
-      <!-- 卡片视图：固定三列，描述两行固定高保持等高 -->
-      <div v-else class="grid grid-cols-3 gap-3.5">
-        <div
-          v-for="b in bankStore.banks"
-          :key="b.id"
-          role="button"
-          tabindex="0"
-          class="bank-card card card-interactive flex flex-col cursor-pointer !p-4 !pt-4.5"
-          :title="`进入「${b.name}」`"
-          @click="onEnter(b)"
-          @keyup.enter="onEnter(b)"
-        >
-          <div class="flex items-start justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0">
-              <i class="i-lucide-folder text-[18px] shrink-0 text-muted-light" />
+        <div v-if="!visibleBanks.length" class="text-muted py-3 flex items-center gap-2">
+          <i class="i-lucide-search-x" />没有匹配「{{ query }}」的题库
+          <button type="button" class="btn btn-small ml-2" @click="query = ''">清除搜索</button>
+        </div>
+
+        <!-- 列表视图：每行一库，信息与操作横向铺开，密度高于卡片 -->
+        <div v-if="view === 'list'" class="flex flex-col gap-2">
+          <div
+            v-for="(b, i) in visibleBanks"
+            :key="b.id"
+            role="button"
+            tabindex="0"
+            :draggable="dragEnabled"
+            class="bank-row card card-interactive flex items-center gap-4 cursor-pointer !px-4 !py-3"
+            :class="dragEnabled && 'bank-draggable'"
+            :title="`进入「${b.name}」`"
+            @click="onEnter(b)"
+            @keyup.enter="onEnter(b)"
+            @dragstart="onDragStart(i, $event)"
+            @dragover.prevent="onDragOver(i)"
+            @drop.prevent="onDrop(i)"
+            @dragend="onDragEnd"
+          >
+            <i v-if="dragEnabled" class="i-lucide-grip-vertical text-[15px] shrink-0 text-muted-light cursor-grab" />
+            <i class="i-lucide-folder text-[19px] shrink-0 text-muted-light" />
+            <div class="flex items-center gap-2.5 min-w-0 w-[220px] shrink-0">
               <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
             </div>
-            <span class="text-[12px] text-muted-light shrink-0 pt-0.5">{{ b.question_count ?? 0 }} 题</span>
+            <p class="m-0 flex-1 min-w-0 text-[12px] text-muted leading-[1.6] truncate">
+              {{ b.description || ' ' }}
+            </p>
+            <span class="text-[12px] text-muted-light shrink-0 tabular-nums">{{ b.question_count ?? 0 }} 题</span>
+            <span class="text-[12px] text-muted-light shrink-0 tabular-nums" :title="`最近更新 ${fmtDate(b.updated_at)}`">{{ fmtDate(b.updated_at) }}</span>
+            <span class="bank-actions flex items-center gap-1 shrink-0">
+              <button
+                v-for="s in BANK_SHORTCUTS"
+                :key="s.key"
+                type="button"
+                class="btn btn-tiny !px-2"
+                :title="`${s.label}（限本库）`"
+                @click.stop="goShortcut(b, s)"
+              ><i :class="s.icon" /></button>
+              <span class="w-px h-4 bg-line mx-0.5" />
+              <button type="button" class="btn btn-tiny !px-2" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus" /></button>
+              <button type="button" class="btn btn-tiny !px-2" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up" /></button>
+              <button type="button" class="btn btn-tiny !px-2" title="复制题库（题目一并复制）" @click.stop="onDuplicate(b)"><i class="i-lucide-copy" /></button>
+              <button type="button" class="btn btn-tiny !px-2" title="导出为 Markdown（可再导入）" @click.stop="onExport(b)"><i class="i-lucide-download" /></button>
+              <button type="button" class="btn btn-tiny !px-2" title="重命名 / 修改描述" @click.stop="openRename(b)"><i class="i-lucide-pen-line" /></button>
+              <button type="button" class="btn btn-tiny btn-danger !px-2" title="删除题库" @click.stop="onRemoveBank(b)"><i class="i-lucide-trash-2" /></button>
+            </span>
           </div>
-          <p class="m-0 text-[12px] text-muted leading-[1.7] line-clamp-2 min-h-[44px] py-1">
-            {{ b.description }}
-          </p>
-          <!-- 操作行：与卡片主体用分隔线隔开；四钮带文字均分，悬停卡片浮现 -->
-          <div class="bank-actions grid grid-cols-4 gap-1.5 mt-auto pt-3 border-t border-line">
-            <button type="button" class="btn btn-tiny justify-center min-w-0" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus shrink-0" /><span class="truncate">录题</span></button>
-            <button type="button" class="btn btn-tiny justify-center min-w-0" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up shrink-0" /><span class="truncate">导入</span></button>
-            <button type="button" class="btn btn-tiny justify-center min-w-0" title="重命名 / 修改描述" @click.stop="openRename(b)"><i class="i-lucide-pen-line shrink-0" /><span class="truncate">编辑</span></button>
-            <button type="button" class="btn btn-tiny btn-danger justify-center min-w-0" title="删除题库" @click.stop="onRemoveBank(b)"><i class="i-lucide-trash-2 shrink-0" /><span class="truncate">删除</span></button>
+        </div>
+
+        <!-- 卡片视图：自适应栅格（窄窗口自动减列，不挤压） -->
+        <div v-else class="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3.5">
+          <div
+            v-for="(b, i) in visibleBanks"
+            :key="b.id"
+            role="button"
+            tabindex="0"
+            :draggable="dragEnabled"
+            class="bank-card card card-interactive flex flex-col cursor-pointer !p-4 !pt-4.5"
+            :class="dragEnabled && 'bank-draggable'"
+            :title="`进入「${b.name}」`"
+            @click="onEnter(b)"
+            @keyup.enter="onEnter(b)"
+            @dragstart="onDragStart(i, $event)"
+            @dragover.prevent="onDragOver(i)"
+            @drop.prevent="onDrop(i)"
+            @dragend="onDragEnd"
+          >
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <i v-if="dragEnabled" class="i-lucide-grip-vertical text-[14px] shrink-0 text-muted-light cursor-grab" />
+                <i class="i-lucide-folder text-[18px] shrink-0 text-muted-light" />
+                <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
+              </div>
+              <span class="text-[12px] text-muted-light shrink-0 pt-0.5">{{ b.question_count ?? 0 }} 题</span>
+            </div>
+            <p class="m-0 text-[12px] text-muted leading-[1.7] line-clamp-2 min-h-[44px] py-1">
+              {{ b.description }}
+            </p>
+            <!-- 快捷入口：刷题 / 复习 / 错题 / 统计（均带 ?bank=） -->
+            <div class="grid grid-cols-4 gap-1.5">
+              <button
+                v-for="s in BANK_SHORTCUTS"
+                :key="s.key"
+                type="button"
+                class="btn btn-tiny justify-center min-w-0"
+                :title="`${s.label}（限本库）`"
+                @click.stop="goShortcut(b, s)"
+              ><i :class="s.icon + ' shrink-0'" /><span class="truncate">{{ s.label }}</span></button>
+            </div>
+            <!-- 操作行：与卡片主体用分隔线隔开 -->
+            <div class="bank-actions grid grid-cols-6 gap-1.5 mt-auto pt-3 border-t border-line">
+              <button type="button" class="btn btn-tiny justify-center min-w-0" title="录入试题到这个库" @click.stop="goCreate(b)"><i class="i-lucide-plus shrink-0" /></button>
+              <button type="button" class="btn btn-tiny justify-center min-w-0" title="从文件导入到这个库" @click.stop="openImport(b)"><i class="i-lucide-file-up shrink-0" /></button>
+              <button type="button" class="btn btn-tiny justify-center min-w-0" title="复制题库（题目一并复制）" @click.stop="onDuplicate(b)"><i class="i-lucide-copy shrink-0" /></button>
+              <button type="button" class="btn btn-tiny justify-center min-w-0" title="导出为 Markdown（可再导入）" @click.stop="onExport(b)"><i class="i-lucide-download shrink-0" /></button>
+              <button type="button" class="btn btn-tiny justify-center min-w-0" title="重命名 / 修改描述" @click.stop="openRename(b)"><i class="i-lucide-pen-line shrink-0" /></button>
+              <button type="button" class="btn btn-tiny btn-danger justify-center min-w-0" title="删除题库" @click.stop="onRemoveBank(b)"><i class="i-lucide-trash-2 shrink-0" /></button>
+            </div>
           </div>
         </div>
       </div>
@@ -149,11 +219,23 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { bankStore, loadBanks } from '@/stores/bank.js'
-import { createBank, updateBank, removeBank } from '@/api/banks.js'
-import { toast, confirmDialog } from '@/stores/ui.js'
+import { createBank, updateBank, removeBank, duplicateBank, exportBankMarkdown } from '@/api/banks.js'
+import { list } from '@/api/questions.js'
+import { toast, confirmDialog, promptDialog } from '@/stores/ui.js'
+import {
+  BANK_SORT_OPTIONS,
+  DEFAULT_BANK_SORT,
+  normalizeBankSort,
+  sortAndFilterBanks,
+  canDragBanks,
+  moveId,
+  BANK_SHORTCUTS,
+  shortcutHref
+} from '@/stores/banksView.js'
+import { bankToMarkdown, exportFileName } from '@/utils/exportBank.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 
 const router = useRouter()
@@ -173,17 +255,99 @@ function setView(v) {
   } catch { /* 忽略持久化失败 */ }
 }
 
+// ── 搜索 / 排序 / 自定义顺序（FE-P1-02）──
+const SORT_KEY = 'qbank.banksSort'
+const ORDER_KEY = 'qbank.banksOrder'
+const query = ref('')
+const sort = ref(normalizeBankSort(localStorage.getItem(SORT_KEY)))
+const customOrder = ref(readOrder())
+
+function readOrder() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]')
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function persistOrder(ids) {
+  customOrder.value = ids
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(ids))
+  } catch { /* 忽略持久化失败 */ }
+}
+
+watch(sort, (v) => {
+  try {
+    localStorage.setItem(SORT_KEY, v)
+  } catch { /* 忽略 */ }
+})
+
+const visibleBanks = computed(() =>
+  sortAndFilterBanks(bankStore.banks, {
+    sort: sort.value,
+    query: query.value,
+    customOrder: customOrder.value
+  })
+)
+
+// 拖拽只在「自定义顺序 + 无搜索」时开放：搜索结果里拖拽无法确定落位语义
+const dragEnabled = computed(() => canDragBanks({ sort: sort.value, query: query.value }))
+const dragDisabledReason = computed(() => {
+  if (sort.value !== 'custom') return '拖拽排序仅在「自定义顺序」下可用'
+  if (query.value.trim()) return '搜索结果中不支持拖拽排序'
+  return ''
+})
+
+const dragFrom = ref(-1)
+function onDragStart(i, e) {
+  if (!dragEnabled.value) return
+  dragFrom.value = i
+  // Firefox 必须 setData 才会启动拖拽；值本身不用（落位靠 dragFrom）
+  try { e.dataTransfer?.setData('text/plain', String(i)) } catch { /* 忽略 */ }
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragOver(i) {
+  if (dragEnabled.value) dragFrom.value >= 0 && i >= 0
+}
+
+function onDrop(to) {
+  if (!dragEnabled.value || dragFrom.value < 0) return
+  // 以当前可见顺序为基础换位，再把完整 id 序列落回（含未显示的库，防丢库）
+  const visibleIds = visibleBanks.value.map((b) => b.id)
+  const reordered = moveId(visibleIds, dragFrom.value, to)
+  dragFrom.value = -1
+  if (!reordered) return
+  // 合并：按新可见顺序重排全部题库（未显示的追加到末尾，由 applyIdOrder 保证）
+  persistOrder(reordered.concat(bankStore.banks.map((b) => b.id).filter((id) => !reordered.includes(id))))
+}
+
+function onDragEnd() {
+  dragFrom.value = -1
+}
+
 const totalCount = computed(() =>
   bankStore.banks.reduce((s, b) => s + (b.question_count ?? 0), 0)
 )
 
-// ── 进入 ──
+function fmtDate(iso) {
+  const s = String(iso || '').slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(5) : '—'
+}
+
+// ── 进入与快捷入口 ──
 function onEnter(b) {
   router.push(`/library?bank=${b.id}`)
 }
 
 function goCreate(b) {
   router.push(`/create?bank=${b.id}`)
+}
+
+function goShortcut(b, s) {
+  router.push(shortcutHref(s, b.id))
 }
 
 function openImport(b) {
@@ -194,6 +358,56 @@ function openImport(b) {
 async function onImportDone() {
   showImport.value = false
   await loadBanks()
+}
+
+// ── 复制题库（FE-P1-02）：新库 + 题目副本，不继承流水/复习态 ──
+async function onDuplicate(b) {
+  const name = await promptDialog({
+    title: '复制题库',
+    message: `将「${b.name}」连同全部题目复制为一个新题库（不复制作答记录与复习进度）。`,
+    placeholder: '新题库名称',
+    initial: `${b.name} 副本`
+  })
+  if (name == null) return
+  try {
+    const r = await duplicateBank(b.id, name)
+    await loadBanks()
+    const copied = r?.copied ?? 0
+    toast(`已创建「${r?.bank?.name || name}」，共复制 ${copied} 题`, 'success')
+  } catch (e) {
+    console.error(e)
+    toast('复制题库失败：' + (e?.message || e), 'error')
+  }
+}
+
+// ── 导出单个题库为 Markdown（FE-P1-02）──
+// 口径：导出的是「可再导入的题目文本（同导入模板格式）」，不是备份。
+// 本地快照/备份能力待数据保全方案定案（PLAN §4/§9），这里不提供、也不叫备份。
+const exporting = ref('')
+async function onExport(b) {
+  if (exporting.value) return
+  exporting.value = b.id
+  try {
+    // 分页拉全库题（全量字段：导出需要题干/选项/答案/解析）
+    const all = []
+    let offset = 0
+    for (;;) {
+      const r = await list({ bankId: b.id, limit: 100, offset })
+      const items = Array.isArray(r?.items) ? r.items : []
+      all.push(...items)
+      offset += items.length
+      if (!items.length || offset >= Number(r?.total || 0)) break
+    }
+    const { text, count, skipped } = bankToMarkdown(b, all)
+    const { path } = await exportBankMarkdown(exportFileName(b), text)
+    const note = skipped ? `，${skipped} 题内容为空已跳过` : ''
+    toast(`已导出「${b.name}」${count} 题${note}\n文件：${path}`, 'success', 6000)
+  } catch (e) {
+    console.error(e)
+    toast('导出失败：' + (e?.message || e), 'error')
+  } finally {
+    exporting.value = ''
+  }
 }
 
 // ── 新建 / 重命名弹窗 ──

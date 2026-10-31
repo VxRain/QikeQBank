@@ -129,7 +129,7 @@ const MODULE_BASELINE = {
   review: 18,
   exam: 20,
   wrong: 21,
-  banks: 33,
+  banks: 67,
   search: 36
 }
 
@@ -221,7 +221,12 @@ function mockScript() {
       try {
       window.__calls.push(cmd)
       switch (cmd) {
-        case 'banks_list': return { success: true, data: window.__forceSingleBank ? [bank] : [bank, bank2] }
+        case 'banks_list': {
+          // FE-P1-02：可调题库数量，验「搜索 / 排序 / 拖拽」需要多于 2 个库
+          if (window.__forceSingleBank) return { success: true, data: [bank] }
+          const extra = window.__extraBanks || []
+          return { success: true, data: [bank, bank2, ...extra] }
+        }
         case 'questions_list': {
           // 真实实现一遍筛选/排序/分页，E2E 才能验「参数真的生效」而不是只看请求发出去了
           window.__listArgs = args
@@ -376,6 +381,19 @@ function mockScript() {
         case 'banks_create': window.__lastBankCreate = args; return { success: true, data: { id: 'bank_new', name: args?.name } }
         case 'banks_update': return { success: true, data: { id: args?.id } }
         case 'banks_remove': return { success: true, data: { id: args?.id } }
+        case 'banks_duplicate': {
+          // FE-P1-02：复制题库。真实实现在后端事务内新库 + 逐题插副本（新 id）。
+          window.__duplicateCalls = (window.__duplicateCalls || 0) + 1
+          window.__lastDuplicate = args
+          const src = window.__forceSingleBank ? bank : (args?.id === bank2.id ? bank2 : bank)
+          const copied = qs.filter((q) => q.bank_id === args?.id).length
+          return { success: true, data: { bank: { ...src, id: 'bank_copy', name: args?.name || src.name + ' 副本', question_count: copied }, copied } }
+        }
+        case 'banks_export_md': {
+          // FE-P1-02：导出落盘。只记录入参，内容由前端生成（见 src/utils/exportBank.js）
+          window.__exportCalls = (window.__exportCalls || []).concat(args)
+          return { success: true, data: { path: '/mock/export/' + args?.name } }
+        }
         case 'settings_set': return { success: true, data: {} }
         case 'settings_get': return { success: true, data: [] }
 
@@ -1454,6 +1472,145 @@ const MODULES = [
         ok('删库按钮存在', false, '未找到 button[title="删除题库"]')
       }
       await page.evaluate(() => { window.__forceSingleBank = false })
+
+      // ══ FE-P1-02 题库页：快捷入口 / 搜索 / 排序 / 拖拽持久化 / 复制 / 导出 ══
+      // 先补到 5 个库：搜索与拖拽在 2 个库上看不出区别
+      await page.evaluate(() => {
+        window.__extraBanks = [
+          { id: 'bank_c', name: '物理题库', description: '', created_at: '2026-02-01T00:00:00.000Z', updated_at: '2026-09-01T00:00:00.000Z', question_count: 42 },
+          { id: 'bank_d', name: '化学题库', description: '选修四', created_at: '2026-01-15T00:00:00.000Z', updated_at: '2026-08-01T00:00:00.000Z', question_count: 7 },
+          { id: 'bank_e', name: '生物题库', description: '', created_at: '2026-03-01T00:00:00.000Z', updated_at: '2026-07-01T00:00:00.000Z', question_count: 18 }
+        ]
+        localStorage.removeItem('qbank.banksOrder')
+        localStorage.removeItem('qbank.banksSort')
+      })
+      await goto(page, '#/wrong')
+      await goto(page, '#/banks')
+      ok('题库页显示 5 个题库', /5 个题库/.test(await page.locator('body').innerText()))
+
+      // 快捷入口：每张卡 4 个入口（刷题/复习/错题/统计），均带 ?bank=
+      const bankCard = page.locator('.bank-card').first()
+      const shortcutTitles = await bankCard.locator('button[title$="（限本库）"]').evaluateAll((els) =>
+        els.map((e) => e.getAttribute('title'))
+      )
+      ok('题库卡有刷题/复习/错题/统计四个快捷入口', shortcutTitles.length === 4, JSON.stringify(shortcutTitles))
+      for (const label of ['刷题', '复习', '错题', '统计']) {
+        ok(`快捷入口含「${label}」`, shortcutTitles.some((t) => t.startsWith(label)), JSON.stringify(shortcutTitles))
+      }
+
+      // 点「错题」入口：必须落到 /wrong?bank=<该库 id>
+      await bankCard.locator('button[title^="错题"]').click()
+      await waitRouteAfterClick(page, '#/wrong')
+      const wrongHash = await page.evaluate(() => location.hash)
+      ok('快捷入口带 ?bank= 进入对应页面', /^#\/wrong\?bank=bank_/.test(wrongHash), wrongHash)
+
+      // 无搜索框时不显示（题库少时控件是噪声）→ 现在是 5 个库，应该出现
+      await goto(page, '#/banks')
+      const searchBox = page.getByLabel('搜索题库')
+      ok('题库多于 3 个时出现搜索框', (await searchBox.count()) === 1)
+
+      // ── 搜索 ──
+      await searchBox.fill('化学')
+      await flush(page)
+      let names = await page.locator('.bank-card').evaluateAll((els) => els.map((e) => e.textContent.match(/[\u4e00-\u9fa5]+题库/)?.[0] || ''))
+      ok('搜索后只留命中的题库', names.length === 1 && names[0].includes('化学'), JSON.stringify(names))
+      await searchBox.fill('不存在')
+      await flush(page)
+      ok('搜索无命中时给空态与「清除搜索」', /没有匹配/.test(await page.locator('body').innerText()))
+      await page.getByRole('button', { name: /清除搜索/ }).click()
+      await flush(page)
+      ok('清除搜索后恢复全部题库', (await page.locator('.bank-card').count()) === 5)
+
+      // ── 排序：题数降序 / 最近更新 ──
+      const sortSel = page.getByLabel('题库排序')
+      await sortSel.selectOption('count_desc')
+      await flush(page)
+      const countsDesc = await page.locator('.bank-card').evaluateAll((els) =>
+        els.map((e) => Number(e.textContent.match(/(\d+)\s*题/)?.[1] || 0))
+      )
+      ok('按题数降序生效', countsDesc.length === 5 && countsDesc[0] >= countsDesc[countsDesc.length - 1], JSON.stringify(countsDesc))
+      ok('题数降序首位是题最多的库', countsDesc[0] === 42, JSON.stringify(countsDesc))
+
+      await sortSel.selectOption('count_asc')
+      await flush(page)
+      const countsAsc = await page.locator('.bank-card').evaluateAll((els) =>
+        els.map((e) => Number(e.textContent.match(/(\d+)\s*题/)?.[1] || 0))
+      )
+      ok('按题数升序与降序相反', countsAsc[0] === countsDesc[countsDesc.length - 1], JSON.stringify(countsAsc))
+
+      await sortSel.selectOption('updated_desc')
+      await flush(page)
+      const firstUpdated = await page.locator('.bank-card').first().innerText()
+      ok('按最近更新排序生效', /物理题库/.test(firstUpdated), firstUpdated.split('\n')[0])
+
+      // ── 拖拽：只在「自定义顺序 + 无搜索」时可用 ──
+      await sortSel.selectOption('count_desc')
+      await flush(page)
+      ok('非自定义排序时不显示拖拽手柄', (await page.locator('.bank-draggable').count()) === 0)
+      ok('非自定义排序时给出原因', /拖拽排序仅在「自定义顺序」下可用/.test(await page.locator('body').innerText()))
+
+      await sortSel.selectOption('custom')
+      await flush(page)
+      ok('自定义顺序下出现拖拽手柄', (await page.locator('.bank-draggable').count()) === 5)
+      const beforeDrag = await page.locator('.bank-card').evaluateAll((els) => els.map((e) => e.getAttribute('role') && e.textContent.match(/[\u4e00-\u9fa5]+题库/)?.[0]))
+      // 模拟拖拽：dragstart 在第 0 个，drop 在第 2 个（顺序由 moveId 决定）
+      await page.locator('.bank-card').nth(0).dispatchEvent('dragstart', { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) })
+      await page.locator('.bank-card').nth(2).dispatchEvent('drop', { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) })
+      await flush(page)
+      const afterDrag = await page.locator('.bank-card').evaluateAll((els) => els.map((e) => e.textContent.match(/[\u4e00-\u9fa5]+题库/)?.[0]))
+      ok('拖拽后顺序改变', JSON.stringify(beforeDrag) !== JSON.stringify(afterDrag), `${JSON.stringify(beforeDrag)} -> ${JSON.stringify(afterDrag)}`)
+      const savedOrder = await page.evaluate(() => localStorage.getItem('qbank.banksOrder'))
+      ok('拖拽顺序写入 localStorage', !!savedOrder && JSON.parse(savedOrder).length === 5, String(savedOrder))
+
+      // 重进页面：顺序必须保持（持久化验证）
+      await goto(page, '#/wrong')
+      await goto(page, '#/banks')
+      const afterReload = await page.locator('.bank-card').evaluateAll((els) => els.map((e) => e.textContent.match(/[\u4e00-\u9fa5]+题库/)?.[0]))
+      ok('重进题库页后拖拽顺序仍生效', JSON.stringify(afterReload) === JSON.stringify(afterDrag), `${JSON.stringify(afterReload)} vs ${JSON.stringify(afterDrag)}`)
+
+      // 搜索中禁用拖拽（落位语义不确定）
+      // 注意：这里关键词要能命中但**不是**全命中——全命中时不会出现空态，「清除搜索」按钮也就不存在
+      await page.getByLabel('搜索题库').fill('化学')
+      await flush(page)
+      ok('搜索中禁用拖拽', (await page.locator('.bank-draggable').count()) === 0)
+      ok('搜索中给出禁拖原因', /搜索结果中不支持拖拽排序/.test(await page.locator('body').innerText()))
+      await page.getByLabel('搜索题库').fill('')
+      await flush(page)
+
+      // ── 复制题库 ──
+      await page.locator('.bank-card').first().locator('button[title^="复制题库"]').click()
+      await flush(page)
+      const dupDlg = page.locator('.dg-card')
+      ok('复制题库弹应用内确认框（非原生 prompt）', (await dupDlg.count()) === 1)
+      const dupInput = dupDlg.locator('input[type="text"]')
+      ok('复制弹层预填「原名 副本」', /副本$/.test(await dupInput.inputValue()), await dupInput.inputValue())
+      await dupDlg.locator('button').filter({ hasText: /^确定$/ }).click()
+      await flush(page)
+      const dupArgs = await page.evaluate(() => ({ calls: window.__duplicateCalls || 0, last: window.__lastDuplicate }))
+      ok('复制题库只触发 1 次 banks_duplicate', dupArgs.calls === 1, `实际 ${dupArgs.calls} 次`)
+      ok('复制请求带源库 id', !!dupArgs.last?.id, JSON.stringify(dupArgs.last))
+      ok('复制后提示已创建与复制题数', /共复制 \d+ 题/.test(await page.locator('body').innerText()))
+
+      // ── 导出（Markdown，可再导入；不是备份）──
+      await page.locator('.bank-card').first().locator('button[title^="导出为"]').click()
+      await flush(page)
+      const exp = await page.evaluate(() => ({ calls: (window.__exportCalls || []).length, last: (window.__exportCalls || [])[0] }))
+      ok('导出只触发 1 次 banks_export_md', exp.calls === 1, `实际 ${exp.calls} 次`)
+      ok('导出文件名带 .md 后缀与日期', /\.md$/.test(exp.last?.name || ''), String(exp.last?.name))
+      ok('导出内容使用导入模板块头（可再导入）', /【(单选|多选|判断|填空|问答|材料)】/.test(exp.last?.content || ''), (exp.last?.content || '').slice(0, 60))
+      ok('导出内容不含元信息头（否则导入会被判为缺少题型标记）', !/^#/.test(exp.last?.content || ''), (exp.last?.content || '').slice(0, 20))
+      ok('导出后提示落盘路径', /已导出/.test(await page.locator('body').innerText()))
+
+      // ── 栅格：auto-fit（窄窗口不挤压）──
+      const gridCls = await page.locator('.bank-card').first().locator('..').getAttribute('class')
+      ok('卡片栅格用 repeat(auto-fit,minmax(280px,1fr))', /auto-fit/.test(gridCls || '') && /280px/.test(gridCls || ''), String(gridCls))
+
+      // 清理：后续用例（首页）需要 2 个库的默认态
+      await page.evaluate(() => {
+        window.__extraBanks = []
+        localStorage.removeItem('qbank.banksOrder')
+        localStorage.removeItem('qbank.banksSort')
+      })
 
       // ── 首页：能进、不报错 ──
       await goto(page, '#/banks')

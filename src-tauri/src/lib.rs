@@ -62,6 +62,8 @@ pub fn run() {
             db::banks_create,
             db::banks_update,
             db::banks_remove,
+            db::banks_duplicate,
+            db::banks_export_md,
             db::questions_list,
             db::questions_get,
             db::questions_create,

@@ -10,7 +10,7 @@
 |---|---|
 | 外壳 | Tauri 2（WebView2，系统内置无 Chromium 打包） |
 | 前端 | Vue 3 + Vite 5 + Vue Router（hash 路由）+ Tiptap 3 + KaTeX + ts-fsrs |
-| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），45 个命令 |
+| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），47 个命令 |
 | 存储 | SQLite3（WAL + 外键级联），默认 `%APPDATA%\com.qike.qbank\qbank.db`，`QKEBANK_DB` 环境变量可覆盖 |
 
 ## 功能

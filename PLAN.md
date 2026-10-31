@@ -248,6 +248,8 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `banks_create` | `name: String, description?: Option<String>` | name trim 后非空，否则 Err("题库名称不能为空")；id=UUIDv7（与试题同算法；种子库固定为 `bank_default`）；补时间戳 |
 | `banks_update` | `id: String, name?: Option<String>, description?: Option<String>` | 改名/改说明；name 给出时须非空；不存在 Err("Not Found") |
 | `banks_remove` | `id: String, actor?: Option<String>`（前端 `cmd()` 自动注入 device_id） | 同事务逐题墓碑 + 库墓碑 UPSERT 后 `DELETE`（级联清题/流水/复习态/移出标记）。**若为最后一个题库 → Err**。返回 `{"success":true,"data":{"id":...}}` |
+| `banks_duplicate` | `id: String, name?: Option<String>` | **FE-P1-02 新增**。复制题库：单事务内新建库（未给 name → `<原名> 副本`）+ 逐题插副本；题目 id 与子题 id 全部重排（子题 id = `<新父 id>_c<n>`，保留原 id 会让两个库的子题互相串引用）；`created_at/updated_at` 取当前时间、`synced_at` 走 `next_sync_stamp`。**不复制**作答流水 / 复习态 / 错题隐藏态（学过的痕迹不是题库内容）。返回 `{bank, copied}` |
+| `banks_export_md` | `name: String, content: String` | **FE-P1-02 新增**。把题库 Markdown 写入 `export/` 目录并返回 `{path}`。**定位是题目交换不是备份**（JSON 备份接口已随 FE-P0-01 移除，不得以「备份」措辞替代）：内容由前端 `utils/exportBank.js` 生成，格式与导入模板一致，导出的文件可直接被「导入试题」读回；文件名由后端重拼（去掉路径非法字符），不接受前端传路径 |
 
 **试题（bank_id 过滤 + 归属）**
 
@@ -435,7 +437,7 @@ export function persistBankFilter(page, id)
 - TODO 原文写的「记住各页筛选」设置**并不存在**，此处按 FE-P0-05 的既有做法用 localStorage 记住，不新增设置开关。
 
 ### api/practice.js（W2 改；FE-P0-11 再改）
-`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect,query,sort,minWrongCount})` → `cmd('wrong_list',…)` 取 `.data`（`query` 空白时不传）、`wrongStats({leaveAfterCorrect})` → `cmd('wrong_stats',…)`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect,query,sort,minWrongCount})` → `cmd('wrong_list',…)` 取 `.data`（`query` 空白时不传）、`wrongStats({leaveAfterCorrect})` → `cmd('wrong_stats',…)`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`duplicateBank(id?, name?)` → `cmd('banks_duplicate',…)` 取 `.data`、`exportBankMarkdown(name, content)` → `cmd('banks_export_md',…)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
 ### App.vue（W2 改；设置弹窗已抽出）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏保留**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）。
@@ -459,6 +461,15 @@ export function persistBankFilter(page, id)
 - 惰性加载：列表用 `summary=true` 只取摘要（元数据 + plain_text + children_count/children_score）；行内预览展开时 `questions_get(id)` 按需拉全量并缓存，翻页/重查后清空缓存。
 - 多选：首列勾选（表头全选本页）+ 选中条（批量移动 / 批量删除 / 取消选择），表格常驻不隐藏；多选时行内编辑禁用，移动/删除可用；翻页/重查后清空。
 - 移动（单题/批量共用）：行内「移动」按钮或选中条「移动」→ `selectDialog` 弹窗选目标库 → 确定执行。
+
+### Banks.vue（题库管理，FE-P1-02）
+- 双视图（卡片 / 紧凑列表，localStorage 记忆）；卡片栅格 `repeat(auto-fit,minmax(280px,1fr))`，窄窗口自动减列。
+- **快捷入口**：每张卡/每行 4 个（刷题 / 复习 / 错题 / 统计），统一经 `stores/banksView.js` 的 `shortcutHref()` 拼 `?bank=<id>`（禁止各处手写字符串）。
+- **搜索**：题库 > 3 个时才出现搜索框（少于此数只是噪声）；匹配名称与描述，忽略大小写与首尾空白；无命中给空态 + 「清除搜索」。
+- **排序**：自定义顺序 / 创建时间 / 最近更新 / 题数升降 / 名称；非法键回落自定义（`normalizeBankSort`）。
+- **拖拽排序**：仅「自定义顺序 + 无搜索」时开放（搜索结果里拖拽落位语义不确定，UI 显式说明原因）；落位走 `moveId()`，写回 `localStorage['qbank.banksOrder']`（全量 id 序列），重进页面仍生效；`applyIdOrder()` 负责丢弃已删库、追加新建库。
+- **复制题库**：应用内 `promptDialog` 取名（默认「原名 副本」）→ `banks_duplicate`；提示里带实际复制题数。**不继承**作答记录与复习进度。
+- **导出单库**：`banks_export_md` 落盘 `export/<库名>_<日期>.md`。格式与导入模板一致（`【单选】…答案：A`），**可被「导入试题」读回**，因此定位是**题目交换**；本地快照/备份待数据保全方案定案，UI 不称备份。
 
 ### Home.vue（首页 / 仪表盘，FE-P1-01）
 - **今日任务卡**（`total > 0` 时）：待复习到期（含今日到期 / 学习中）+ 今日已刷/目标（`settings.dailyGoal`，默认 20，可点铅笔改，走 `promptDialog`）+ 最弱题型（`records_overview.by_type` 里正确率最低且作答 ≥3 次、且正确率 <60% 的题型）+ 三个入口：「开始今日复习（N）」（`/review`，无到期时禁用）/「弱项专练（题型）」（`/practice?types=<type>`）/「直接刷题」（`/practice`）。首页 → 开始作答 = 1 次点击。
@@ -557,12 +568,12 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 181 条 / 9 模块 / **16.5s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 215 条 / 9 模块 / **16.2s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 | 21 | ~1.5s |
   | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~1.1s |
-  | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01） | 33 | ~1.3s |
+  | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01）+ 快捷入口/搜索/排序/拖拽/复制/导出（FE-P1-02） | 67 | ~1.9s |
   | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 | 9 | ~1.2s |
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 | 8 | ~0.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
