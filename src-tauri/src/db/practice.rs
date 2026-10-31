@@ -346,10 +346,138 @@ pub(crate) fn record_answer_impl(conn: &mut Connection, items: &[RecordItem]) ->
     Ok(json!({ "inserted": inserted, "skipped": skipped }))
 }
 
+/// 多题库筛选参数（FE-P1-09）：把 `bank_ids` 序列化成 JSON 供 `json_each` 展开。
+///
+/// 为什么用 JSON 而不是拼接 `IN (?,?,?)`：动态拼接占位符数量会把 SQL 变成字符串拼接，
+/// 一旦某处忘了转义就是注入面；`IN (SELECT value FROM json_each(?n))` 只有**一个**参数，
+/// 参数化结构固定，且 SQLite 自带 json1 扩展（本项目已用 json_extract，必然可用）。
+///
+/// 归一化：去空白、去空串、去重；空数组 → None（等价「全部题库」，与既有 `bank_id` 语义一致）。
+pub(crate) fn bank_ids_json(bank_ids: &Option<Vec<String>>) -> Option<String> {
+    let list = bank_ids.as_ref()?;
+    let mut seen = std::collections::BTreeSet::new();
+    for id in list {
+        let t = id.trim();
+        if !t.is_empty() {
+            seen.insert(t.to_string());
+        }
+    }
+    if seen.is_empty() {
+        return None;
+    }
+    Some(serde_json::to_string(&seen.into_iter().collect::<Vec<_>>()).unwrap_or_default())
+}
+
+/// 复习准备页的到期预测（FE-P1-09）。
+///
+/// 返回值分两部分：
+/// - `buckets`：逾期 / 今日 / 学习中 —— 三个**互斥**的桶。逾期与今日都按 `due_at` 切成，
+///   但「学习中」是 FSRS 的短时巩固卡（state 1/3），已经包含在前两者里，所以单列并注明可重叠。
+/// - `forecast`：未来 7 天**新增**到期（不含今天，从明天起 7 天），给准备页画小柱状图。
+///
+/// 口径与 `review_stats` / `review_due` 严格一致：只算 `published`，且都跟随题库筛选。
+/// 材料题按母题计（与 `by_type`、`due_*` 同口径）——**此处不改材料题统计口径**，
+/// 该口径属 FE-P0-12 决策范围。
 #[tauri::command]
-pub fn review_due(limit: Option<u64>, bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
+pub fn review_forecast(
+    bank_id: Option<String>,
+    bank_ids: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    let rows = review_due_impl(&conn, limit, bank_id)?;
+    ok(review_forecast_impl(&conn, bank_id, bank_ids)?)
+}
+
+pub(crate) fn review_forecast_impl(
+    conn: &Connection,
+    bank_id: Option<String>,
+    bank_ids: Option<Vec<String>>,
+) -> Result<Value, String> {
+    let bank_id = bank_id.filter(|s| !s.is_empty());
+    let banks = bank_ids_json(&bank_ids);
+    let (start_today, end_today) = today_bounds();
+
+    // 公共 WHERE：题库筛选 + 只算已发布
+    let where_sql = "(?3 IS NULL OR q.bank_id = ?3)
+       AND (?4 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?4)))
+       AND q.status = 'published'";
+
+    let count_where = |extra: &str, p1: String| -> Result<i64, String> {
+        conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+                 WHERE {where_sql} AND {extra}"
+            ),
+            params![p1, 0i64, bank_id, banks],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(to_str)
+    };
+
+    // 逾期：due_at 早于今天 0 点（严格早于「今日」）
+    let overdue = count_where("r.due_at < ?1", fmt_iso(start_today))?;
+    // 今日到期：今天 0 点 ≤ due_at ≤ 今天结束（与 review_due 的 cutoff 同口径）
+    let today = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+                 WHERE {where_sql} AND r.due_at >= ?1 AND r.due_at <= ?2"
+            ),
+            params![fmt_iso(start_today), fmt_iso(end_today), bank_id, banks],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(to_str)?;
+    // 学习中：state 1/3（Learning/Relearning）且今天结束前到期。
+    // 注意它**与前两桶可重叠**：这类卡本来就散落在逾期与今日里，单独给数是为了「今天还有短时巩固」这个提示。
+    let learning = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+                 WHERE {where_sql} AND r.due_at <= ?1 AND r.state IN (1, 3)"
+            ),
+            params![fmt_iso(end_today), 0i64, bank_id, banks],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(to_str)?;
+
+    // 未来 7 天（明天起）：逐日统计新增到期数
+    let mut forecast = Vec::with_capacity(7);
+    for i in 1..=7i64 {
+        let day_start = start_today + Duration::days(i);
+        let day_end = day_start + Duration::days(1);
+        let n: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
+                     WHERE {where_sql} AND r.due_at >= ?1 AND r.due_at < ?2"
+                ),
+                params![fmt_iso(day_start), fmt_iso(day_end), bank_id, banks],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(to_str)?;
+        forecast.push(json!({
+            "date": day_start.format("%Y-%m-%d").to_string(),
+            "count": n,
+        }));
+    }
+
+    Ok(json!({
+        "overdue": overdue,
+        "today": today,
+        "learning": learning,
+        "forecast": forecast,
+    }))
+}
+
+#[tauri::command]
+pub fn review_due(
+    limit: Option<u64>,
+    bank_id: Option<String>,
+    bank_ids: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = state.0.lock().map_err(to_str)?;
+    let rows = review_due_impl_multi(&conn, limit, bank_id, bank_ids)?;
     ok(json!(rows))
 }
 
@@ -444,13 +572,29 @@ pub(crate) fn review_revert_impl(conn: &mut Connection, items: &[RevertItem]) ->
     Ok(json!({ "reverted": reverted, "skipped": skipped }))
 }
 
+/// 单题库便捷入口：仅供测试与既有调用点使用（命令层直接走 `review_due_impl_multi`）。
+#[cfg(test)]
 pub(crate) fn review_due_impl(
     conn: &Connection,
     limit: Option<u64>,
     bank_id: Option<String>,
 ) -> Result<Vec<Value>, String> {
+    review_due_impl_multi(conn, limit, bank_id, None)
+}
+
+/// 复习拉题（FE-P1-09 支持多题库）。
+///
+/// `bank_ids` 与 `bank_id` 的关系：`bank_ids` 非空时以它为准（多选），否则退回单值 `bank_id`；
+/// 两者都空 = 全部题库。`bank_ids` 经 `json_each` 展开，只有**一个**占位符（不做动态拼接）。
+pub(crate) fn review_due_impl_multi(
+    conn: &Connection,
+    limit: Option<u64>,
+    bank_id: Option<String>,
+    bank_ids: Option<Vec<String>>,
+) -> Result<Vec<Value>, String> {
     let limit = limit.unwrap_or(20).min(500) as i64;
     let bank_id = bank_id.filter(|s| !s.is_empty());
+    let banks = bank_ids_json(&bank_ids);
     // 截止放宽到今天结束（与 stats.due_today 同口径）：今日到期、即使还没到具体时刻也能立即复习
     let cutoff = fmt_iso(today_bounds().1);
     // FE-P1-03：与练习池同口径，只复习 published；草稿被改回已发布后
@@ -460,11 +604,12 @@ pub(crate) fn review_due_impl(
          JOIN review_state r ON r.question_id = q.id
          WHERE r.due_at <= ?1
            AND (?3 IS NULL OR q.bank_id = ?3)
+           AND (?4 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?4)))
            AND q.status = 'published'
          ORDER BY r.due_at ASC
          LIMIT ?2"
     );
-    let mut out = query_questions(conn, &sql, params![cutoff, limit, bank_id])?;
+    let mut out = query_questions(conn, &sql, params![cutoff, limit, bank_id, banks])?;
     attach_fsrs_states(conn, &mut out)?;
     Ok(out)
 }
@@ -926,13 +1071,32 @@ pub(crate) fn exam_detail_impl(conn: &Connection, exam_id: &str) -> Result<Value
 /// 批量导入：一次调用入库多题（文件导入用）。逐条独立成功/跳过/失败，可重入（库内 plain_text 完全一致视为重复跳过）。
 /// 返回 {batch_id, items:[{index,status:'inserted'|'duplicate'|'error',id?,message?}]}
 #[tauri::command]
-pub fn review_stats(bank_id: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
+pub fn review_stats(
+    bank_id: Option<String>,
+    bank_ids: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(review_stats_impl(&conn, bank_id)?)
+    ok(review_stats_impl_multi(&conn, bank_id, bank_ids)?)
 }
 
+/// 单题库入口（既有调用点与测试用）；命令层走 `review_stats_impl_multi`。
+#[cfg(test)]
 pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> Result<Value, String> {
+    review_stats_impl_multi(conn, bank_id, None)
+}
+
+/// 统计（FE-P1-09 支持多题库）。
+///
+/// `bank_ids` 非空时以它为准（多选），否则退回单值 `bank_id`；都空 = 全部题库。
+/// 全部子查询共用同一组 `?N` 参数位，保证「可用题量 / 到期 / 学习中 / 按题型」口径一致。
+pub(crate) fn review_stats_impl_multi(
+    conn: &Connection,
+    bank_id: Option<String>,
+    bank_ids: Option<Vec<String>>,
+) -> Result<Value, String> {
     let bank_id = bank_id.filter(|s| !s.is_empty());
+    let banks = bank_ids_json(&bank_ids);
     let now = Utc::now();
     let (start_today, end_today) = today_bounds();
     let start_7d = start_today - Duration::days(6);
@@ -943,8 +1107,11 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     // 题目后来被改成草稿不该让正确率凭空变化。
     let total: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1) AND status = 'published'",
-            params![bank_id],
+            "SELECT COUNT(*) FROM questions
+             WHERE (?1 IS NULL OR bank_id = ?1)
+               AND (?2 IS NULL OR bank_id IN (SELECT value FROM json_each(?2)))
+               AND status = 'published'",
+            params![bank_id, banks],
             |r| r.get(0),
         )
         .map_err(to_str)?;
@@ -955,10 +1122,13 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     {
         let mut stmt = conn
             .prepare(
-                "SELECT type, COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1) AND status = 'published' GROUP BY type",
+                "SELECT type, COUNT(*) FROM questions
+                 WHERE (?1 IS NULL OR bank_id = ?1)
+                   AND (?2 IS NULL OR bank_id IN (SELECT value FROM json_each(?2)))
+                   AND status = 'published' GROUP BY type",
             )
             .map_err(to_str)?;
-        let mut rows = stmt.query(params![bank_id]).map_err(to_str)?;
+        let mut rows = stmt.query(params![bank_id, banks]).map_err(to_str)?;
         while let Some(row) = rows.next().map_err(to_str)? {
             let t: String = row.get(0).map_err(to_str)?;
             let c: i64 = row.get(1).map_err(to_str)?;
@@ -971,16 +1141,20 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let due_total: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
-             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2) AND q.status = 'published'",
-            params![fmt_iso(now), bank_id],
+             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
+               AND (?3 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?3)))
+               AND q.status = 'published'",
+            params![fmt_iso(now), bank_id, banks],
             |r| r.get(0),
         )
         .map_err(to_str)?;
     let due_today: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
-             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2) AND q.status = 'published'",
-            params![fmt_iso(end_today), bank_id],
+             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
+               AND (?3 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?3)))
+               AND q.status = 'published'",
+            params![fmt_iso(end_today), bank_id, banks],
             |r| r.get(0),
         )
         .map_err(to_str)?;
@@ -989,8 +1163,9 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
         .query_row(
             "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
              WHERE r.due_at <= ?1 AND r.state IN (1, 3) AND (?2 IS NULL OR q.bank_id = ?2)
+               AND (?3 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?3)))
                AND q.status = 'published'",
-            params![fmt_iso(end_today), bank_id],
+            params![fmt_iso(end_today), bank_id, banks],
             |r| r.get(0),
         )
         .map_err(to_str)?;
@@ -998,16 +1173,18 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let practiced_total: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM practice_records p JOIN questions q ON q.id = p.question_id
-             WHERE p.mode != 'exam' AND (?1 IS NULL OR q.bank_id = ?1)",
-            params![bank_id],
+             WHERE p.mode != 'exam' AND (?1 IS NULL OR q.bank_id = ?1)
+               AND (?2 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?2)))",
+            params![bank_id, banks],
             |r| r.get(0),
         )
         .map_err(to_str)?;
     let practiced_today: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM practice_records p JOIN questions q ON q.id = p.question_id
-             WHERE p.mode != 'exam' AND p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
-            params![fmt_iso(start_today), bank_id],
+             WHERE p.mode != 'exam' AND p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
+               AND (?3 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?3)))",
+            params![fmt_iso(start_today), bank_id, banks],
             |r| r.get(0),
         )
         .map_err(to_str)?;
@@ -1015,8 +1192,9 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let (rec_total, rec_correct): (i64, i64) = conn
         .query_row(
             "SELECT COUNT(*), COALESCE(SUM(p.correct), 0) FROM practice_records p
-             JOIN questions q ON q.id = p.question_id WHERE p.mode != 'exam' AND (?1 IS NULL OR q.bank_id = ?1)",
-            params![bank_id],
+             JOIN questions q ON q.id = p.question_id WHERE p.mode != 'exam' AND (?1 IS NULL OR q.bank_id = ?1)
+               AND (?2 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?2)))",
+            params![bank_id, banks],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(to_str)?;
@@ -1033,10 +1211,11 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
                 "SELECT substr(p.answered_at, 1, 10) AS d, COUNT(*), COALESCE(SUM(p.correct), 0)
                  FROM practice_records p JOIN questions q ON q.id = p.question_id
                  WHERE p.mode != 'exam' AND p.answered_at >= ?1 AND (?2 IS NULL OR q.bank_id = ?2)
+                   AND (?3 IS NULL OR q.bank_id IN (SELECT value FROM json_each(?3)))
                  GROUP BY d ORDER BY d",
             )
             .map_err(to_str)?;
-        let mut rows = stmt.query(params![fmt_iso(start_7d), bank_id]).map_err(to_str)?;
+        let mut rows = stmt.query(params![fmt_iso(start_7d), bank_id, banks]).map_err(to_str)?;
         while let Some(row) = rows.next().map_err(to_str)? {
             let d: String = row.get(0).map_err(to_str)?;
             let cnt: i64 = row.get(1).map_err(to_str)?;
@@ -2160,5 +2339,104 @@ mod tests {
         // 历史指标不按状态过滤：题目后来改成草稿，不该让已发生的作答凭空消失
         assert_eq!(st["practiced_total"], 0);
     }
+
+    /// FE-P1-09：复习准备页的到期预测 + 多题库筛选。
+    ///
+    /// 三条容易做错的点一次锁住：
+    /// ① 逾期 / 今日 / 未来 7 天**互不重叠**（逾期不含今天、forecast 从明天起）；
+    /// ② 「学习中」是 FSRS 短时卡，可与逾期/今日重叠（它是提示而非独立桶）；
+    /// ③ 多题库筛选与单值筛选、全部题库三者口径一致，且只算 published。
+    #[test]
+    fn review_forecast_buckets_are_disjoint_and_respect_multi_bank_filter() {
+        let conn = test_conn();
+        let mk_bank = |name: &str| banks_create_impl(&conn, name, None).unwrap()["id"].as_str().unwrap().to_string();
+        let bank_a = mk_bank("A 库");
+        let bank_b = mk_bank("B 库");
+
+        let mk_q = |qid: &str, bank: &str, status: &str| {
+            let mut q = sample_question();
+            q["id"] = json!(qid);
+            q["bank_id"] = json!(bank);
+            q["status"] = json!(status);
+            questions_create_impl(&conn, q).unwrap();
+        };
+        mk_q("q_yday", &bank_a, "published");
+        mk_q("q_today", &bank_a, "published");
+        mk_q("q_d3", &bank_b, "published");
+        mk_q("q_d7", &bank_b, "published");
+        mk_q("q_d8", &bank_b, "published");
+        mk_q("q_today_b", &bank_b, "published");
+        mk_q("q_draft", &bank_b, "draft"); // 草稿不进任何桶
+
+        // 以「今天 0 点」为基准造 due_at，避免依赖真实时刻
+        let (start_today, _) = today_bounds();
+        let at = |offset_hours: i64| fmt_iso(start_today + Duration::hours(offset_hours));
+        let card = |due: String, state: i64| FsrsCard {
+            stability: 1.0, difficulty: 5.0, reps: 1, lapses: 0, state,
+            learning_steps: 0, scheduled_days: 1.0, due_at: due,
+            last_reviewed_at: Some(at(-24)), last_result: Some("good".into()),
+        };
+        // 逾期：昨天
+        fsrs_upsert(&conn, "q_yday", &card(at(-24), 2), &at(-24)).unwrap();
+        // 今日：今天 10:00（state=1 学习中，用来验「学习中可与今日重叠」）
+        fsrs_upsert(&conn, "q_today", &card(at(10), 1), &at(-24)).unwrap();
+        // 未来第 3 / 7 / 8 天
+        fsrs_upsert(&conn, "q_d3", &card(at(3 * 24), 2), &at(-24)).unwrap();
+        fsrs_upsert(&conn, "q_d7", &card(at(7 * 24), 2), &at(-24)).unwrap();
+        fsrs_upsert(&conn, "q_d8", &card(at(8 * 24), 2), &at(-24)).unwrap();
+        // B 库今日
+        fsrs_upsert(&conn, "q_today_b", &card(at(9), 2), &at(-24)).unwrap();
+        // 草稿：今日到期但状态不是 published
+        fsrs_upsert(&conn, "q_draft", &card(at(9), 2), &at(-24)).unwrap();
+
+        let all = review_forecast_impl(&conn, None, None).unwrap();
+        assert_eq!(all["overdue"], 1, "只有 q_yday 逾期");
+        assert_eq!(all["today"], 2, "q_today + q_today_b（q_draft 是草稿不算）");
+        assert_eq!(all["learning"], 1, "只有 state=1 的 q_today 算学习中");
+        let f = all["forecast"].as_array().unwrap();
+        assert_eq!(f.len(), 7, "未来 7 天");
+        assert_eq!(f[2]["count"], 1, "第 3 天有 1 题");
+        assert_eq!(f[6]["count"], 1, "第 7 天有 1 题");
+        // 第 8 天不在窗口内
+        assert_eq!(f.iter().map(|d| d["count"].as_i64().unwrap()).sum::<i64>(), 2);
+        // 日期是「明天起」而不是「今天起」
+        let tomorrow = (start_today + Duration::days(1)).format("%Y-%m-%d").to_string();
+        assert_eq!(f[0]["date"], json!(tomorrow));
+
+        // 单题库筛选
+        let a = review_forecast_impl(&conn, Some(bank_a.clone()), None).unwrap();
+        assert_eq!(a["overdue"], 1);
+        assert_eq!(a["today"], 1);
+        let b = review_forecast_impl(&conn, Some(bank_b.clone()), None).unwrap();
+        assert_eq!(b["overdue"], 0);
+        assert_eq!(b["today"], 1);
+
+        // 多题库筛选：两个都选 = 全部（但草稿仍不算）
+        let both = review_forecast_impl(&conn, None, Some(vec![bank_a.clone(), bank_b.clone()])).unwrap();
+        assert_eq!(both["overdue"], 1);
+        assert_eq!(both["today"], 2);
+        // 只选 B
+        let only_b = review_forecast_impl(&conn, None, Some(vec![bank_b.clone()])).unwrap();
+        assert_eq!(only_b["overdue"], 0);
+        assert_eq!(only_b["today"], 1);
+        // 空数组等价「全部题库」
+        let empty = review_forecast_impl(&conn, None, Some(vec![])).unwrap();
+        assert_eq!(empty["today"], 2, "空数组应等价全部题库，而不是「一个都不选」");
+
+        // review_stats 的多库口径与预测一致
+        let st = review_stats_impl_multi(&conn, None, Some(vec![bank_a.clone()])).unwrap();
+        assert_eq!(st["total"], 2, "A 库可用题量（published 2 题）");
+        let st_all = review_stats_impl_multi(&conn, None, None).unwrap();
+        assert_eq!(st_all["total"], 6, "全部库 published 6 题（草稿不算）");
+        let st_both = review_stats_impl_multi(&conn, None, Some(vec![bank_a.clone(), bank_b.clone()])).unwrap();
+        assert_eq!(st_both["total"], 6, "两库都选 = 全部 published");
+
+        // review_due 多库：只拉选中的库
+        let due_b = review_due_impl_multi(&conn, Some(50), None, Some(vec![bank_b.clone()])).unwrap();
+        assert!(due_b.iter().all(|q| q["bank_id"] == json!(bank_b)), "只应拉 B 库");
+        let due_all = review_due_impl_multi(&conn, Some(50), None, None).unwrap();
+        assert!(due_all.len() >= due_b.len());
+    }
+
 
 }

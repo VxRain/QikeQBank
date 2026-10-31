@@ -24,11 +24,32 @@ export async function reviewRevert(items) {
   return unwrap(await cmd('review_revert', { items }))
 }
 
-/** @returns {Promise<import('./types.js').Question[]>} */
-export async function reviewDue({ limit = 20, bankId } = {}) {
+/**
+ * 拉取今日到期题（FE-P1-09 起支持多题库）。
+ * `bankIds` 非空时以它为准（多选），否则退回单值 `bankId`；都空 = 全部题库。
+ * @returns {Promise<import('./types.js').Question[]>}
+ */
+export async function reviewDue({ limit = 20, bankId, bankIds } = {}) {
   const args = { limit }
   if (bankId) args.bankId = bankId
+  if (Array.isArray(bankIds) && bankIds.length) args.bankIds = bankIds
   return unwrap(await cmd('review_due', args))
+}
+
+/**
+ * 复习准备页的到期预测（FE-P1-09）。
+ *
+ * 返回 `{overdue, today, learning, forecast:[{date,count}]}`：
+ * - `overdue` / `today` **互斥**（逾期不含今天）；
+ * - `learning` 是 FSRS 短时巩固卡（state 1/3），**可与前两者重叠**，仅作提示；
+ * - `forecast` 是**明天起** 7 天的新增到期数。
+ * @returns {Promise<{overdue:number, today:number, learning:number, forecast:Array<{date:string,count:number}>}>}
+ */
+export async function reviewForecast({ bankId, bankIds } = {}) {
+  const args = {}
+  if (bankId) args.bankId = bankId
+  if (Array.isArray(bankIds) && bankIds.length) args.bankIds = bankIds
+  return unwrap(await cmd('review_forecast', args))
 }
 
 /** @returns {Promise<{total:number, items:import('./types.js').Question[]}>} */
@@ -67,10 +88,18 @@ export async function wrongDismiss(questionId) {
   return unwrap(await cmd('wrong_dismiss', { questionId }))
 }
 
-/** @returns {Promise<import('./types.js').PracticeStats>} */
+/**
+ * 复习/可用题量统计。`bankId` 接受字符串（单库）或字符串数组（多库，FE-P1-09）。
+ * @param {string|string[]} [bankId]
+ * @returns {Promise<import('./types.js').PracticeStats>}
+ */
 export async function stats(bankId) {
   const args = {}
-  if (bankId) args.bankId = bankId
+  if (Array.isArray(bankId)) {
+    if (bankId.length) args.bankIds = bankId
+  } else if (bankId) {
+    args.bankId = bankId
+  }
   return unwrap(await cmd('review_stats', args))
 }
 

@@ -307,8 +307,9 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?, query?, sort?, min_wrong_count?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500。**FE-P0-11 新增**：`query` 匹配 `plain_text`（空白视为不过滤）；`sort` 走白名单 `WRONG_SORT_WHITELIST`（`last_wrong_desc` 默认，保持改造前行为 / `last_wrong_asc` / `wrong_count_desc` / `wrong_count_asc`），未知名 Err；`min_wrong_count` ≤ 1 视为不过滤（1 即「所有错过」）。**FE-P1-08：`leave_after_correct = 0` 表示永不自动移出**（不施加 `consec_correct` 约束；写成 `< 0` 会恒假导致错题本全空），上限仍钳到 10；`wrong_stats` 同口径 |
 | `wrong_stats` | `leave_after_correct?`（0 = 永不自动移出，FE-P1-08） | **FE-P0-11 新增**。返回 `{total, stubborn, by_bank, by_type}`，口径与 `wrong_list` 同一份 CTE + WHERE（否则统计与列表对不上）；`stubborn` 固定 `wrong_count >= 3`。**刻意不受 bank/type/query/stubborn 筛选影响**：它是全库概览，否则筛完只剩 1 题时统计条写「共 12 题」会自相矛盾 |
 | `wrong_dismiss` | `question_id` | 软状态：UPSERT `is_dismissed=1, updated_at=now`（不删练习记录）；答错时翻转为 0（重回错题本）；`wrong_list` 谓词改为 `is_dismissed=1` 才隐藏 |
-| `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤；每题附加 `fsrs` 对象（无状态行为 null） |
-| `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期） |
+| `review_due` | `limit?, bank_id?, bank_ids?` | 有 bank_id 时过滤；每题附加 `fsrs` 对象（无状态行为 null）。**FE-P1-09 新增 `bank_ids`**（多选题库）：非空时以它为准，用 `IN (SELECT value FROM json_each(?))` 展开（**一个**占位符，不做动态拼接，避免注入面）；空数组等价不筛选；仍只抽 `published` |
+| `review_forecast` | `bank_id?, bank_ids?` | **FE-P1-09 新增**。复习准备页的到期预测：`{overdue, today, learning, forecast:[{date,count}]}`。**口径**：`overdue`（due_at < 今天 0 点）与 `today`（今天 0 点 ≤ due_at ≤ 今天结束）**互斥**；`learning`（state 1/3 且今天结束前到期）**可与前两者重叠**，是「其中」提示而非独立桶（三桶相加会重复计数）；`forecast` 为**明天起 7 天**新增到期数。全部只算 `published`，题库筛选与 `review_stats` 同口径 |
+| `review_stats` | `bank_id?, bank_ids?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期）。**FE-P1-09 新增 `bank_ids`**（多选），全部子查询共用同一组参数位，保证「可用题量 / 到期 / 学习中 / 按题型」口径一致 |
 | `record_answer` | `items[]`：`{id?, question_id, mode, grade?, answered_at?, elapsed_ms?, detail?, card?, fsrs_log?}` | `id` 合法 UUID 采用（离线幂等，缺省生成；非法 Err）；`answered_at` 合法 ISO 采用 + 未来钳制（缺省 now）；`INSERT OR IGNORE`，同 ID 同内容跳过、异内容整批 Err；题目不存在/有墓碑则该项跳过（`skipped`）；**仅实际插入才 upsert `review_state`**；`review_state.updated_at = last_reviewed_at = answered_at`（发生时间），gated 比较防补退。返回 `{inserted, skipped}` |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `review_revert` | `items[]`：`{record_id, question_id, card?}` | 撤销上一条复习评分（FE-P0-06）：只接受 `mode='review'` 流水（否则整批 Err）；删 `practice_records` 后按 `card` 写回 `review_state`（`card=null` 则整行删除，回到「从没复习过」）；重复撤销同 ID 返回 `reverted:0/skipped:1`（幂等）。返回 `{reverted, skipped}` |
@@ -478,6 +479,23 @@ export function persistBankFilter(page, id)
 - 纯逻辑全在 `src/utils/dailyTask.js`（`dailyProgress` / `weakestType` / `syncFreshness` / `newUserSteps` / `entryHref`），由 `tests/unit/daily-task.test.js`（19 条）锁住「数据缺失不冒充 0」的分支。
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
+
+### 复习准备页拆分与预测（FE-P1-09）
+- `review_forecast` 新命令：`{overdue, today, learning, forecast:[{date,count}]}`。
+  `overdue` 与 `today` **互斥**；`learning`（FSRS state 1/3）**可与前两者重叠**，UI 写成「其中学习中 N」，
+  「本轮可复习」只取 `overdue + today`——三桶相加会重复计数，而数字对不上时用户只会以为统计坏了。
+  `forecast` 是**明天起** 7 天（不含今天）。
+- 题库多选：`review_stats` / `review_due` / `review_forecast` 均支持 `bank_ids`，用
+  `IN (SELECT value FROM json_each(?))` 展开——**一个**占位符、不做动态拼接（避免注入面）。
+  统一经 `utils/reviewPlan.js::bankScopeOf` 归一：全选或全不选 → `null`（= 全部题库，不是 0 题）。
+- 题型筛选：勾选只改提示与确认，**不改拉题逻辑**。页面显式标注「题型按母题计：材料题的子题不会因
+  勾选其子题型被单独拉出（口径待 FE-P0-12 统一定义）」——不静默改 P0-12 未定的口径。
+- 稍后（`shelveAt`）：把当前题挪出本轮队列、留到末尾，可撤销；**只动内存队列**，不写库不动 `due_at`
+  （改排期属复习算法语义且会进同步，不在本项范围）。只剩一题时禁用并说明原因。
+- 本轮暂停：落一次会话草稿 + 回准备页刷新统计，toast 给「已复习 N 题 / 还剩 M 题」。
+- 守卫：`tests/unit/review-plan.test.js` 26 条（三桶互斥/总量不含 learning/柱状图归一与 0 值/多选语义/
+  搁置边界/暂停文案 + 4 条视图接线静态守卫）；cargo 新增
+  `review_forecast_buckets_are_disjoint_and_respect_multi_bank_filter`（159）；e2e `review` 18 → 41。
 
 ### 错题本移出规则与导出（FE-P1-08）
 - **阈值 0 = 永不自动移出**：`wrong_list_impl` / `wrong_stats_impl` 都不再 `clamp(1,10)`，改为 `min(10)`；
@@ -652,7 +670,7 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 310 条 / 9 模块 / **30.2s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 333 条 / 9 模块 / **33.2s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页/另存为副本（FE-P1-03/04/05） | 43 | ~1.9s |
@@ -660,7 +678,7 @@ export function persistBankFilter(page, id)
   | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01）+ 快捷入口/搜索/排序/拖拽/复制/导出（FE-P1-02） | 67 | ~1.9s |
   | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 + 状态三态 + 材料子题排序·改题型·复制（FE-P1-03/05） | 27 | ~2.4s |
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 + 选项标色/完成闭环/弱项专练/计时与难度（FE-P1-06） | 27 | ~5.6s |
-  | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
+  | `review` | 复习：间隔预览 / 撤销 / 最后一题 + 到期拆分·7 天预测·多选题库·稍后/暂停（FE-P1-09） | 41 | ~2.2s |
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 + 100 分标准卷/暂停继续/按库趋势（FE-P1-07） | 38 | ~9.0s |
   | `wrong` | 错题本：搜索 / 排序 / 统计 + 移出规则/导出 MD·JSON/行内编辑（FE-P1-08） | 39 | ~1.5s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |

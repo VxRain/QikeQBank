@@ -126,7 +126,7 @@ const MODULE_BASELINE = {
   batch: 15,
   form: 27,
   practice: 27,
-  review: 18,
+  review: 41,
   exam: 38,
   wrong: 39,
   banks: 67,
@@ -338,7 +338,33 @@ function mockScript() {
           const lim = args?.limit ?? pool.length
           return { success: true, data: pool.slice(0, lim) }
         }
-        case 'review_due': return { success: true, data: qs.slice(0, window.__reviewOnly ? 1 : 5) }
+        case 'review_due': {
+          window.__reviewDueArgs = args
+          let pool = qs.slice(0, window.__reviewOnly ? 1 : 5)
+          // FE-P1-09：多题库/单题库筛选必须如实生效，否则「选了库却没变」测不出来
+          if (args?.bankId) pool = pool.filter((q) => q.bank_id === args.bankId)
+          if (Array.isArray(args?.bankIds) && args.bankIds.length) pool = pool.filter((q) => args.bankIds.includes(q.bank_id))
+          return { success: true, data: pool }
+        }
+        case 'review_forecast': {
+          // FE-P1-09：逾期/今日/学习中 + 未来 7 天预测。数值可控，便于断言拆分与柱状图。
+          window.__forecastArgs = args
+          const f = window.__forecast || {
+            overdue: 2,
+            today: 3,
+            learning: 1,
+            forecast: [
+              { date: '2026-11-01', count: 0 },
+              { date: '2026-11-02', count: 4 },
+              { date: '2026-11-03', count: 8 },
+              { date: '2026-11-04', count: 2 },
+              { date: '2026-11-05', count: 0 },
+              { date: '2026-11-06', count: 1 },
+              { date: '2026-11-07', count: 0 }
+            ]
+          }
+          return { success: true, data: f }
+        }
         case 'record_answer': window.__recorded.push(args); return { success: true, data: { inserted: 1, skipped: 0 } }
         case 'review_revert': window.__reverted.push(args); return { success: true, data: { reverted: 1, skipped: 0 } }
         case 'exam_sessions': {
@@ -1433,6 +1459,83 @@ const MODULES = [
       const afterUndoBody = await page.locator('body').innerText()
       ok('撤销后回到作答卡（可重新评分）', /自评记忆效果/.test(afterUndoBody))
       await page.evaluate(() => { window.__reviewOnly = 0 })
+
+      // ══ FE-P1-09 到期拆分 / 7 天预测 / 多题库 / 题型筛选 / 稍后 / 本轮暂停 ══
+      await goto(page, '#/banks')
+      await goto(page, '#/review')
+      const prepText = await page.locator('body').innerText()
+
+      // 三桶拆分：逾期 / 今日 / 学习中；且「本轮可复习 = 逾期 + 今日」（learning 不计入）
+      ok('准备页显示「逾期」', /逾期/.test(prepText))
+      ok('准备页显示「今日到期」', /今日到期/.test(prepText))
+      ok('准备页显示「学习中」并注明是其中项', /学习中/.test(prepText) && /含在以上两项里/.test(prepText))
+      ok('文案说明学习中已包含在待复习里', /其中学习中/.test(prepText))
+      // mock: overdue=2, today=3, learning=1 → 本轮可复习 5
+      ok('本轮可复习 = 逾期 + 今日（不含学习中）', /本轮可复习\s*\n?\s*5/.test(prepText), prepText.match(/本轮可复习[\s\S]{0,12}/)?.[0] || '')
+      ok('逾期数正确显示 2', /逾期\s*\n?\s*2/.test(prepText), prepText.match(/逾期[\s\S]{0,10}/)?.[0] || '')
+
+      // 未来 7 天预测柱状图
+      ok('准备页有未来 7 天到期预测', /未来 7 天到期预测/.test(prepText))
+      // 用日期戳精确定位柱子（title 形如 "2026-11-01 到期 0 题"），避免把其它带「到期」的元素算进来
+      const forecastBars = await page.locator('[title^="2026-11-"]').count()
+      ok('预测渲染 7 根柱子', forecastBars === 7, `${forecastBars} 根`)
+      ok('预测显示合计与峰值', /共 15 题/.test(prepText) && /峰值 8\/天/.test(prepText),
+        prepText.match(/共 \d+ 题[^\n]*/)?.[0] || '')
+      const forecastArgs = await page.evaluate(() => window.__forecastArgs)
+      ok('预测走独立命令 review_forecast', forecastArgs !== undefined)
+
+      // 题库多选：勾第二个库后按 bankIds 拉数据
+      const bankChecks = page.locator('label').filter({ hasText: /默认题库|第二题库/ })
+      ok('题库以多选形式呈现', (await bankChecks.count()) >= 2, `${await bankChecks.count()} 个`)
+      await bankChecks.nth(1).click()
+      await flush(page)
+      const multiArgs = await page.evaluate(() => window.__forecastArgs)
+      ok('多选题库后按 bankIds 请求预测', Array.isArray(multiArgs?.bankIds) && multiArgs.bankIds.length === 1,
+        JSON.stringify(multiArgs))
+      ok('已选数量有提示', /已选 1 \/ \d+/.test(await page.locator('body').innerText()))
+      // 清空选择 = 全部题库（不是 0 题）
+      await page.getByRole('button', { name: /全部题库/ }).first().click()
+      await flush(page)
+      const clearedArgs = await page.evaluate(() => window.__forecastArgs)
+      ok('清空选择后回到全部题库（不再传 bankIds）', clearedArgs?.bankIds === undefined, JSON.stringify(clearedArgs))
+
+      // 题型筛选（先确保回到准备页：上面的多选点击可能已把页面带离 setup）
+      await goto(page, '#/banks')
+      await goto(page, '#/review')
+      // 题型标签用 constants 的短名（单选 / 判断），不是「单选题」。
+      // 坑：locator.filter({hasText: /^x$/}) 对「label 内含隐藏 input」的文本归一化很脆（实测 0 命中），
+      // 直接用 evaluateAll 自己比对 trim 后的文本。
+      const typeLabelTexts = await page.locator('label').evaluateAll((els) => els.map((e) => (e.textContent || '').trim()))
+      const typeCheckCount = typeLabelTexts.filter((t) => /^(单选|多选|判断|填空|简答|材料)$/.test(t)).length
+      ok('题型以筛选形式呈现', typeCheckCount >= 2, `${typeCheckCount} 个：${JSON.stringify(typeLabelTexts)}`)
+      const typeChecks = page.locator('label').filter({ hasText: '单选' })
+      await typeChecks.first().click()
+      await flush(page)
+      ok('勾选题型后给出材料题口径说明', /题型按母题计/.test(await page.locator('body').innerText()))
+      ok('说明中标注口径待 FE-P0-12', /FE-P0-12/.test(await page.locator('body').innerText()))
+      await typeChecks.first().click()
+
+      // 稍后 / 本轮暂停
+      await page.getByRole('button', { name: /^开始复习$/ }).click()
+      await flush(page)
+      const cardMenu = await page.locator('body').innerText()
+      ok('作答卡有「稍后」入口', /稍后/.test(cardMenu))
+      ok('作答卡有「本轮暂停」入口', /本轮暂停/.test(cardMenu))
+      const beforeShelve = await page.locator('body').innerText()
+      const idxBefore = beforeShelve.match(/第 (\d+) \/ (\d+) 题/)
+      await page.getByRole('button', { name: /^稍后$/ }).click()
+      await flush(page)
+      const afterShelve = await page.locator('body').innerText()
+      const idxAfter = afterShelve.match(/第 (\d+) \/ (\d+) 题/)
+      ok('稍后后本轮题数减少 1', !!idxBefore && !!idxAfter && Number(idxAfter[2]) === Number(idxBefore[2]) - 1,
+        `${idxBefore?.[0]} → ${idxAfter?.[0]}`)
+      ok('稍后给出本轮末尾提示', /已稍后/.test(afterShelve))
+      // 多选题库后开始复习：review_due 必须带 bankIds
+      await page.getByRole('button', { name: /本轮暂停/ }).click()
+      await flush(page)
+      const pausedText = await page.locator('body').innerText()
+      ok('本轮暂停回到准备页', /未来 7 天到期预测/.test(pausedText), pausedText.slice(0, 80).replace(/\n/g, ' | '))
+      ok('暂停给出「已复习 N 题」摘要', /已复习 \d+ 题/.test(pausedText), pausedText.match(/已复习[^\n]*/)?.[0] || '')
     }
   },
 

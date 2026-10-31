@@ -8,17 +8,93 @@
         <h2 class="section-title flex items-center gap-2"><i class="i-lucide-repeat text-primary" />间隔复习</h2>
         <span class="badge badge-type">FSRS</span>
       </div>
+      <!-- FE-P1-09 到期拆分：逾期 / 今日 / 学习中（learning 是「其中」，不与前两者相加） -->
+      <div class="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-2.5 mb-4.5">
+        <div class="p-3 border border-line rounded-[12px] bg-bg-accent flex flex-col gap-0.5">
+          <div class="text-[12px] text-muted">逾期</div>
+          <div class="text-[22px] font-800 leading-none font-[var(--serif)]" :class="buckets.overdue > 0 ? 'text-danger' : 'text-text'">{{ buckets.overdue }}</div>
+          <div class="text-[11px] text-muted-light">早于今天 0 点到期</div>
+        </div>
+        <div class="p-3 border border-line rounded-[12px] bg-bg-accent flex flex-col gap-0.5">
+          <div class="text-[12px] text-muted">今日到期</div>
+          <div class="text-[22px] font-800 leading-none font-[var(--serif)]" :class="buckets.today > 0 ? 'text-primary' : 'text-text'">{{ buckets.today }}</div>
+          <div class="text-[11px] text-muted-light">今天 0 点后到期</div>
+        </div>
+        <div class="p-3 border border-line rounded-[12px] bg-bg-accent flex flex-col gap-0.5">
+          <div class="text-[12px] text-muted">学习中</div>
+          <div class="text-[22px] font-800 leading-none font-[var(--serif)] text-text">{{ buckets.learning }}</div>
+          <div class="text-[11px] text-muted-light">含在以上两项里</div>
+        </div>
+        <div class="p-3 border border-primary-border rounded-[12px] bg-primary-bg flex flex-col gap-0.5">
+          <div class="text-[12px] text-muted">本轮可复习</div>
+          <div class="text-[22px] font-800 leading-none font-[var(--serif)] text-primary">{{ buckets.total }}</div>
+          <div class="text-[11px] text-muted-light">逾期 + 今日</div>
+        </div>
+      </div>
+
       <p class="text-text-secondary text-[14px] leading-[1.8] m-0 mb-4.5">
-        {{ bankName ? `「${bankName}」` : '全部题库' }}当前待复习 <b class="text-primary text-[18px]">{{ dueTotal }}</b> 题，今日到期 <b class="text-primary text-[18px]">{{ dueToday }}</b> 题<span v-if="learningDue > 0">（其中学习中 <b class="text-primary text-[18px]">{{ learningDue }}</b> 题）</span>。
+        {{ bankScopeLabel }}当前待复习 <b class="text-primary text-[18px]">{{ buckets.total }}</b> 题<span v-if="buckets.showLearning">（其中学习中 <b class="text-primary">{{ buckets.learning }}</b> 题，是今天的短时巩固卡）</span>。
         按记忆状态安排。
       </p>
 
+      <!-- FE-P1-09 未来 7 天到期预测（明天起，不含今天） -->
+      <div class="mb-4.5 p-3 border border-line rounded-[12px] bg-card">
+        <div class="flex items-baseline justify-between gap-3 mb-2">
+          <div class="text-[13px] font-600 text-text flex items-center gap-1.5">
+            <i class="i-lucide-calendar-days text-primary text-[14px]" />未来 7 天到期预测
+          </div>
+          <div class="text-[12px] text-muted-light">
+            <template v-if="forecast.sum > 0">共 {{ forecast.sum }} 题 · 峰值 {{ forecast.max }}/天</template>
+            <template v-else>未来 7 天没有安排</template>
+          </div>
+        </div>
+        <div v-if="forecast.bars.length" class="flex items-end gap-2 h-[72px]">
+          <div v-for="b in forecast.bars" :key="b.date" class="flex-1 flex flex-col items-center justify-end gap-1 min-w-0" :title="`${b.date} 到期 ${b.count} 题`">
+            <div class="w-full max-w-[40px] h-[48px] flex items-end bg-bg-accent border border-line rounded-[6px] p-[2px]">
+              <div class="w-full bg-primary rounded-[4px]" :style="{ height: b.pct + '%' }" :class="b.pct === 0 && 'min-h-0'" />
+            </div>
+            <div class="text-[11px] text-text-secondary tabular-nums">{{ b.count }}</div>
+            <div class="text-[10px] text-muted-light whitespace-nowrap">{{ b.label }}</div>
+          </div>
+        </div>
+      </div>
+
       <div class="mb-4.5">
-        <div class="field-label">题库</div>
-        <select v-model="bankId" class="select w-full max-w-[320px]" @change="onBankChange">
-          <option value="">全部题库</option>
-          <option v-for="b in bankStore.banks" :key="b.id" :value="b.id">{{ b.name }}</option>
-        </select>
+        <div class="field-label !flex items-center justify-between gap-2">
+          <span>题库（可多选）</span>
+          <span class="text-[12px] text-muted-light">{{ selectedBankIds.length ? `已选 ${selectedBankIds.length} / ${bankStore.banks.length}` : '全部题库' }}</span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <label
+            v-for="b in bankStore.banks"
+            :key="b.id"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-line rounded-full bg-card text-text-secondary text-[13px] cursor-pointer transition-[background-color,border-color,color] duration-150 select-none"
+            :class="selectedBankIds.includes(b.id) && 'bg-primary-bg border-primary-border text-primary font-600'"
+          >
+            <input v-model="selectedBankIds" type="checkbox" :value="b.id" class="hidden" @change="onBankChange" />
+            {{ b.name }}
+          </label>
+          <button v-if="selectedBankIds.length" type="button" class="btn btn-small" @click="clearBanks"><i class="i-lucide-x" />全部题库</button>
+        </div>
+        <div v-if="!bankStore.banks.length" class="text-[12px] text-muted-light">还没有题库，去「题库」页建一个</div>
+      </div>
+
+      <div class="mb-4.5">
+        <div class="field-label">题型（可筛选）</div>
+        <div class="flex flex-wrap gap-2">
+          <label
+            v-for="t in QUESTION_TYPES"
+            :key="t.key"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-line rounded-full bg-card text-text-secondary text-[13px] cursor-pointer transition-[background-color,border-color,color] duration-150 select-none"
+            :class="typeFilter.includes(t.key) && 'bg-primary-bg border-primary-border text-primary font-600'"
+          >
+            <input v-model="typeFilter" type="checkbox" :value="t.key" class="hidden" @change="onTypeFilterChange" />
+            {{ t.label }}
+          </label>
+        </div>
+        <div v-if="typeFilterNote" class="text-[12px] text-muted mt-1.5 flex items-center gap-1.5">
+          <i class="i-lucide-info" />{{ typeFilterNote }}
+        </div>
       </div>
 
       <div class="mb-4.5">
@@ -84,10 +160,23 @@
           <span class="badge badge-type">{{ curBadge }}</span>
           <span v-if="curFsrsState === 1 || curFsrsState === 3" class="badge shrink-0"><i class="i-lucide-book-open" />学习中</span>
         </div>
-        <span class="text-[13px] text-muted font-500 shrink-0">
-          第 {{ curIdx + 1 }} / {{ pool.length }} 题
-          <span class="ml-1.5 text-muted-light">· 已复习 {{ reviewedCount }} / 剩 {{ retainCount }}</span>
-        </span>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-[13px] text-muted font-500">
+            第 {{ curIdx + 1 }} / {{ pool.length }} 题
+            <span class="ml-1.5 text-muted-light">· 已复习 {{ reviewedCount }} / 剩 {{ retainCount }}</span>
+          </span>
+          <!-- FE-P1-09：稍后（把本题挪到本轮末尾）+ 本轮暂停（存进度、回准备页） -->
+          <button
+            type="button"
+            class="btn btn-small"
+            :disabled="pool.length <= 1"
+            :title="pool.length <= 1 ? '只剩这一题，稍后没有意义' : '稍后：把本题挪到本轮末尾，稍后再回来'"
+            @click="shelveCurrent"
+          ><i class="i-lucide-clock" />稍后</button>
+          <button type="button" class="btn btn-small" title="本轮暂停：保存进度并回到准备页" @click="pauseRound">
+            <i class="i-lucide-pause" />本轮暂停
+          </button>
+        </div>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
 
@@ -216,7 +305,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { reviewDue, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.js'
+import { reviewDue, reviewForecast, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
@@ -231,6 +320,8 @@ import { typeLabel } from '@/constants/questions.js'
 import { previewIntervals, revertPayloadOf, REVERT_WINDOW_MS } from '@/utils/reviewPreview.js'
 import { randomUUID } from '@/utils/device.js'
 import { loadRunConfig, saveRunConfig, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { splitDueBuckets, forecastBars, bankScopeOf, shelveAt, pauseSummary } from '@/utils/reviewPlan.js'
+import { QUESTION_TYPES } from '@/constants/questions.js'
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref('')
@@ -270,6 +361,55 @@ const dueLoading = ref(false)
 const dueTotal = ref(0)
 const dueToday = ref(0)
 const learningDue = ref(0)
+
+// ── FE-P1-09 多选题库 / 题型筛选 / 到期预测 ──
+/** 选中的题库 id（空 = 全部题库；语义由 bankScopeOf 统一） */
+const selectedBankIds = ref([])
+/** 题型筛选（空 = 不限） */
+const typeFilter = ref([])
+/** review_forecast 返回值 */
+const forecastRaw = ref(null)
+
+const buckets = computed(() =>
+  splitDueBuckets(
+    forecastRaw.value || { overdue: 0, today: dueToday.value, learning: learningDue.value }
+  )
+)
+const forecast = computed(() => forecastBars(forecastRaw.value?.forecast))
+
+/** 传给后端的题库范围：null = 全部（与后端语义一致） */
+const bankScope = computed(() =>
+  bankScopeOf(
+    selectedBankIds.value || [],
+    (bankStore.banks || []).map((b) => b.id)
+  )
+)
+
+const bankScopeLabel = computed(() => {
+  const scope = bankScope.value
+  if (!scope) return '全部题库'
+  const names = scope
+    .map((id) => bankStore.banks.find((b) => b.id === id)?.name)
+    .filter(Boolean)
+  if (names.length <= 2) return `「${names.join('」「')}」`
+  return `已选 ${names.length} 个题库`
+})
+
+/**
+ * 题型筛选的说明。
+ *
+ * **刻意不改材料题口径**：`review_due` 按母题拉题、按子题展开，题型筛选在母题层生效，
+ * 所以勾「判断题」不会把材料题里的判断子题拉出来。这是 FE-P0-12 要定的口径问题，
+ * 这里只如实说明，不偷偷改逻辑。
+ */
+const typeFilterNote = computed(() => {
+  if (!typeFilter.value.length) return ''
+  return '题型按母题计：材料题的子题不会因勾选其子题型而被单独拉出（口径待 FE-P0-12 统一定义）'
+})
+
+function onTypeFilterChange() {
+  // 题型筛选只影响提示与开始复习时的确认，不改变数量统计（后端按母题计）
+}
 const remainingDue = ref(null)
 // FE-P0-05：待复习 0 题时禁用开始（不让人点下去才报错）
 // 口径必须跟 review_due 一致：后端拉到的是 due_at <= 今天结束（due_today），
@@ -578,17 +718,40 @@ async function resumeSession(snap) {
 }
 
 function onBankChange() {
-  persistBankFilter('review', bankId.value)
+  // 单选下拉是旧的兼容入口（?bank= 深链）；多选时代以 selectedBankIds 为准
+  if (bankId.value) {
+    selectedBankIds.value = [bankId.value]
+    persistBankFilter('review', bankId.value)
+  }
   refreshDue()
+}
+
+function clearBanks() {
+  selectedBankIds.value = []
+  bankId.value = ''
+  refreshDue()
+}
+
+/** 统一的题库参数：多选优先，单值兜底（供 stats / review_due 共用，避免两处口径漂移） */
+function scopeArg() {
+  const scope = bankScope.value
+  return scope && scope.length ? scope : null
 }
 
 async function refreshDue() {
   try {
-    // 统计跟随当前选中的题库（与开始复习的拉题范围一致，避免计数和实际可复习对不上）
-    const s = await fetchStats(bankId.value || undefined)
+    // 统计与预测都跟随当前选中的题库，与 start() 的拉题范围一致，
+    // 否则会出现「显示待复习 20 题，开始却只拉到 3 题」。
+    const scope = scopeArg()
+    const [s, f] = await Promise.all([
+      fetchStats(scope || undefined),
+      reviewForecast(scope ? { bankIds: scope } : {}).catch(() => null)
+    ])
     dueTotal.value = s?.due_total ?? 0
     dueToday.value = s?.due_today ?? 0
     learningDue.value = s?.learning_due ?? 0
+    // 预测拉失败时退回 stats 的口径（三桶里只有 today/learning 可用），不让整页崩
+    forecastRaw.value = f || null
     remainingDue.value = dueTotal.value
     statsFailed.value = false
   } catch (e) {
@@ -605,13 +768,19 @@ async function start() {
   phase.value = 'loading'
   try {
     // 全部 = 后端上限 500（一轮拉完到期题；真超 500 的极端情况分多轮消化）
-    const questions = await reviewDue({ limit: reviewLimit.value, bankId: bankId.value })
+    // FE-P1-09：题库范围经 scopeArg()（多选 → bankIds；空 → 全部题库）
+    const scope = scopeArg()
+    const questions = await reviewDue({
+      limit: reviewLimit.value,
+      bankId: bankId.value || undefined,
+      bankIds: scope || undefined
+    })
     pool.value = buildItems(await expandQuestions(questions))
     if (!pool.value.length) {
       phase.value = 'due'
       dueTotal.value = 0
-      error.value = bankName.value
-        ? `「${bankName.value}」中没有待复习的题目，切换到全部题库看看，或先在“刷题”中练习吧！`
+      error.value = bankScope.value
+        ? `${bankScopeLabel.value}中没有待复习的题目，切到全部题库看看，或先在“刷题”中练习吧！`
         : '当前没有待复习的题目，先在“刷题”中练习吧！'
       return
     }
@@ -764,6 +933,63 @@ function forgetRecordId(it) {
   pendingRecordIds.delete(key)
 }
 
+/**
+ * 稍后 / 搁置（FE-P1-09）：把当前题从本轮队列里挪走，稍后再回来。
+ *
+ * 只改**本轮内存队列**，不写库、不动 FSRS 排期——真把复习往后推需要改 `due_at`，
+ * 那是复习算法语义（且会进同步），不在本项范围。所以这里同时保留「撤销」入口：
+ * 挪走的题进 `shelved` 列表，本轮结束时再放回队尾。
+ */
+const shelved = ref([])
+function shelveCurrent() {
+  if (phase.value !== 'card') return
+  const it = pool.value[curIdx.value]
+  if (!it) return
+  const r = shelveAt(pool.value, curIdx.value)
+  if (!r.pool) {
+    toast('只剩这一题，稍后没有意义', 'info')
+    return
+  }
+  pool.value = r.pool
+  shelved.value = [...shelved.value, it]
+  curIdx.value = r.nextIdx
+  resetAnswer()
+  gradeResult.value = null
+  graded.value = false
+  focusCard()
+  toast(`已稍后：还剩 ${shelved.value.length} 题在本轮末尾`, 'info')
+}
+
+/** 把搁置的题放回队尾（本轮做完其它题后调用，避免它们被静默丢弃） */
+function restoreShelved() {
+  if (!shelved.value.length) return 0
+  const n = shelved.value.length
+  for (const it of shelved.value) {
+    if (!pool.value.some((x) => itemKeyOf(x) === itemKeyOf(it))) pool.value.push(it)
+  }
+  shelved.value = []
+  return n
+}
+
+/**
+ * 本轮暂停（FE-P1-09）：保存进度并回准备页。
+ *
+ * 复习没有整卷计时，所以「暂停」的含义是「先不看了，回来接着做」：
+ * 进度已由会话草稿（stores/session.js）持久化，这里只负责落一次盘 + 回准备页刷新统计。
+ */
+const pausedSummary = ref(null)
+async function pauseRound() {
+  if (phase.value !== 'card') return
+  flushSession(SNAP_MODE)
+  pausedSummary.value = pauseSummary({
+    reviewed: reviewedCount.value,
+    remaining: Math.max(0, pool.value.length - curIdx.value)
+  })
+  phase.value = 'due'
+  await refreshDue()
+  toast(pausedSummary.value.text + '，进度已保存，下次进来可继续', 'success')
+}
+
 function next() {
   rememberAnswer()
   if (curIdx.value < pool.value.length - 1) {
@@ -804,6 +1030,8 @@ onMounted(async () => {
     }
   }
   bankId.value = resolveBankFilter('review')
+  // 单选过滤记忆 → 多选初始选中（保持既有「记住各页题库选择」行为）
+  if (bankId.value) selectedBankIds.value = [bankId.value]
   await refreshDue()
   const snap = await promptResume(SNAP_MODE, { title: '继续上次复习？' })
   if (snap) await resumeSession(snap)
