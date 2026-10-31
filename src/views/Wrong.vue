@@ -10,8 +10,10 @@
         <h2 class="section-title flex items-center gap-2">
           <i class="i-lucide-circle-x text-primary" />错题本
         </h2>
-        <div class="flex gap-2 items-center">
+        <div class="flex gap-2 items-center flex-wrap">
           <span class="badge">{{ total }} 题</span>
+          <!-- FE-P1-08：当前移出规则必须写明，否则「为什么这题一直留着」无从判断 -->
+          <span class="badge" :title="leaveRuleHint">{{ leaveRuleText }}</span>
           <button
             type="button"
             class="btn btn-primary btn-small"
@@ -20,6 +22,23 @@
           >
             <i class="i-lucide-rotate-ccw" />{{ retrying ? '准备中…' : `重练全部（${retryCount} 题）` }}
           </button>
+          <!-- 导出：Markdown（人读）/ JSON（机读），落盘走 export/ 目录 -->
+          <span class="inline-flex items-center gap-1">
+            <button
+              type="button"
+              class="btn btn-small"
+              :disabled="!total || !!exporting"
+              title="导出当前筛选结果为 Markdown（题干/选项/我的答案/正确答案/解析）"
+              @click="onExport('md')"
+            ><i class="i-lucide-file-text" />{{ exporting === 'md' ? '导出中…' : '导出 MD' }}</button>
+            <button
+              type="button"
+              class="btn btn-small"
+              :disabled="!total || !!exporting"
+              title="导出当前筛选结果为 JSON（字段固定，便于再加工）"
+              @click="onExport('json')"
+            ><i class="i-lucide-file-json" />{{ exporting === 'json' ? '导出中…' : '导出 JSON' }}</button>
+          </span>
         </div>
       </div>
 
@@ -125,7 +144,7 @@
                   <button class="btn btn-small" @click="viewId = viewId === q.id ? null : q.id" :title="viewId === q.id ? '收起' : '查看上次答错记录'"><i :class="viewId === q.id ? 'i-lucide-eye-off' : 'i-lucide-eye'" />查看</button>
                   <button class="btn btn-small" :title="retryLabelOf(q)" @click="retryOne(q.id)"><i class="i-lucide-rotate-ccw" />{{ retryTextOf(q) }}</button>
                   <button class="btn btn-small" title="从错题本移除（不删除试题）" @click="onDismissOne(q.id)"><i class="i-lucide-x" />移除</button>
-                  <router-link :to="`/edit/${q.id}`" class="btn btn-small"><i class="i-lucide-pencil" />编辑</router-link>
+                  <router-link :to="`/edit/${q.id}`" class="btn btn-small" title="打开题目详情/编辑"><i class="i-lucide-pencil" />编辑</router-link>
                 </div>
               </td>
             </tr>
@@ -195,6 +214,8 @@ import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 import { clampPage } from '@/stores/listFilter.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
+import { exportBankMarkdown } from '@/api/banks.js'
+import { wrongsToMarkdown, wrongsToJson, wrongsFileName } from '@/utils/wrongExport.js'
 
 const router = useRouter()
 const type = ref('')
@@ -231,6 +252,56 @@ const isFiltered = computed(
 )
 // 重练全部的真实数量：不能拿 total 直接用（total 是当前筛选结果，且后端上限 500）
 const retryCount = computed(() => Math.min(total.value, MAX_RETRY))
+// ── FE-P1-08 移出规则文案与导出 ──
+/** 移出规则：0 表示永不自动移出 */
+const leaveRuleText = computed(() =>
+  settings.wrongLeaveAfterCorrect === 0 ? '永不自动移出' : `连对 ${settings.wrongLeaveAfterCorrect} 次移出`
+)
+const leaveRuleHint = computed(() =>
+  settings.wrongLeaveAfterCorrect === 0
+    ? '错题只在你手动「移除」或再次答错时变动；可在设置 → 错题本里改'
+    : `连续答对 ${settings.wrongLeaveAfterCorrect} 次后自动移出错题本（中途答错重计）；可在设置里改`
+)
+
+/**
+ * 导出当前筛选结果为 Markdown / JSON（FE-P1-08）。
+ *
+ * 口径：导出的是**当前筛选后的这批**（搜索/题型/题库/顽固错题都算），
+ * 范围写进文件头，避免用户拿到文件后不知道是哪一批。
+ * 落盘复用 `banks_export_md`（同一条后端写文件命令，不新增命令、不改 schema）；
+ * 反馈走应用内 toast，没有原生下载弹窗。
+ */
+const exporting = ref('')
+function scopeTextOf() {
+  const parts = []
+  if (bankId.value) parts.push(`题库「${bankStore.banks.find((b) => b.id === bankId.value)?.name || bankId.value}」`)
+  if (type.value) parts.push(`题型「${typeLabel(type.value)}」`)
+  if (query.value.trim()) parts.push(`关键词「${query.value.trim()}」`)
+  if (stubbornOnly.value) parts.push('仅顽固错题')
+  return parts.length ? parts.join(' · ') : '全部错题'
+}
+
+async function onExport(fmt) {
+  if (exporting.value) return
+  if (!questions.value.length) {
+    toast('当前没有可导出的错题', 'info')
+    return
+  }
+  exporting.value = fmt
+  try {
+    const meta = { title: '错题本', scopeText: scopeTextOf() }
+    const { text, count } = fmt === 'json' ? wrongsToJson(questions.value, meta) : wrongsToMarkdown(questions.value, meta)
+    const name = wrongsFileName(fmt, { scopeText: meta.scopeText === '全部错题' ? '' : meta.scopeText })
+    const { path } = await exportBankMarkdown(name, text)
+    toast(`已导出 ${count} 道错题（${fmt.toUpperCase()}）\n文件：${path}`, 'success', 6000)
+  } catch (e) {
+    console.error(e)
+    toast('导出失败：' + (e?.message || e), 'error')
+  } finally {
+    exporting.value = ''
+  }
+}
+
 const typeBreakdown = computed(() => {
   const byType = stats.value?.by_type || {}
   return Object.entries(byType)

@@ -24,11 +24,17 @@ function load() {
   }
 }
 
-// 错题移出阈值归一化：整数，钳制 1–10，非法回退 1
+/**
+ * 错题移出阈值归一化：整数，钳制 **0–10**，非法回退 1。
+ *
+ * **0 = 永不自动移出**（FE-P1-08）：错题只有手动「移除」或再次答错才变动。
+ * 为什么用 0 而不是新增独立开关：设置键 `wrongLeaveAfterCorrect` 已进库同步（SYNC_KEYS），
+ * 加开关要动同步契约；而「阈值取 0 即不设阈值」是同一语义的自然外推，也不影响老数据（旧值都是 1–10）。
+ */
 function normalizeLeaveCount(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 1
-  return Math.min(10, Math.max(1, Math.round(n)))
+  return Math.min(10, Math.max(0, Math.round(n)))
 }
 // 自动下一题停留时长归一化：非法回退 1200ms，钳制在 300–5000ms
 function normalizeDelay(v) {

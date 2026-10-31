@@ -304,8 +304,8 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | command | 参数 | 变更 |
 |---|---|---|
 | `practice_pool` | `limit?, type_filter?, bank_id?, ids?` | 有 bank_id 时过滤；ids 非空时按传入顺序返回存在的题（上限 500），忽略题型/随机逻辑（错题重练用） |
-| `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?, query?, sort?, min_wrong_count?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500。**FE-P0-11 新增**：`query` 匹配 `plain_text`（空白视为不过滤）；`sort` 走白名单 `WRONG_SORT_WHITELIST`（`last_wrong_desc` 默认，保持改造前行为 / `last_wrong_asc` / `wrong_count_desc` / `wrong_count_asc`），未知名 Err；`min_wrong_count` ≤ 1 视为不过滤（1 即「所有错过」）|
-| `wrong_stats` | `leave_after_correct?` | **FE-P0-11 新增**。返回 `{total, stubborn, by_bank, by_type}`，口径与 `wrong_list` 同一份 CTE + WHERE（否则统计与列表对不上）；`stubborn` 固定 `wrong_count >= 3`。**刻意不受 bank/type/query/stubborn 筛选影响**：它是全库概览，否则筛完只剩 1 题时统计条写「共 12 题」会自相矛盾 |
+| `wrong_list` | `bank_id?, type_filter?, limit?, offset?, leave_after_correct?, query?, sort?, min_wrong_count?` | 错题本：连续答对次数 < leave_after_correct（默认 1）且错过；返回 `{"total","items"}`（item 附加 wrong_count/last_wrong_at/last_wrong_detail=最近一条 wrong 记录的 detail）；分页默认 limit 50、上限 500。**FE-P0-11 新增**：`query` 匹配 `plain_text`（空白视为不过滤）；`sort` 走白名单 `WRONG_SORT_WHITELIST`（`last_wrong_desc` 默认，保持改造前行为 / `last_wrong_asc` / `wrong_count_desc` / `wrong_count_asc`），未知名 Err；`min_wrong_count` ≤ 1 视为不过滤（1 即「所有错过」）。**FE-P1-08：`leave_after_correct = 0` 表示永不自动移出**（不施加 `consec_correct` 约束；写成 `< 0` 会恒假导致错题本全空），上限仍钳到 10；`wrong_stats` 同口径 |
+| `wrong_stats` | `leave_after_correct?`（0 = 永不自动移出，FE-P1-08） | **FE-P0-11 新增**。返回 `{total, stubborn, by_bank, by_type}`，口径与 `wrong_list` 同一份 CTE + WHERE（否则统计与列表对不上）；`stubborn` 固定 `wrong_count >= 3`。**刻意不受 bank/type/query/stubborn 筛选影响**：它是全库概览，否则筛完只剩 1 题时统计条写「共 12 题」会自相矛盾 |
 | `wrong_dismiss` | `question_id` | 软状态：UPSERT `is_dismissed=1, updated_at=now`（不删练习记录）；答错时翻转为 0（重回错题本）；`wrong_list` 谓词改为 `is_dismissed=1` 才隐藏 |
 | `review_due` | `limit?, bank_id?` | 有 bank_id 时过滤；每题附加 `fsrs` 对象（无状态行为 null） |
 | `review_stats` | `bank_id?` | 有 bank_id 时全部指标按库聚合；无则全局；新增 `learning_due`（Learning/Relearning 态且已到期） |
@@ -479,6 +479,25 @@ export function persistBankFilter(page, id)
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
 
+### 错题本移出规则与导出（FE-P1-08）
+- **阈值 0 = 永不自动移出**：`wrong_list_impl` / `wrong_stats_impl` 都不再 `clamp(1,10)`，改为 `min(10)`；
+  `WRONG_WHERE` 写成 `(?3 = 0 OR streak.consec_correct < ?3)`。**不能写成 `consec_correct < 0`**——那会恒假，
+  表现为错题本突然全空。设置页 `min` 从 1 改到 0，`normalizeLeaveCount` 允许 0；
+  错题本标题旁常驻徽章显示当前规则（`永不自动移出` / `连对 N 次移出`），否则用户不知道「为什么这题一直留着」。
+- **导出 Markdown / JSON**（`utils/wrongExport.js`）：导出的是**当前筛选后的这批**（搜索/题型/题库/顽固），
+  范围写进文件头。MD 人读（题干/选项字母/我的答案/正确答案/错题次数/最近答错/解析），
+  JSON 机读（`schema: qikeqbank.wrongbook.v1` + 固定字段，**不导出内部 id**）。
+  落盘复用既有的 `banks_export_md`（不新增命令、不改 schema），反馈走应用内 toast。
+  **刻意不是「备份」**：`export_dbjson` 已随 FE-P0-01 移除，PLAN §4 禁止以「备份」措辞新增入口。
+- 行内「编辑」直达 `/edit/<id>`（题目详情/编辑），e2e 验证真的跳转成功。
+- **修掉一个 e2e 抓到的 Vue 陷阱**：`:disabled="!total || exporting"` 里的 `exporting` 初始是 `''`，
+  表达式求值为 `''` 而不是 `false`；布尔属性里空字符串仍然「存在」→ 按钮**永久禁用**
+  （表现就是「导出 MD 点不动」，Playwright 等满 30s 超时）。修成 `!!exporting`，
+  并在单测里加了规则守卫：字符串型 ref 用于 `:disabled` 必须显式转布尔。
+- 守卫：`tests/unit/wrong-export.test.js` 26 条（答案文本口径/MD·JSON 字段/两格式一致性/文件名/
+  视图接线含 `:disabled` 规则）；cargo `wrong_list_leaves_after_n_consecutive_correct` 扩展为断言 0 语义
+  与统计同口径；e2e `wrong` 21 → 39。
+
 ### 模考标准卷 / 暂停 / 成绩趋势（FE-P1-07）
 - **100 分标准卷**（`utils/examPaper.js`）：按**分值**分配而不是按题数凑——先定各题型目标分值
   （`normalizeMix` 把任意配比按比例缩放成合计严格等于 100，零头补给最大项），再在题型内做
@@ -633,7 +652,7 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 292 条 / 9 模块 / **28.1s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 310 条 / 9 模块 / **30.2s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页/另存为副本（FE-P1-03/04/05） | 43 | ~1.9s |
@@ -643,7 +662,7 @@ export function persistBankFilter(page, id)
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 + 选项标色/完成闭环/弱项专练/计时与难度（FE-P1-06） | 27 | ~5.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 + 100 分标准卷/暂停继续/按库趋势（FE-P1-07） | 38 | ~9.0s |
-  | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~0.7s |
+  | `wrong` | 错题本：搜索 / 排序 / 统计 + 移出规则/导出 MD·JSON/行内编辑（FE-P1-08） | 39 | ~1.5s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |
   - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 13.9s**）只在提交前 / 发版前 / 真跨模块改动时跑。
   - 新增页面行为时：把断言加到对应模块；新模块必须同步本表、`AGENTS.md`、`todo §0.3` 三处。

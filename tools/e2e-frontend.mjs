@@ -128,7 +128,7 @@ const MODULE_BASELINE = {
   practice: 27,
   review: 18,
   exam: 38,
-  wrong: 21,
+  wrong: 39,
   banks: 67,
   search: 36
 }
@@ -1700,6 +1700,79 @@ const MODULES = [
       ok('统计失败时仍能看到错题列表', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
       ok('统计失败时不显示错乱统计条', !/错题 6/.test(failStatsBody))
       await page.evaluate(() => { window.__wrongStatsFail = false })
+
+      // ══ FE-P1-08 移出规则文案 / 导出 / 行内详情 ══
+      await goto(page, '#/banks')
+      await goto(page, '#/wrong')
+      // 默认阈值 1 → 文案写明「连对 N 次移出」
+      const ruleBody = await page.locator('body').innerText()
+      ok('错题本显示当前移出规则', /连对 \d+ 次移出|永不自动移出/.test(ruleBody), ruleBody.match(/连对[^\n]*|永不自动移出/)?.[0] || '')
+      ok('默认规则为「连对 1 次移出」', /连对 1 次移出/.test(ruleBody), ruleBody.match(/连对[^\n]*/)?.[0] || '')
+
+      // 阈值改 0 = 永不自动移出：设置页可填 0，且列表与统计按 0 请求
+      // 注意：settings store 在模块初始化时读一次 localStorage（const saved = load()），
+      // 所以必须先写键再 reload —— 只写键不刷新的话页面里还是旧值（实测读到 1）。
+      await page.evaluate(() => {
+        window.__calls = []
+        localStorage.setItem('qbank.settings.v1', JSON.stringify({ wrongLeaveAfterCorrect: 0 }))
+      })
+      await page.reload()
+      await page.waitForSelector('header nav a', { timeout: 10000 })
+      await goto(page, '#/banks')
+      await goto(page, '#/wrong')
+      const zeroArgs = await page.evaluate(() => window.__wrongArgs)
+      ok('阈值 0 时按 leaveAfterCorrect=0 拉列表（不是 1）', zeroArgs?.leaveAfterCorrect === 0, String(zeroArgs?.leaveAfterCorrect))
+      ok('阈值 0 时文案写「永不自动移出」', /永不自动移出/.test(await page.locator('body').innerText()))
+      await page.evaluate(() => { localStorage.removeItem('qbank.settings.v1') })
+      await page.reload()
+      await page.waitForSelector('header nav a', { timeout: 10000 })
+
+      // 导出 MD / JSON：只调一次 banks_export_md，文件名带扩展名，内容是错题清单
+      await goto(page, '#/banks')
+      await goto(page, '#/wrong')
+      await page.evaluate(() => { window.__exportCalls = [] })
+      const mdBtn = page.getByRole('button', { name: /导出 MD/ })
+      ok('有「导出 MD」入口', (await mdBtn.count()) === 1)
+      // 导出按钮在 total === 0 时是禁用的；先等列表真的拉到数据再点
+      // （禁用态直接 click 会让 Playwright 等满默认 30s，实测把模块拖到 31s）
+      await page.waitForFunction(() => {
+        const b = [...document.querySelectorAll('button')].find((x) => /导出 MD/.test(x.textContent || ''))
+        return b && !b.disabled
+      }, null, { timeout: 8000, polling: 25 })
+      await mdBtn.click()
+      await flush(page)
+      const mdCalls = await page.evaluate(() => window.__exportCalls || [])
+      ok('导出 MD 只落盘一次', mdCalls.length === 1, `${mdCalls.length} 次`)
+      ok('MD 文件名带 .md', /\.md$/.test(mdCalls[0]?.name || ''), String(mdCalls[0]?.name))
+      ok('MD 内容含错题四要素', /我的答案/.test(mdCalls[0]?.content || '') && /正确答案/.test(mdCalls[0]?.content || ''),
+        (mdCalls[0]?.content || '').slice(0, 80))
+      ok('MD 内容含选项字母（能把「我的答案 B」对上）', /- A\./.test(mdCalls[0]?.content || ''))
+      ok('导出反馈走应用内 toast（无原生弹窗）', /已导出 \d+ 道错题/.test(await page.locator('body').innerText()))
+
+      await page.evaluate(() => { window.__exportCalls = [] })
+      await page.getByRole('button', { name: /导出 JSON/ }).click()
+      await flush(page)
+      const jsonCalls = await page.evaluate(() => window.__exportCalls || [])
+      ok('导出 JSON 只落盘一次', jsonCalls.length === 1, `${jsonCalls.length} 次`)
+      ok('JSON 文件名带 .json', /\.json$/.test(jsonCalls[0]?.name || ''), String(jsonCalls[0]?.name))
+      let parsed = null
+      try { parsed = JSON.parse(jsonCalls[0]?.content || '') } catch { parsed = null }
+      ok('JSON 内容可解析且带 schema', parsed?.schema === 'qikeqbank.wrongbook.v1', String(parsed?.schema))
+      ok('JSON 条目数与列表一致', parsed?.count === 6, String(parsed?.count))
+      ok('JSON 不导出内部 id', parsed?.items?.every((x) => x.id === undefined))
+
+      // 行内详情：编辑链接直达 /edit/<id>
+      const editLink = page.locator('tbody tr').first().getByRole('link', { name: /编辑/ })
+      ok('错题行有编辑入口', (await editLink.count()) === 1)
+      const href = await editLink.getAttribute('href')
+      ok('编辑链接指向 /edit/<题目 id>', /#\/edit\/.+/.test(href || ''), String(href))
+      await editLink.click()
+      await page.waitForFunction(
+        (suffix) => location.hash.startsWith('#/edit/') && document.title === `编辑试题 · ${suffix}` && (window.__inflight || 0) === 0,
+        APP_SUFFIX,
+        { timeout: 8000, polling: 25 }
+      )
+      ok('点编辑真的进到题目详情页', /^#\/edit\//.test(await page.evaluate(() => location.hash)))
     }
   },
 

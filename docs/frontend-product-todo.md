@@ -98,7 +98,7 @@
 | FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [x] |
 | FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [x] |
 | FE-P1-07 | 模考标准卷 / 暂停 / 成绩趋势 | M–L | 部分 | [x] |
-| FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [ ] |
+| FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [x] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [ ] |
 | FE-P1-10 | 设置增强 | S–M | 部分 | [ ] |
 | FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [ ] |
@@ -624,7 +624,7 @@
 - 守卫：`tests/unit/exam-paper.test.js` 21 条（配比归一化 / 精确凑 100 / 不可达如实报 / 难度筛选 / 材料题满分按子题合计 / 0.5 分粒度 / 脏数据不炸）；cargo 新增 `exam_sessions_filter_by_bank_and_keep_legacy_rows_unfiltered`（cargo 158）；e2e `exam` 20 → 38。
 - 未做：持久化「试卷」实体（同一套题不可重考）仍属 PLAN §9 待定事项，不在本项范围。
 
-### [ ] FE-P1-08 错题顽固题与导出
+### [x] FE-P1-08 错题顽固题与导出
 
 > 部分已落地：**「错误 ≥ 3 次」视图已随 FE-P0-11 完成**（`Wrong.vue` 统计条上的「顽固错题」开关，后端 `wrong_stats.stubborn` 固定 `wrong_count >= 3`）。本项剩余：阈值「不自动移出」选项、导出、行内跳转详情/编辑。
 
@@ -632,6 +632,15 @@
 - 导出错题为 Markdown/JSON（后续可 PDF）。**注意**：导出已从 FE-P0-11 移出，落到本项处理。
 - 错题本行支持直接跳转题目详情/编辑。
 - **文件**：`src/views/Wrong.vue`、`src/stores/settings.js`、`src/components/settings/registry.js`。
+
+**已完成（2026-10-31）**
+- **「永不自动移出」**：阈值取 **0** 即表示不设阈值（而不是新增独立开关——`wrongLeaveAfterCorrect` 已进库同步，加开关要动同步契约；「阈值 0 = 不设阈值」是同语义的自然外推，也不影响老数据）。后端 `wrong_list_impl` / `wrong_stats_impl` 从 `clamp(1,10)` 改为 `min(10)`，`WRONG_WHERE` 写成 `(?3 = 0 OR streak.consec_correct < ?3)`——**注意不能写成 `consec_correct < 0`**，那会恒假让错题本突然全空。设置页 `min` 改 0、`normalizeLeaveCount` 允许 0，`invalidMsg` 与 `desc` 同步说明。
+- 错题本标题旁加**常驻规则徽章**（`永不自动移出` / `连对 N 次移出` + hover 说明），否则用户无从判断「为什么这题一直留着」。
+- **导出 Markdown / JSON**：新增 `src/utils/wrongExport.js`。口径是**当前筛选后的这批**（搜索 / 题型 / 题库 / 顽固错题都算），范围写进文件头。MD 人读（题干 / 选项字母 / 我的答案 / 正确答案 / 错题次数 / 最近答错 / 解析）；JSON 机读（`schema: qikeqbank.wrongbook.v1` + 固定字段，**不导出内部 id**，带 schema 版本便于下游判断）。落盘**复用既有 `banks_export_md`**（不新增命令、不改 schema），反馈走应用内 toast，无原生弹窗。定位写明是**错题清单导出不是备份**（`export_dbjson` 已随 FE-P0-01 移除，PLAN §4 禁止以「备份」措辞新增入口）。
+- 行内「编辑」直达 `/edit/<id>`（题目详情/编辑），e2e 验证真的跳转成功。
+- **修掉一个 e2e 抓到的 Vue 陷阱**：`:disabled="!total || exporting"` 里的 `exporting` 初始是 `''`，表达式求值为 `''` 而非 `false`；布尔属性里空字符串仍然「存在」→ 按钮**永久禁用**，表现就是「导出 MD 点不动」（Playwright 等满 30s 超时）。修成 `!!exporting`，并在单测里加了规则守卫：字符串型 ref 用于 `:disabled` 时必须显式转布尔。
+- 守卫：`tests/unit/wrong-export.test.js` 26 条（答案文本口径 / MD·JSON 字段 / 两格式答案一致 / 文件名 / 视图接线含 `:disabled` 规则）；cargo 的 `wrong_list_leaves_after_n_consecutive_correct` 扩展为断言 0 语义 + 统计同口径；e2e `wrong` 21 → 39。
+- 未做：PDF 导出（原文标注「后续可 PDF」），随 FE-P2-03 一并评估。
 
 ### [ ] FE-P1-09 复习预测 / 多选题库 / 按题型
 
@@ -967,3 +976,4 @@
 | v11 | 2026-10-31 | **FE-P1-05 完成**（材料子题排序/改题型/复制 + 单题另存为副本）。子题上移·下移·拖拽三条路径共用 `utils/arrayMove.js::moveItem`（与题库拖拽同一实现，单测对照输出防语义漂移）；接通原死代码 `onChildTypeChange` 并复用 `preserveTypeChange`；子题复制与增删移动后**全部重编 id**（`<父>_c<n>`），否则同一材料出现重复 `child_id` 会让历史回看张冠李戴。列表新增「副本」入口，创建后直跳编辑页。单测 +26（334），e2e list 37→43、form 14→27，全量 255 |
 | v12 | 2026-10-31 | **FE-P1-06 完成**（刷题反馈与完成闭环）。选项自身标绿/红（未判分不泄露答案，漏选的正确项也标绿）；完成页「同配置再来一轮 / 去复习 / 去错题本」；弱项专练按「正确率→错题数→样本量」排序（门槛 ≥3 次且 <60%，只在完成页拉数据）；单题计时与难度点阵（原文可选项）。**修掉 e2e 抓到的真缺陷**：完成页跳 `/practice?types=…` 命中同路由不重新挂载，深链参数失效（点了没反应），改由 `watch(route.query.*)` 重新应用。难度点阵样式从 List 的 scoped 提到 App 全局。单测 +26（360），e2e practice 8→27，全量 274 |
 | v13 | 2026-10-31 | **FE-P1-07 完成**（模考 100 分标准卷 / 暂停继续 / 成绩趋势按题库）。新增 `utils/examPaper.js`：按分值分配 + 子集和 DP（贪心在 6/6/6/8 这类题池会失败），配比自动缩放到合计 100，凑不出如实报不可达并停在准备页。暂停靠后移 `startedAt` 真正冻结限时（只停刷新会让继续时跳掉暂停时长），并把暂停态写进草稿以便关窗恢复。`exam_sessions` 加可选 `bank_id`，场次题库写在 `detail.bank_id`（schema 零改动）。单测 +21（381）、cargo +1（158）、e2e exam 20→38，全量 292 |
+| v14 | 2026-10-31 | **FE-P1-08 完成**（顽固错题阈值 / 导出 / 行内详情）。阈值取 0 = 永不自动移出（复用已同步的 `wrongLeaveAfterCorrect`，不新增开关）；后端 `WRONG_WHERE` 改 `(?3 = 0 OR ...)`，写成 `< 0` 会恒假让错题本全空。新增 `utils/wrongExport.js` 导出 MD/JSON（MD 人读、JSON 带 schema 且不含内部 id），落盘复用 `banks_export_md` 不新增命令。**修掉 e2e 抓到的 Vue 陷阱**：`:disabled` 绑定字符串 ref 求值为 `''` 时按钮永久禁用（导出按钮点不动），改 `!!exporting` 并加规则守卫。单测 +26（407），e2e wrong 21→39，全量 310 |
