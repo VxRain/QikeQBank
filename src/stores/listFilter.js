@@ -33,11 +33,38 @@ export const DEFAULT_SORT = 'created_desc'
 
 /** 难度 1–5（schema 默认 2，表单上限 5） */
 export const DIFFICULTY_CHOICES = Object.freeze([1, 2, 3, 4, 5])
-/** 状态取值：schema 默认 published，导入/编辑可写 draft */
+/**
+ * 状态取值（FE-P1-03 产品化）：schema 只有 `status TEXT NOT NULL DEFAULT 'published'`，
+ * 没有 CHECK 约束，所以三态是**约定**而非结构保证：
+ * - published 已发布：刷题 / 复习 / 模考**只抽这一类**
+ * - draft     草稿：录题中/待校对，不出现在任何抽取池
+ * - archived  停用：做完的旧题，保留历史统计但不再抽
+ * 与后端 practice.rs 的 `status = 'published'` 过滤、questions.rs 的
+ * BATCH_PATCH_FIELDS 白名单三处口径必须一致（tests/unit/list-filter.test.js 校验）。
+ */
 export const STATUS_OPTIONS = Object.freeze([
   Object.freeze({ value: 'published', label: '已发布' }),
-  Object.freeze({ value: 'draft', label: '草稿' })
+  Object.freeze({ value: 'draft', label: '草稿' }),
+  Object.freeze({ value: 'archived', label: '停用' })
 ])
+
+/** 状态 → 徽章文案（列表/预览共用；未知值原样显示，不吞掉脏数据） */
+export const STATUS_LABELS = Object.freeze({
+  published: '已发布',
+  draft: '草稿',
+  archived: '停用'
+})
+
+/** 状态说明（录题页与列表共用同一套措辞，避免两处口径漂移） */
+export const STATUS_HINTS = Object.freeze({
+  published: '已发布：会被抽题（刷题 / 复习 / 模考）',
+  draft: '草稿：暂时不会被抽到，适合还没校对完的题',
+  archived: '停用：保留历史统计，但不再抽取'
+})
+
+export function statusLabel(v) {
+  return STATUS_LABELS[v] || String(v || '—')
+}
 
 /** 每页条数档位；上限与后端 limit.min(500) 对齐 */
 export const PAGE_SIZE_CHOICES = Object.freeze([20, 50, 100])

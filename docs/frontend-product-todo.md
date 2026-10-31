@@ -93,7 +93,7 @@
 |---|---|---|---|---|
 | FE-P1-01 | 首页「今日任务」+ 新用户引导 | S–M | 否 | [x] |
 | FE-P1-02 | 题库页快捷入口 / 搜索 / 排序 / 复制 | M | 部分 | [x] |
-| FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [ ] |
+| FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [x] |
 | FE-P1-04 | 单题统计 | S–M | 是 | [ ] |
 | FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [ ] |
 | FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [ ] |
@@ -543,13 +543,22 @@
 - 守卫：`tests/unit/banks-view.test.js`（28 条，搜索×排序×拖拽互踩分支）+ `tests/unit/export-bank.test.js`（21 条，含「导出→再导入」闭环与块头字面量逐字校对）；e2e `banks` 模块 33 → 67 条。
 - 已知限制：导出暂不含图片本体（题面里的图片导出为 `[图片]` 占位），图片随资产通道同步，不进 Markdown。
 
-### [ ] FE-P1-03 难度 / 状态元数据产品化
+### [x] FE-P1-03 难度 / 状态元数据产品化
 
 - `difficulty`：列表/预览显示点阵或标签；支持筛选；后续参与抽题权重。
 - `status`（表已有）：录题页增加「草稿 / 已发布 / 停用」；列表筛选与徽章；刷题/复习/模考默认只抽 `published`。
 - 题目列表增加「最近编辑」「作答次数 / 正确率」列（统计可后置）。
 - **文件**：`src/components/QuestionEditor.vue`、`src/views/List.vue`、`src-tauri/src/db/questions.rs`、`src-tauri/src/db/practice.rs`。
 - **备注**：无需改 schema，优先做；但状态过滤会影响练习池，需同步口径。
+
+**已完成（2026-10-31）**
+- **difficulty**：列表点阵与筛选原已可用（FE-P0-09），本轮补「录题页与列表共用同一套难度/状态文案」，不再各写一套。
+- **status 三态**：`published` / `draft` / `archived`（schema 无 CHECK，属约定）。录题页顶部新增状态下拉（`#qe-status`），每个选项带 `title` 说明「会不会被抽到」；列表新增状态徽章列（草稿 `badge-warn` 虚线、停用 `badge-muted` 退后、已发布 `badge-ok`——**草稿不用危险色**，草稿不是错误）+ 状态筛选补到三态。
+- **抽取池口径统一（本项真正的工作量）**：`practice_pool_impl` 与 `review_due_impl` 加 `status = 'published'`；`review_stats_impl` 的 `total` / `by_type` / `due_total` / `due_today` / `learning_due` 五处同步（否则界面写「可用 20 题」却只抽得出 12 题）。**历史指标刻意不按状态过滤**（`practiced_*` / `correct_rate` / `records_7d`）：题目后来改成草稿不该让已发生的作答凭空消失。口径由 `cargo` 单测 `draft_and_archived_excluded_from_pool_review_and_available_counts` 把池/复习/统计三侧放一起对照，另由 `list-filter.test.js` 静态校验后端两处 `AND status = 'published'` 与「历史指标不带 status 过滤」。
+- **列表两列**：「最近编辑」（`YYYY-MM-DD HH:mm`，无效值给 `—` 而不是 Invalid Date）、「作答 / 正确率」（未作答显示 `0 · —`，**不能显示 `0 · 0%`**——那会把「没做过」说成「全错」）；单元格数与表头同步到 9 列。
+- **修掉一个 e2e 暴露的真缺陷**：`QuestionForm` 挂载时深拷贝了一份**不含**顶部控件的 question，用户选「草稿」后任何表单编辑都会整份覆盖，把 status 顶回 `published`（表现为「选了草稿，保存出来还是已发布」）。现在 `status/type/version` 由 `QuestionEditor` 顶部控件独占，payload 只允许覆盖题干/选项/答案/解析/分值/难度。e2e `form` 有断言锁死（`保存时下发 status=draft`）。
+- 守卫：`list-filter.test.js` 30 条（+4：三态齐全与文案、抽取池口径逐字对照、录题页同源引用）、cargo +1；e2e `list` 21→32、`form` 9→14。
+- 待 FE-P0-12：抽题「配额」与材料题统计口径未定，故**没有**做按状态加权/配额分配；难度参与抽题权重属 FE-P2-02，本轮不做。
 
 ### [ ] FE-P1-04 单题统计
 
@@ -917,3 +926,4 @@
 | v6 | 2026-10-30 | **E2E 正确性与等待机制再修（P0~P3，不新增功能）**。v5 的等待方案有两处按官方标准不该留的东西，本轮按 Playwright 一手文档纠正。①**P0 修静默吞失败**：`waitForSelector(marker).catch(() => {})` 会在标记失效时静默继续，导致后续断言在**错误页面**上求值（误导性失败甚至假绿）。改为 `requireRoute()` 超时**必抛**，异常带实际 `title/inflight/hash/页面文本`。实测：注入失效标记后立即报「期望 #/wrong 页面就绪，实际页面：…」，而非等到后面报「按钮找不到」。②**P1 `page.clock` 消除时间等待**：实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 **3ms**（对照真实等待 2029ms）。仅 `form`/`review` 启用（`exam`/`practice` 有 12 处 `Date.now()` 算用时/限时，风险高，暂不开）。顺带把 review 撤销从「碰巧在 5000ms 窗口内」升级为**精确边界测试**（4.9s 仍可撤销 / 5.2s 自动消失，+4 条断言）。③**P2 就绪信号换源**：从「界面文案」（`/新建题库/` 等 19 处，产品改文案即废）换成「`document.title`(= `meta.title` + APP_NAME) 且 `__inflight === 0`」。前者是**路由元数据**、后者靠 `bridge.js` 唯一 IPC 漏斗，二者都与文案/布局解耦。实测 6 个路由 ×8 次全 8/8、平均 6~77ms。同时**删除 `networkidle`**——Playwright API 文档明确标注 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead." ④**前置契约守卫**：新增 `tests/unit/e2e-ready-signal.test.js`（7 项），e2e 启动前自动执行（~0.3s，失败 exit 3），防 `ROUTE_TITLE ↔ meta.title` 漂移、title 格式变更、inflight 漏 try/finally、networkidle 回流、超时被吞；实测改 `meta.title` 后 **0.29s 被拦下**而非白跑 30s 超时。⑤**P3 分层**：新增 `tests/unit/request-params-wiring.test.js`（6 项静态守卫，校验 `fetchList` 真的把 query/type/difficulty/status/sort/limit/offset 拼进请求，含空值守卫），注入「忘记下发 difficulty」后两条守卫同时报警。**注意**：实测从 e2e 删除 5 条纯参数断言**并未提速**（list 1493→1539ms、wrong 649→699ms，属噪声），说明耗时由「操作 + 等待」驱动而非断言条数，故**保留 E2E 覆盖**、单测守卫作补充而非替代。**实测**：全量 16.9s → **9.8~11.0s**，断言 108 → **112**，连跑 5 次 0 flaky；单测 154 → **167**；build/smoke/clippy 全绿 |
 | v7 | 2026-10-31 | **FE-P1-01 完成**（首页今日任务 + 新用户引导 + 数据安全状态）。新增 `src/utils/dailyTask.js` 纯逻辑（19 条单测）+ 设置项 `settings.dailyGoal`（1–500，纯本机偏好）+ 深链 `?types=` / `?import=1` + `window` 事件 `qbank:open-settings`。文案如实只报同步时间、明写「本地无时间点快照」，不拿「备份」冒充已实现。e2e `banks` 16 → 33 条，并修基建缺陷：点击触发的异步路由跳转不能只 `flush()`（只等 IPC），新增 `waitRouteAfterClick()` 等 hash + `requireRoute()` |
 | v8 | 2026-10-31 | **FE-P1-02 完成**（题库页快捷入口 / 搜索 / 排序 / 拖拽持久化 / 复制 / 导出）。后端新增 `banks_duplicate`（事务内新库+题目副本，题目与子题 id 全部重排，不继承流水/复习态）与 `banks_export_md`（落盘 export/，文件名后端重拼）。导出**不用 JSON**：`export_dbjson` 已随 FE-P0-01 移除且 PLAN §4 禁止以「备份」措辞新增，改导出与导入模板同格式的 Markdown，「导出→再导入」闭环由单测直接跑 `parseTemplateFile` 验证。栅格改 auto-fit。单测 +49（banks-view 28 / export-bank 21），e2e banks 33 → 67 |
+| v9 | 2026-10-31 | **FE-P1-03 完成**（难度/状态元数据产品化）。状态三态 published/draft/archived 落地：录题页下拉 + 列表徽章与筛选；抽取池口径统一到 8 处（`practice_pool` / `review_due` / `review_stats` 的 total·by_type·due_total·due_today·learning_due），历史指标刻意不按状态过滤。列表新增「最近编辑」「作答/正确率」列（未作答显示 `0 · —` 而非 `0 · 0%`）。**修掉 e2e 暴露的真缺陷**：QuestionForm 深拷贝不含顶部控件的 question，用户选「草稿」后任何表单编辑都把 status 顶回 published；现由 QuestionEditor 独占 status/type/version。单测 +4（308），e2e list 21→32、form 9→14 |

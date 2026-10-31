@@ -255,7 +255,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?, sort?, difficulty?, status?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}`。**FE-P0-09 新增**：`sort` 走白名单 `SORT_WHITELIST`（`created_desc`默认 / `created_asc` / `updated_desc` / `difficulty_desc` / `difficulty_asc` / `score_desc`），未知名 **Err**（不静默回退，否则前端拼错参数会以为排序生效）；`difficulty`（1–5）与 `status` 进 WHERE，`total` 跟随筛选；排序在 COUNT 之前解析，非法值不白跑查询 |
+| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?, sort?, difficulty?, status?, stats?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}`。**FE-P0-09 新增**：`sort` 走白名单 `SORT_WHITELIST`（`created_desc`默认 / `created_asc` / `updated_desc` / `difficulty_desc` / `difficulty_asc` / `score_desc`），未知名 **Err**（不静默回退，否则前端拼错参数会以为排序生效）；`difficulty`（1–5）与 `status` 进 WHERE，`total` 跟随筛选；排序在 COUNT 之前解析，非法值不白跑查询。**FE-P1-04 新增 `stats`**：为 `true` 时给当前页每行附 `stats: {attempt_count, correct_count, last_answered_at, avg_ms}`——只对本页那批 id 走 `idx_records_question` 单次 `IN (...) GROUP BY`（`attach_question_stats`），**不进主查询的 JOIN**（JOIN 会先把流水行放大再排序，1000 题库翻页明显变慢）；未做过的题也给零值统计，前端不必区分「无字段」与「0 次」；口径只含 `mode != 'exam'`（模考是得分率语义，FE-P0-12 明确三者不可混算） |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；本地编辑刷新 `updated_at` **和** `synced_at`；其余不变（**apply 路径禁止复用此函数**，走原生 gated upsert，防来源戳被洗） |
 | `questions_get` / `questions_remove` | `questions_remove(id, actor?)`：单题墓碑 UPSERT + `DELETE` 同事务；不存在 Err("Not Found") | 不变 |
@@ -437,7 +437,7 @@ export function persistBankFilter(page, id)
 - TODO 原文写的「记住各页筛选」设置**并不存在**，此处按 FE-P0-05 的既有做法用 localStorage 记住，不新增设置开关。
 
 ### api/practice.js（W2 改；FE-P0-11 再改）
-`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect,query,sort,minWrongCount})` → `cmd('wrong_list',…)` 取 `.data`（`query` 空白时不传）、`wrongStats({leaveAfterCorrect})` → `cmd('wrong_stats',…)`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`duplicateBank(id?, name?)` → `cmd('banks_duplicate',…)` 取 `.data`、`exportBankMarkdown(name, content)` → `cmd('banks_export_md',…)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
+`practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect,query,sort,minWrongCount})` → `cmd('wrong_list',…)` 取 `.data`（`query` 空白时不传）、`wrongStats({leaveAfterCorrect})` → `cmd('wrong_stats',…)`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`list({…, stats:true})` 透传 `stats`、`duplicateBank(id?, name?)` → `cmd('banks_duplicate',…)` 取 `.data`、`exportBankMarkdown(name, content)` → `cmd('banks_export_md',…)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
 ### App.vue（W2 改；设置弹窗已抽出）
 `onMounted` 调 `loadBanks()`（唯一全局装载入口）；顶栏保留**全局搜索**（跨库搜题干，防抖 250ms 取前 8，行内 QuestionPreview 展开 + 去编辑，Esc/切路由关闭）。
@@ -478,6 +478,21 @@ export function persistBankFilter(page, id)
 - 纯逻辑全在 `src/utils/dailyTask.js`（`dailyProgress` / `weakestType` / `syncFreshness` / `newUserSteps` / `entryHref`），由 `tests/unit/daily-task.test.js`（19 条）锁住「数据缺失不冒充 0」的分支。
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
+
+### 状态三态（FE-P1-03）
+- `questions.status` 只有 `TEXT NOT NULL DEFAULT 'published'`、**无 CHECK 约束**，所以三态是**约定**：
+  `published` 已发布（唯一会被抽题的状态）/ `draft` 草稿 / `archived` 停用。
+- 口径落点（四处必须一致，任一处漏改都会出现「界面写可用 N 题，实际抽不出」）：
+  `practice_pool_impl`、`review_due_impl` 的 `status = 'published'`；`review_stats_impl` 的
+  `total` / `by_type` / `due_total` / `due_today` / `learning_due` 五处统计；前端
+  `stores/listFilter.js` 的 `STATUS_OPTIONS` / `STATUS_HINTS`；录题页 `QuestionEditor.vue` 的顶部下拉。
+- **历史指标不按状态过滤**（`practiced_*` / `correct_rate` / `records_7d`）：题目后来改成草稿，
+  不该让已经发生的作答凭空消失。
+- 列表列：状态徽章（`badge-warn` 草稿 / `badge-muted` 停用 / `badge-ok` 已发布，草稿不用危险色——草稿不是错误）、
+  「最近编辑」、「作答 / 正确率」（未作答显示 `0 · —` 而不是 `0 · 0%`）。
+- 录题页 `QuestionForm` 冒泡的内容变化**不得覆盖** `status/type/version`：它挂载时深拷贝了一份
+  不含后来才出现的顶部控件的 question，整份覆盖会把用户刚选的「草稿」顶回 published
+  （e2e `list`+`form` 各有一条断言锁这个回归）。
 
 ### Practice.vue 深链参数
 - `?bank=<id>`：须仍存在，否则回落 `resolveBankFilter`。
@@ -568,13 +583,13 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 215 条 / 9 模块 / **16.2s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 231 条 / 9 模块 / **19.0s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
-  | `list` | 试题列表：排序 / 筛选 / 页码收敛 | 21 | ~1.5s |
+  | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态与统计列（FE-P1-03/04） | 32 | ~1.4s |
   | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~1.1s |
   | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01）+ 快捷入口/搜索/排序/拖拽/复制/导出（FE-P1-02） | 67 | ~1.9s |
-  | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 | 9 | ~1.2s |
+  | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 + 状态三态下发（FE-P1-03） | 14 | ~1.4s |
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 | 8 | ~0.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 | 20 | ~2.5s |

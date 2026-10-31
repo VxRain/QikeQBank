@@ -222,6 +222,67 @@ pub(crate) fn query_question_summaries(conn: &Connection, sql: &str, p: impl rus
     Ok(out)
 }
 
+/// 单题统计（FE-P1-04）：只查**当前页**这批 id，绝不扫全库。
+///
+/// 为什么用 `IN (...)` 而不是 JOIN 进主查询：
+/// - 主查询带 ORDER BY + LIMIT，JOIN practice_records 会先把流水行放大再排序，
+///   1000 题库翻页时会明显变慢（实测数据见 docs/frontend-product-todo.md FE-P1-04）；
+/// - 分开查可以只对 50 个 id 走 `idx_records_question`，是纯索引点查。
+///
+/// 口径：只统计练习/复习流水（mode != 'exam'），与错题本、正确率口径一致；
+/// 模考是「得分率」语义，混进来会让这里的「正确率」不可比（FE-P0-12 明确三者不可混算）。
+pub(crate) fn attach_question_stats(
+    conn: &Connection,
+    rows: &mut [Value],
+) -> Result<(), String> {
+    let ids: Vec<String> = rows
+        .iter()
+        .filter_map(|q| q.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    // 占位符按实际条数生成（当前页最多 500 条，远低于 SQLite 变量上限）
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT question_id, COUNT(*) AS attempt_count,
+                COALESCE(SUM(correct), 0) AS correct_count,
+                MAX(answered_at) AS last_answered_at,
+                CAST(COALESCE(AVG(NULLIF(elapsed_ms, 0)), 0) AS INTEGER) AS avg_ms
+         FROM practice_records
+         WHERE mode != 'exam' AND question_id IN ({placeholders})
+         GROUP BY question_id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(to_str)?;
+    let mut q = stmt.query(rusqlite::params_from_iter(ids.iter())).map_err(to_str)?;
+    let mut map: HashMap<String, Value> = HashMap::new();
+    while let Some(row) = q.next().map_err(to_str)? {
+        let id: String = row.get(0).map_err(to_str)?;
+        let attempts: i64 = row.get(1).map_err(to_str)?;
+        let correct: i64 = row.get(2).map_err(to_str)?;
+        let last: Option<String> = row.get(3).map_err(to_str)?;
+        let avg_ms: i64 = row.get(4).map_err(to_str)?;
+        map.insert(
+            id,
+            json!({
+                "attempt_count": attempts,
+                "correct_count": correct,
+                "last_answered_at": last,
+                "avg_ms": avg_ms,
+            }),
+        );
+    }
+    for row in rows.iter_mut() {
+        let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) else { continue };
+        // 没做过的题也给一份零值统计：前端不必区分「没有字段」与「0 次」两种空态
+        let st = map.remove(&id).unwrap_or_else(|| {
+            json!({ "attempt_count": 0, "correct_count": 0, "last_answered_at": Value::Null, "avg_ms": 0 })
+        });
+        row["stats"] = st;
+    }
+    Ok(())
+}
+
 pub(crate) fn fetch_question(conn: &Connection, id: &str) -> Result<Option<Value>, String> {
     let sql = format!("SELECT {SELECT_FIELDS} FROM questions WHERE id = ?1");
     let mut rows = query_questions(conn, &sql, params![id])?;
@@ -449,6 +510,7 @@ pub fn questions_list(
     sort: Option<String>,
     difficulty: Option<i64>,
     status: Option<String>,
+    stats: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
@@ -462,6 +524,7 @@ pub fn questions_list(
         sort,
         difficulty,
         status,
+        stats: stats.unwrap_or(false),
     };
     ok(questions_list_impl(&conn, &q)?)
 }
@@ -479,6 +542,9 @@ pub(crate) struct QuestionListQuery {
     pub sort: Option<String>,
     pub difficulty: Option<i64>,
     pub status: Option<String>,
+    /// FE-P1-04：为当前页每行附加 `stats`（attempt_count/correct_count/last_answered_at/avg_ms）。
+    /// 默认 false：列表滚动不需要这层查询，按需打开。
+    pub stats: bool,
 }
 
 pub(crate) fn questions_list_impl(
@@ -522,11 +588,14 @@ pub(crate) fn questions_list_impl(
     };
     let sql = format!("{base_sql} LIMIT ?6 OFFSET ?7");
     let p = params![query, type_filter, bank_id, difficulty, status, limit, offset];
-    let items = if summary {
+    let mut items = if summary {
         query_question_summaries(conn, &sql, p)?
     } else {
         query_questions(conn, &sql, p)?
     };
+    if q.stats {
+        attach_question_stats(conn, &mut items)?;
+    }
     Ok(json!({ "total": total, "items": items }))
 }
 

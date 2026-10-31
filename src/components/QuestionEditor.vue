@@ -21,6 +21,14 @@
           </select>
         </template>
       </div>
+      <!-- FE-P1-03 状态：草稿 / 已发布 / 停用。刷题、复习、模考只抽已发布，
+           所以这一项必须有可见说明，否则用户会以为「保存了就能刷到」 -->
+      <div class="flex items-center gap-1.5">
+        <label class="text-[13px] text-text-secondary" for="qe-status">状态</label>
+        <select id="qe-status" v-model="local.status" class="select px-2 py-1.5 text-[12px] w-auto" :title="STATUS_HINT[local.status] || ''" @change="emitUpdate">
+          <option v-for="s in STATUS_OPTIONS" :key="s.value" :value="s.value">{{ s.label }}</option>
+        </select>
+      </div>
       <button class="i-btn px-2.5 py-1.5 text-[12px]" @click="showPaste=!showPaste" title="粘贴智能填入">
         <i class="i-lucide-clipboard text-[14px]" />智能粘贴
       </button>
@@ -82,12 +90,16 @@ import QuestionForm from './QuestionForm.vue'
 import PasteBox from './PasteBox.vue'
 import { settings } from '@/stores/settings.js'
 import { QUESTION_TYPES, QUESTION_TYPE_MAP, CHILD_QUESTION_TYPES as CHILD_TYPES, typeLabel } from '@/constants/questions.js'
+import { STATUS_OPTIONS, STATUS_HINTS as STATUS_HINT } from '@/stores/listFilter.js'
 import { createDefaultQuestion } from '@/utils/gradeQuestion.js'
 
 const props = defineProps({ modelValue: Object })
 const emit = defineEmits(['update:modelValue'])
 
 const local = reactive(JSON.parse(JSON.stringify(props.modelValue || createDefault('single'))))
+// 老数据没有 status（v2 早期）→ 补 published，与 schema 默认一致；否则下拉会显示空值
+if (!local.status) local.status = 'published'
+
 const formKey = ref(0)
 const showPaste = ref(false)
 
@@ -121,9 +133,20 @@ function createDefault(type){
 
 // ---------- 主试题 ----------
 let lastEmitted = null
+/**
+ * QuestionForm 冒上来的内容变化。
+ *
+ * 坑（已踩过，e2e「保存时下发 status=draft」失败即由此暴露）：QuestionForm 在挂载时
+ * 深拷贝了一份 question，**不含后来才出现在本组件顶部的 status/题型选择**。如果这里
+ * 用 payload 整份覆盖 local，用户刚选的「草稿」会被 payload 里的旧值顶回 published。
+ * 所以 status / type / version 这类**顶层元数据**由本组件（顶部那排控件）独占，
+ * payload 只允许覆盖题干/选项/答案/解析/分值/难度这些表单体字段。
+ */
 function onFormUpdate(payload){
+  const keep = { status: local.status, type: local.type, version: local.version }
   for(const k of Object.keys(local)) delete local[k]
   Object.assign(local, JSON.parse(JSON.stringify(payload)))
+  for(const k of ['status','type','version']) if(keep[k] !== undefined) local[k] = keep[k]
   lastEmitted = JSON.parse(JSON.stringify(local))
   emit('update:modelValue', lastEmitted)
 }

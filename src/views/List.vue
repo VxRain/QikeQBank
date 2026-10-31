@@ -117,15 +117,18 @@
                 <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" title="全选本页" :checked="allChecked" :indeterminate="someChecked && !allChecked" @change="toggleAll($event.target.checked)" />
               </th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 80px">类型</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 76px" title="草稿 / 停用的题不会出现在刷题、复习、模考里">状态</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">难度</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">分值</th>
+              <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 92px" title="最后修改时间">最近编辑</th>
+              <th class="text-right px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 104px" title="作答次数 · 正确率（仅统计练习/复习）">作答 / 正确率</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 240px">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="questions.length === 0">
-              <td colspan="6" class="text-center py-6 text-muted">
+              <td colspan="9" class="text-center py-6 text-muted">
                 <div v-if="isFiltered" class="flex flex-col items-center gap-3 py-2">
                   <i class="i-lucide-search-x text-[24px]" />
                   <div>没有符合当前筛选条件的试题</div>
@@ -154,6 +157,7 @@
                 <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, $event.target.checked)" />
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
+              <td class="px-3.5 py-3 border-b border-line"><span class="badge" :class="statusBadgeClass(q.status)" :title="statusHint(q.status)">{{ statusLabel(q.status) }}</span></td>
               <td class="px-3.5 py-3 border-b border-line max-w-[420px] truncate text-text-secondary font-500" :title="getPlainText(q)">
                 {{ truncate(getPlainText(q), 80) }}
                 <!-- 跨库模式必须标来源题库，否则同一批结果无从分辨归属 -->
@@ -161,6 +165,17 @@
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="difficulty-dots" :title="'难度 ' + (q.difficulty ?? 2) + ' / 5'"><i v-for="n in 5" :key="n" :class="['dot', n <= (q.difficulty ?? 2) && 'on']" /></span></td>
               <td class="px-3.5 py-3 border-b border-line">{{ displayScore(q) }}</td>
+              <td class="px-3.5 py-3 border-b border-line text-[12px] text-muted whitespace-nowrap" :title="q.updated_at || ''">{{ fmtDate(q.updated_at) }}</td>
+              <td class="px-3.5 py-3 border-b border-line text-right text-[12px] whitespace-nowrap">
+                <template v-if="qStats(q)">
+                  <span class="text-text-secondary tabular-nums">{{ qStats(q).attempt_count }}</span>
+                  <span class="text-muted-light"> · </span>
+                  <span :class="qStats(q).rate == null ? 'text-muted-light' : qStats(q).rate >= 0.6 ? 'text-success font-600' : 'text-danger font-700'">
+                    {{ qStats(q).rate == null ? '—' : Math.round(qStats(q).rate * 100) + '%' }}
+                  </span>
+                </template>
+                <span v-else class="text-muted-light" title="统计加载中">—</span>
+              </td>
               <td class="px-3.5 py-3 border-b border-line">
                 <div class="flex gap-1.5 flex-wrap">
                   <router-link :to="`/edit/${q.id}`" class="btn btn-small" title="编辑"><i class="i-lucide-pencil" />编辑</router-link>
@@ -171,7 +186,7 @@
               </td>
             </tr>
             <tr v-if="previewId === q.id" :key="q.id + '_preview'">
-              <td colspan="6" class="px-3.5 py-3 border-b border-line bg-bg-accent">
+              <td colspan="9" class="px-3.5 py-3 border-b border-line bg-bg-accent">
                 <div v-if="previewLoading && !previewCache[q.id]" class="text-muted py-4 flex items-center gap-2">
                   <i class="i-lucide-loader-circle animate-spin" />加载中...
                 </div>
@@ -214,6 +229,8 @@ import {
   SORT_OPTIONS,
   DIFFICULTY_CHOICES,
   STATUS_OPTIONS,
+  STATUS_HINTS,
+  statusLabel,
   PAGE_SIZE_CHOICES,
   DEFAULT_PAGE_SIZE,
   emptyFilter,
@@ -445,6 +462,39 @@ async function onBatchMove() {
   await moveQuestions([...selected.value])
 }
 
+/** 状态徽章配色：草稿/停用要一眼看出「不参与抽题」，但不用危险色（不是错误） */
+function statusBadgeClass(v) {
+  if (v === 'draft') return 'badge-warn'
+  if (v === 'archived') return 'badge-muted'
+  return 'badge-ok'
+}
+
+/** 状态说明：与录题页共用同一份措辞（STATUS_HINTS），避免两处口径漂移 */
+function statusHint(v) {
+  return STATUS_HINTS[v] || ''
+}
+
+/** ISO → 本地 YYYY-MM-DD HH:mm；无效值给占位，不显示 Invalid Date */
+function fmtDate(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/**
+ * 行内统计（FE-P1-04）：后端 stats 字段 → 展示用对象。
+ * rate 为 null 表示没做过（不是 0%），列表要与「做过但全错」区分开。
+ */
+function qStats(q) {
+  const st = q?.stats
+  if (!st) return null
+  const attempts = Number(st.attempt_count) || 0
+  const correct = Number(st.correct_count) || 0
+  return { attempts, correct, attempt_count: attempts, rate: attempts > 0 ? correct / attempts : null, last: st.last_answered_at || null, avgMs: Number(st.avg_ms) || 0 }
+}
+
 function truncate(s, n) {
   if (!s) return '-'
   return s.length > n ? s.slice(0, n) + '…' : s
@@ -515,6 +565,8 @@ async function fetchList() {
     params.offset = (page.value - 1) * pageSize.value
     params.summary = true
     params.sort = sort.value
+    // FE-P1-04：当前页的单题统计（只查这 50 个 id，后端不做全库扫描）
+    params.stats = true
     // 契约：questions_list 经 bridge.unwrap 拆包后固定为 {total, items}
     const data = await list(params)
     total.value = Number(data?.total) || 0

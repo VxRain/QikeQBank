@@ -11,6 +11,9 @@ import {
   DEFAULT_SORT,
   DIFFICULTY_CHOICES,
   STATUS_OPTIONS,
+  STATUS_LABELS,
+  STATUS_HINTS,
+  statusLabel,
   PAGE_SIZE_CHOICES,
   DEFAULT_PAGE_SIZE,
   emptyFilter,
@@ -71,6 +74,38 @@ describe('listFilter / 常量', () => {
     const vals = STATUS_OPTIONS.map((o) => o.value)
     assert.ok(vals.length >= 2)
     assert.equal(new Set(vals).size, vals.length)
+  })
+
+  test('状态三态齐全（FE-P1-03），且每个都有文案与说明', () => {
+    assert.deepEqual(STATUS_OPTIONS.map((o) => o.value), ['published', 'draft', 'archived'])
+    for (const o of STATUS_OPTIONS) {
+      assert.ok(o.label, `${o.value} 缺 label`)
+      assert.ok(STATUS_LABELS[o.value], `${o.value} 缺 STATUS_LABELS`)
+      assert.ok(STATUS_HINTS[o.value], `${o.value} 缺 STATUS_HINTS`)
+    }
+    // 未知值原样显示，不吞成「—」也不报错（脏数据可见比静默隐藏好）
+    assert.equal(statusLabel('weird'), 'weird')
+    assert.equal(statusLabel(null), '—')
+  })
+
+  test('抽取池口径与后端逐字一致：只有 published 进 pool / review', () => {
+    // 后端 practice.rs 的 practice_pool_impl 与 review_due_impl 都写死 status = 'published'；
+    // 这里锁定「published 是唯一被抽取的状态」这一契约，改任一侧都会让本测试失败。
+    const practice = readFileSync(resolve(ROOT, 'src-tauri/src/db/practice.rs'), 'utf8')
+    assert.match(practice, /AND status = 'published'/, 'practice_pool 必须只抽 published')
+    assert.match(practice, /AND q\.status = 'published'/, 'review_due 必须只抽 published')
+    const poolCount = (practice.match(/status = 'published'/g) || []).length
+    assert.ok(poolCount >= 6, `可用题量统计与抽取池共应有 ≥6 处 published 过滤，实际 ${poolCount}`)
+    // 历史指标不得按状态过滤（题目后来改成草稿不该让已发生的作答消失）
+    assert.ok(!/practiced_total[\s\S]{0,400}status = 'published'/.test(practice), '历史指标不能按 status 过滤')
+  })
+
+  test('录题页状态选项来自同一份 STATUS_OPTIONS（不许各写一套）', () => {
+    const editor = readFileSync(resolve(ROOT, 'src/components/QuestionEditor.vue'), 'utf8')
+    assert.match(editor, /import \{ STATUS_OPTIONS, STATUS_HINTS as STATUS_HINT \} from '@\/stores\/listFilter\.js'/)
+    assert.match(editor, /v-for="s in STATUS_OPTIONS"/)
+    // 老数据没 status 时要补 published，否则下拉显示空值
+    assert.match(editor, /if \(!local\.status\) local\.status = 'published'/)
   })
 })
 

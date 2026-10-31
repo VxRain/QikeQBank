@@ -141,10 +141,13 @@ pub(crate) fn practice_pool_impl(
     let limit = limit.unwrap_or(20).min(500) as i64;
     let type_filter = type_filter.filter(|s| !s.is_empty());
     let bank_id = bank_id.filter(|s| !s.is_empty());
+    // FE-P1-03：练习池默认只抽 published。草稿/停用是「还没准备好」的内容，
+    // 混进抽题会让用户莫名其妙做到半成品，也会污染正确率统计。
     let sql = format!(
         "SELECT {SELECT_FIELDS} FROM questions
          WHERE (?1 IS NULL OR type = ?1)
            AND (?3 IS NULL OR bank_id = ?3)
+           AND status = 'published'
          ORDER BY RANDOM() LIMIT ?2"
     );
     let mut out = query_questions(conn, &sql, params![type_filter, limit, bank_id])?;
@@ -450,11 +453,14 @@ pub(crate) fn review_due_impl(
     let bank_id = bank_id.filter(|s| !s.is_empty());
     // 截止放宽到今天结束（与 stats.due_today 同口径）：今日到期、即使还没到具体时刻也能立即复习
     let cutoff = fmt_iso(today_bounds().1);
+    // FE-P1-03：与练习池同口径，只复习 published；草稿被改回已发布后
+    // 原来的 review_state 仍在，无需重建卡片即可恢复复习。
     let sql = format!(
         "SELECT {SELECT_FIELDS_Q} FROM questions q
          JOIN review_state r ON r.question_id = q.id
          WHERE r.due_at <= ?1
            AND (?3 IS NULL OR q.bank_id = ?3)
+           AND q.status = 'published'
          ORDER BY r.due_at ASC
          LIMIT ?2"
     );
@@ -905,9 +911,13 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let (start_today, end_today) = today_bounds();
     let start_7d = start_today - Duration::days(6);
 
+    // FE-P1-03 口径统一：可用题量（total / by_type / due_* / learning_due）只算 published，
+    // 与 practice_pool / review_due 的 WHERE 一致；否则界面显示「可用 20 题」却只抽得出 12 题。
+    // 历史指标（practiced_* / correct_rate / records_7d）**不**按状态过滤：那是既成事实，
+    // 题目后来被改成草稿不该让正确率凭空变化。
     let total: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1)",
+            "SELECT COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1) AND status = 'published'",
             params![bank_id],
             |r| r.get(0),
         )
@@ -919,7 +929,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     {
         let mut stmt = conn
             .prepare(
-                "SELECT type, COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1) GROUP BY type",
+                "SELECT type, COUNT(*) FROM questions WHERE (?1 IS NULL OR bank_id = ?1) AND status = 'published' GROUP BY type",
             )
             .map_err(to_str)?;
         let mut rows = stmt.query(params![bank_id]).map_err(to_str)?;
@@ -935,7 +945,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let due_total: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
-             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
+             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2) AND q.status = 'published'",
             params![fmt_iso(now), bank_id],
             |r| r.get(0),
         )
@@ -943,7 +953,7 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let due_today: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
-             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2)",
+             WHERE r.due_at <= ?1 AND (?2 IS NULL OR q.bank_id = ?2) AND q.status = 'published'",
             params![fmt_iso(end_today), bank_id],
             |r| r.get(0),
         )
@@ -952,7 +962,8 @@ pub(crate) fn review_stats_impl(conn: &Connection, bank_id: Option<String>) -> R
     let learning_due: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM review_state r JOIN questions q ON q.id = r.question_id
-             WHERE r.due_at <= ?1 AND r.state IN (1, 3) AND (?2 IS NULL OR q.bank_id = ?2)",
+             WHERE r.due_at <= ?1 AND r.state IN (1, 3) AND (?2 IS NULL OR q.bank_id = ?2)
+               AND q.status = 'published'",
             params![fmt_iso(end_today), bank_id],
             |r| r.get(0),
         )
@@ -2013,6 +2024,60 @@ mod tests {
         let st2 = wrong_stats_impl(&conn, Some(2)).unwrap();
         assert_eq!(list2["total"], 1);
         assert_eq!(st2["total"], 1, "列表与统计必须同口径");
+    }
+
+    /// FE-P1-03：练习池 / 复习 / 可用题量统计默认只算 published。
+    ///
+    /// 为什么要一条测试同时断言两侧：口径分叉的典型症状是「界面写可用 3 题，实际只抽得出 1 题」，
+    /// 而单看任一侧都正常。所以这里把 pool / review_due / review_stats 放在一起对照。
+    #[test]
+    fn draft_and_archived_excluded_from_pool_review_and_available_counts() {
+        let conn = test_conn();
+        let mut ids = Vec::new();
+        for (i, status) in ["published", "draft", "archived"].iter().enumerate() {
+            let mut q = sample_question();
+            q["id"] = json!(format!("q_{status}"));
+            q["status"] = json!(status);
+            q["difficulty"] = json!(1);
+            questions_create_impl(&conn, q).unwrap();
+            ids.push(format!("q_{status}"));
+            let _ = i;
+        }
+
+        // 练习池只出 published
+        let pool = practice_pool_impl(&conn, Some(50), None, None, None).unwrap();
+        assert_eq!(pool.len(), 1, "pool 应只含 published，实际 {:?}", pool.iter().map(|q| q["status"].clone()).collect::<Vec<_>>());
+        assert_eq!(pool[0]["id"], "q_published");
+
+        // 三题都进复习队列（到期），但 review_due 只出 published
+        for id in &ids {
+            fsrs_upsert(&conn, id, &FsrsCard {
+                stability: 1.0,
+                difficulty: 5.0,
+                reps: 1,
+                lapses: 0,
+                state: 2,
+                learning_steps: 0,
+                scheduled_days: 1.0,
+                due_at: "2020-01-01T00:00:00.000Z".into(),
+                last_reviewed_at: Some("2020-01-01T00:00:00.000Z".into()),
+                last_result: Some("good".into()),
+            }, "2020-01-01T00:00:00.000Z").unwrap();
+        }
+        let due = review_due_impl(&conn, Some(50), None).unwrap();
+        assert_eq!(due.len(), 1, "review_due 应只含 published");
+        assert_eq!(due[0]["id"], "q_published");
+
+        // 可用题量统计同口径：total=1、by_type.single=1、due_total/due_today/learning_due 只算 published
+        let st = review_stats_impl(&conn, None).unwrap();
+        assert_eq!(st["total"], 1, "total 必须是可用题量（published）");
+        assert_eq!(st["by_type"]["single"], 1);
+        assert_eq!(st["due_total"], 1);
+        assert_eq!(st["due_today"], 1);
+        assert_eq!(st["learning_due"], 0, "state=2 不是学习中");
+
+        // 历史指标不按状态过滤：题目后来改成草稿，不该让已发生的作答凭空消失
+        assert_eq!(st["practiced_total"], 0);
     }
 
 }

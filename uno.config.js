@@ -98,6 +98,10 @@ export default defineConfig({
     ['badge-cur', 'text-primary border-primary-border bg-card'],
     ['badge-ok', 'text-success border-[#bcd9c4] bg-success-bg'],
     ['badge-bad', 'text-danger border-[#e3c9c5] bg-danger-bg'],
+    // 题目状态（FE-P1-03）：草稿 = 待办感（虚线边框），停用 = 明显退后
+    // 只复用已有 CSS 变量，不新增色板；草稿不是错误，所以不用 danger 色
+    ['badge-warn', 'text-text-secondary border-line-strong border-dashed bg-card'],
+    ['badge-muted', 'text-muted-light border-line bg-bg-accent opacity-80'],
 
     // ── 表单控件 ──
     ['input', 'px-3.5 py-2.25 rounded-[8px] border border-line bg-card text-text text-[14px] outline-none shadow-sm transition-[border-color,box-shadow] duration-150 placeholder:text-muted-light focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.14)] disabled:opacity-60'],

@@ -122,9 +122,9 @@ function makeRecorder() {
  * 少跑就是异常，分支导致的变化应该改基准数（说明确实是不同路径）。
  */
 const MODULE_BASELINE = {
-  list: 21,
+  list: 32,
   batch: 15,
-  form: 9,
+  form: 14,
   practice: 8,
   review: 18,
   exam: 20,
@@ -254,6 +254,7 @@ function mockScript() {
           const offset = args?.offset ?? 0
           const slice = items.slice(offset, offset + limit)
           if (args?.summary) {
+            window.__statsAsked = args?.stats === true
             const SUMMARY_FIELDS = ['id', 'bank_id', 'type', 'difficulty', 'score', 'status', 'plain_text', 'created_at', 'updated_at', 'fsrs', 'wrong_count']
             return {
               success: true,
@@ -262,6 +263,14 @@ function mockScript() {
                 items: slice.map((q) => {
                   const out = {}
                   for (const k of SUMMARY_FIELDS) if (q[k] !== undefined) out[k] = q[k]
+                  // FE-P1-04：stats:true 时后端为每行附统计（未做过的题也给零值）
+                  if (args?.stats) {
+                    const seed = window.__statSeed || {}
+                    const n = seed[q.id] ?? ((Number(q.id.replace(/\D/g, '')) || 1) % 4)
+                    out.stats = n > 0
+                      ? { attempt_count: n, correct_count: Math.ceil(n / 2), last_answered_at: '2026-09-10T00:00:00.000Z', avg_ms: 4200 }
+                      : { attempt_count: 0, correct_count: 0, last_answered_at: null, avg_ms: 0 }
+                  }
                   return out
                 })
               }
@@ -820,6 +829,48 @@ const MODULES = [
         /第 2 \/ 2 页/.test(afterDelPage),
         afterDelPage.match(/第 \d+ \/ \d+ 页/)?.[0] || '(未找到页码)')
       ok('收敛后不是空页', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
+
+      // ══ FE-P1-03 / FE-P1-04 状态三态 + 单题统计列 ══
+      await goto(page, '#/banks')
+      await page.evaluate(() => window.__restoreQs())
+      await goto(page, '#/library?bank=bank_default')
+
+      // 状态三态：下拉必须给齐 已发布 / 草稿 / 停用（只做两态会漏掉「停用」这条产品承诺）
+      const stOpts = await page.locator('select').filter({ hasText: '全部状态' }).first()
+        .locator('option').evaluateAll((els) => els.map((e) => e.textContent.trim()))
+      ok('状态筛选给出三态', stOpts.includes('已发布') && stOpts.includes('草稿') && stOpts.includes('停用'), JSON.stringify(stOpts))
+
+      // 列表状态徽章：草稿题必须标出来（否则用户不知道它不会被抽到）
+      const badgeTexts = await page.locator('tbody tr td:nth-child(3) .badge').evaluateAll((els) => els.map((e) => e.textContent.trim()))
+      ok('列表显示状态徽章', badgeTexts.length > 0 && badgeTexts.every((t) => ['已发布', '草稿', '停用'].includes(t)), JSON.stringify(badgeTexts.slice(0, 6)))
+      ok('draft 题标为「草稿」', badgeTexts.includes('草稿'), JSON.stringify(badgeTexts))
+      // 徽章配色：草稿用 badge-warn（不是 danger，草稿不是错误）
+      const draftCls = await page.locator('tbody tr td:nth-child(3) .badge').evaluateAll((els) =>
+        els.filter((e) => e.textContent.trim() === '草稿').map((e) => e.className))
+      ok('草稿徽章用 badge-warn 而不是危险色', draftCls.length > 0 && draftCls.every((c) => c.includes('badge-warn')), JSON.stringify(draftCls))
+
+      // 新增两列：最近编辑 + 作答/正确率
+      const heads = await page.locator('thead th').evaluateAll((els) => els.map((e) => e.textContent.trim()))
+      ok('表头含「最近编辑」列', heads.includes('最近编辑'), JSON.stringify(heads))
+      ok('表头含「作答 / 正确率」列', heads.some((h) => h.includes('作答') && h.includes('正确率')), JSON.stringify(heads))
+      const sevenCols = await page.locator('tbody tr').first().locator('td').count()
+      ok('行内单元格数与表头一致（9 列）', sevenCols === 9, `实际 ${sevenCols}`)
+
+      // 最近编辑列：yyyy-MM-dd hh:mm
+      const editCell = await page.locator('tbody tr').first().locator('td').nth(6).innerText()
+      ok('最近编辑列是日期时间', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(editCell.trim()), editCell.trim())
+
+      // 单题统计：请求必须带 stats:true（否则后端不聚合，列永远是 —）
+      const statsAsked = await page.evaluate(() => window.__statsAsked)
+      ok('列表请求下发 stats:true', statsAsked === true, String(statsAsked))
+      // 注意用 nth-child(8)：最后一列是「操作」（编辑/预览/移动/删除），统计是第 8 列
+      const statCells = await page.locator('tbody tr td:nth-child(8)').evaluateAll((els) => els.map((e) => e.innerText.trim()))
+      // 有作答的题显示「N · M%」，没作答显示 —
+      ok('统计列对有作答的题显示次数与正确率', statCells.some((t) => /^\d+ · \d+%$/.test(t)), JSON.stringify(statCells.slice(0, 5)))
+      // 未作答：显示「0 · —」。关键是不能显示成「0 · 0%」——那会把「没做过」说成「全错」
+      ok('统计列对未作答的题显示「0 · —」而不是「0 · 0%」',
+        statCells.some((t) => /^0 · —$/.test(t)) && !statCells.some((t) => /^0 · 0%$/.test(t)),
+        JSON.stringify(statCells.slice(0, 5)))
       await page.evaluate(() => window.__restoreQs())
       await flush(page)
 
@@ -959,6 +1010,28 @@ const MODULES = [
       await page.locator('a').filter({ hasText: '题库' }).first().click()
       await flush(page)
       ok('保存后离开不弹确认', !/放弃未保存的修改？/.test(await page.locator('body').innerText()))
+
+      // ══ FE-P1-03 录题页状态三态（草稿 / 已发布 / 停用）══
+      await goto(page, '#/create?bank=bank_default')
+      const stSel = page.locator('#qe-status')
+      ok('录题页有状态下拉', (await stSel.count()) === 1)
+      const stOpts = await stSel.locator('option').evaluateAll((els) => els.map((e) => e.value))
+      ok('状态三态齐全', JSON.stringify(stOpts) === JSON.stringify(['published', 'draft', 'archived']), JSON.stringify(stOpts))
+      ok('新建默认「已发布」', (await stSel.inputValue()) === 'published', await stSel.inputValue())
+      // 说明文案必须说明「不参与抽题」，否则用户以为存了就能刷到
+      ok('状态选项带抽题影响说明', /不会|抽题/.test(await stSel.getAttribute('title') || ''), String(await stSel.getAttribute('title')))
+
+      // 改成草稿后保存：下发的 status 必须是 draft（只改 UI 不下发等于没做）
+      await stSel.selectOption('draft')
+      await page.locator('.ProseMirror').first().click()
+      await page.keyboard.type('草稿题')
+      await flush(page)
+      const beforeSave = await page.evaluate(() => window.__creates)
+      await page.getByRole('button', { name: /^保存$/ }).first().click()
+      await flush(page)
+      const saved = await page.evaluate(() => window.__lastCreate)
+      ok('保存时下发 status=draft', (await page.evaluate(() => window.__creates)) > beforeSave && saved?.data?.status === 'draft',
+        JSON.stringify(saved?.data?.status))
     }
   },
 
