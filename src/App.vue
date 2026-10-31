@@ -187,11 +187,18 @@ onBeforeUnmount(() => {
   --primary: #1f4d3a;
   --primary-hover: #163b2c;
   --primary-bg: #e6efe8;
+  /* 主色淡底控件的 hover 底：只比 --primary-bg 深一档，保证「有反馈」又不跳色 */
+  --primary-bg-hover: #d8e7dc;
   --primary-border: #a3c7af;
   --success: #2f7d4f;
   --success-bg: #e8f2ea;
   --danger: #b4453a;
   --danger-bg: #f6e8e6;
+  /* 实心深色控件（分段/选项选中）的 hover 色：必须比 --text 略浅，
+     否则「选中后 hover」没有任何可感反馈；见 uno.config.js 的 seg-on 注释 */
+  --text-hover: #3d3a33;
+  /* 危险态选中控件的 hover 边框（danger-bg 上加深一档）*/
+  --danger-border-strong: #c08b83;
   --radius: 10px;
   --radius-lg: 12px;
   --shadow-sm: 0 1px 2px rgba(60,50,30,.05);

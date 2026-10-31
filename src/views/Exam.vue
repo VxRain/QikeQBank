@@ -46,8 +46,8 @@
             v-for="c in COUNT_OPTIONS"
             :key="c.value"
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="count === c.value && 'bg-text text-white border-text'"
+            class="seg"
+            :class="count === c.value && 'seg-on'"
             @click="count = c.value"
           >
             {{ c.label }}
@@ -63,14 +63,14 @@
         <div class="flex gap-2 flex-wrap">
           <button
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="multiRule === 'partial' && 'bg-text text-white border-text'"
+            class="seg"
+            :class="multiRule === 'partial' && 'seg-on'"
             @click="setMultiRule('partial')"
           >漏选按比例给分</button>
           <button
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="multiRule === 'strict' && 'bg-text text-white border-text'"
+            class="seg"
+            :class="multiRule === 'strict' && 'seg-on'"
             @click="setMultiRule('strict')"
           >漏选不得分</button>
         </div>
@@ -83,8 +83,8 @@
             v-for="d in DURATION_OPTIONS"
             :key="d.value"
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="durationMin === d.value && 'bg-text text-white border-text'"
+            class="seg"
+            :class="durationMin === d.value && 'seg-on'"
             @click="setDuration(d.value)"
           >
             {{ d.label }}
@@ -163,7 +163,7 @@
           <button
             type="button"
             class="btn"
-            :class="flagged[cur?.uid] && '!bg-danger-bg !border-[#e3c9c5] !text-danger'"
+            :class="flagged[cur?.uid] && 'seg-danger'"
             :title="flagged[cur?.uid] ? '取消标记' : '标记待定，交卷前再确认'"
             @click="toggleFlag(cur?.uid)"
           >
@@ -197,7 +197,7 @@
         <!-- 简答自评（模考：与「查看参考答案」同一行） -->
         <template #short-toolbar="{ showRef }">
           <template v-if="showRef">
-            <button type="button" class="btn btn-danger" :class="curAns.shortSelf === '不会' && '!bg-danger-bg !border-[#d2a39c] !text-danger'" @click="curAns.shortSelf = '不会'"><i class="i-lucide-x" />不会</button>
+            <button type="button" class="btn btn-danger" :class="curAns.shortSelf === '不会' && 'seg-danger'" @click="curAns.shortSelf = '不会'"><i class="i-lucide-x" />不会</button>
             <button type="button" class="btn btn-primary" @click="curAns.shortSelf = '会'"><i class="i-lucide-check" />会</button>
           </template>
         </template>

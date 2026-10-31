@@ -15,8 +15,8 @@
           <span class="badge">{{ bankStore.banks.length }} 个题库 · 共 {{ totalCount }} 题</span>
           <!-- 视图切换：图标钮组，与操作钮同语言 -->
           <span class="inline-flex items-center border border-line rounded-[8px] overflow-hidden">
-            <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="view === 'grid' ? '!bg-primary-bg !text-primary' : ''" title="卡片视图" @click="setView('grid')"><i class="i-lucide-layout-grid text-[15px]" /></button>
-            <button type="button" class="btn !rounded-none !border-0 !shadow-none !py-1.5 !px-2.5" :class="view === 'list' ? '!bg-primary-bg !text-primary' : ''" title="列表视图" @click="setView('list')"><i class="i-lucide-list text-[15px]" /></button>
+            <button type="button" class="seg-icon" :class="view === 'grid' ? 'seg-icon-on' : ''" title="卡片视图" @click="setView('grid')"><i class="i-lucide-layout-grid text-[15px]" /></button>
+            <button type="button" class="seg-icon" :class="view === 'list' ? 'seg-icon-on' : ''" title="列表视图" @click="setView('list')"><i class="i-lucide-list text-[15px]" /></button>
           </span>
           <button type="button" class="btn btn-primary btn-small" @click="openCreate">
             <i class="i-lucide-plus" />新建题库

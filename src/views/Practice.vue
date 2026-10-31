@@ -14,14 +14,14 @@
         <div class="flex gap-2 flex-wrap">
           <button
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="mode === 'practice' && 'bg-text text-white border-text'"
+            class="seg"
+            :class="mode === 'practice' && 'seg-on'"
             @click="setMode('practice')"
           ><i class="i-lucide-zap mr-1.5" />练习 · 作答判分</button>
           <button
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="mode === 'recite' && 'bg-text text-white border-text'"
+            class="seg"
+            :class="mode === 'recite' && 'seg-on'"
             @click="setMode('recite')"
           ><i class="i-lucide-book-open mr-1.5" />背题 · 看答案过一遍</button>
         </div>
@@ -64,8 +64,8 @@
             v-for="c in COUNT_OPTIONS"
             :key="c.value"
             type="button"
-            class="px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer transition-[background-color,border-color,color] duration-150 shadow-sm hover:bg-bg-accent"
-            :class="count === c.value && 'bg-text text-white border-text'"
+            class="seg"
+            :class="count === c.value && 'seg-on'"
             @click="count = c.value"
           >
             {{ c.label }}
@@ -129,7 +129,7 @@
           <button
             type="button"
             class="btn"
-            :class="isFlagged && 'bg-danger-bg border-[#e3c9c5] text-danger'"
+            :class="isFlagged && 'seg-danger'"
             :title="isFlagged ? '取消标记' : '标记待定，稍后再看'"
             @click="toggleFlag"
           ><i class="i-lucide-flag" />{{ isFlagged ? '取消标记' : '标记' }}</button>

@@ -49,7 +49,7 @@
           class="option-btn"
           :title="interactiveHint"
           :disabled="locked"
-          :class="isPicked(o.id) && 'bg-primary-bg border-primary-border text-text shadow-[0_0_0_3px_rgba(31,77,58,0.12)]'"
+          :class="isPicked(o.id) && 'option-btn-on'"
           @click="pick(o.id)"
         >
           <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>

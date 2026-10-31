@@ -1,5 +1,5 @@
 <template>
-  <div class="option-block border rounded-[8px] p-3 mb-2.5 shadow-sm transition-[border-color,box-shadow,background-color] duration-150 hover:shadow-sm hover:border-line-strong" :class="isCorrect ? 'border-[#bcd9c4] bg-success-bg' : 'border-line bg-card'">
+  <div class="option-block border rounded-[8px] p-3 mb-2.5 shadow-sm transition-[border-color,box-shadow,background-color] duration-150 hover:shadow-sm hover:border-line-strong" :class="isCorrect ? '!border-[#bcd9c4] !bg-success-bg' : 'border-line bg-card'">
     <div class="flex items-center gap-2 mb-2.5">
       <span class="w-[22px] h-[22px] rounded-full bg-primary-bg text-primary font-700 text-[12px] flex items-center justify-center shrink-0">{{ displayKey }}</span>
       <label class="flex items-center gap-1.5 text-[13px] text-text-secondary cursor-pointer font-500 ml-auto">

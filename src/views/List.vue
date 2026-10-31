@@ -149,7 +149,7 @@
               </td>
             </tr>
             <template v-for="q in questions" :key="q.id">
-            <tr class="transition-[background-color] duration-100 hover:bg-card-hover" :class="selected.has(q.id) && 'bg-primary-bg'">
+            <tr class="transition-[background-color] duration-100 hover:bg-card-hover" :class="selected.has(q.id) && 'row-on'">
               <td class="px-3 py-3 border-b border-line text-center">
                 <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, $event.target.checked)" />
               </td>

@@ -36,11 +36,14 @@ export default defineConfig({
       primary: 'var(--primary)',
       'primary-hover': 'var(--primary-hover)',
       'primary-bg': 'var(--primary-bg)',
+      'primary-bg-hover': 'var(--primary-bg-hover)',
       'primary-border': 'var(--primary-border)',
       success: 'var(--success)',
       'success-bg': 'var(--success-bg)',
       danger: 'var(--danger)',
-      'danger-bg': 'var(--danger-bg)'
+      'danger-bg': 'var(--danger-bg)',
+      'danger-border-strong': 'var(--danger-border-strong)',
+      'text-hover': 'var(--text-hover)'
     },
     borderRadius: {
       DEFAULT: 'var(--radius)',
@@ -71,6 +74,24 @@ export default defineConfig({
     ['btn-big', 'px-5 py-2.5 text-[15px] rounded-[10px]'],
     ['btn-tiny', 'px-2 py-1 text-[11px] rounded-[6px]'],
 
+    // ── 分段选择器（Practice 模式/题量、Exam 题量/计分/限时共用）──
+    //
+    // 为什么必须封装：这套 class 原本在 7 处逐字复制（Practice 3 处 + Exam 4 处）。
+    // 一旦要调 hover 行为就得改 7 个文件，而且每个文件各自为政 → 实测出现过
+    // 「黑色选中按钮 hover 背景退回浅米色、白字整块消失」。
+    //
+    // 为什么选中态要用 `!`：`.hover\:bg-bg-accent:hover` 是 (0,2,0)特异度，
+    // `.bg-text` 只有 (0,1,0)，同元素上 hover 规则**必然**赢，跟发射顺序无关。
+    // 所以选中态的无条件配色必须 important 才能站稳。
+    ['seg', 'px-4.5 py-2 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] font-500 cursor-pointer shadow-sm transition-[background-color,border-color,color] duration-150 hover:bg-bg-accent hover:border-line-strong hover:text-text'],
+    // 选中态**必须成对声明 hover**：否则 `!important` 会把 seg 的 hover 一并冻住，
+    // 鼠标移上去毫无反馈（用户实测：「hover 和不 hover 一模一样」）。
+    // 变体只包含选中态差异部分，尺寸/圆角仍由 seg 提供。
+    ['seg-on', '!bg-text !text-white !border-text hover:!bg-text-hover hover:!border-text-hover'],
+    // 危险态选中（标记待定 / 不会）：底色不反转，hover 只加深边框，不跳色
+    // 静态态也用 `!`：否则会靠「shortcut 发射顺序」才能赢过 seg 的 card 底色，属于隐性依赖
+    ['seg-danger', '!bg-danger-bg !text-danger !border-[#e3c9c5] hover:!bg-danger-bg hover:!border-danger-border-strong hover:!text-danger'],
+
     // ── 徽章（胶囊）──
     ['badge', 'inline-flex items-center gap-1 text-[12px] px-2.5 py-1 rounded-full border border-line text-muted bg-bg-accent font-500 whitespace-nowrap'],
     ['badge-type', 'text-primary border-primary-border bg-primary-bg'],
@@ -92,6 +113,20 @@ export default defineConfig({
 
     // ── 作答选项 ──
     ['option-btn', 'flex items-start gap-2 text-left px-3.5 py-2.5 rounded-[8px] border border-line bg-card text-text-secondary text-[14px] leading-[1.6] cursor-pointer shadow-sm transition-[background-color,border-color,box-shadow] duration-150 hover:bg-bg-accent hover:border-line-strong'],
+    // 选项选中：主色淡底 + 主色描边 + 光环。成对声明 hover（不加深的话 hover 时只改边框很寡淡）
+    // shadow 必须带 `!`：option-btn 自带 shadow-sm，同层竞争靠发射顺序太脆
+    ['option-btn-on', '!bg-primary-bg !border-primary-border !text-text !shadow-[0_0_0_3px_rgba(31,77,58,0.12)] hover:!bg-primary-bg hover:!border-primary hover:!text-text'],
+
+    // ── 图标组（Banks 视图切换等「多选一」图标钮）──
+    // base 只改尺寸/形状，方块化交给外层容器；不嵌 btn（避免 shadow-none/阴影叠加歧义）
+    ['seg-icon', 'inline-flex items-center justify-center gap-1.5 border-0 bg-card text-text-secondary text-[13px] font-500 cursor-pointer transition-colors duration-150 hover:bg-bg-accent hover:text-text'],
+    ['seg-icon-on', '!bg-primary-bg !text-primary hover:!bg-primary-bg-hover hover:!text-primary'],
+
+    // ── 表格行选中（List / Wrong 勾选后整行高亮）──
+    // 必须成对 hover，且 hover 色要**仍然像选中**：行自带 hover:bg-card-hover 会被 `!` 压掉，
+    // 若不补一对 hover，选中行悬停时画面完全不动（用户报「hover 和不 hover 一样」）。
+    // 这里用深一档的主色淡底：既给出反馈，又不退回中性 card 色而丢失选中感。
+    ['row-on', '!bg-primary-bg hover:!bg-primary-bg-hover'],
 
     // ── 进度条 ──
     ['progress-track', 'h-1.5 rounded-full bg-bg-accent overflow-hidden'],
