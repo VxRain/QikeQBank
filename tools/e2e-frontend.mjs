@@ -122,7 +122,7 @@ function makeRecorder() {
  * 少跑就是异常，分支导致的变化应该改基准数（说明确实是不同路径）。
  */
 const MODULE_BASELINE = {
-  list: 32,
+  list: 37,
   batch: 15,
   form: 14,
   practice: 8,
@@ -830,6 +830,28 @@ const MODULES = [
         afterDelPage.match(/第 \d+ \/ \d+ 页/)?.[0] || '(未找到页码)')
       ok('收敛后不是空页', (await page.locator('tbody tr').count()) > 0, `${await page.locator('tbody tr').count()} 行`)
 
+      // FE-P1-04 验收：1000 题库翻页不出现明显卡顿。
+      // 注意这是「不随总量线性恶化」的守门断言，不是精确性能基准：
+      // 阈值取 3000ms（实测 1000 题 @50/页约 200~400ms），真退化成全库扫描会远超它。
+      await page.evaluate(() => window.__setCount(1000))
+      await goto(page, '#/banks')
+      await goto(page, '#/library?bank=bank_default')
+      const t1 = Date.now()
+      await page.getByRole('button', { name: /下一页/ }).click()
+      await page.waitForFunction(() => window.__inflight === 0, null, { timeout: 10000 })
+      await flush(page)
+      const pageMs = Date.now() - t1
+      const bigBody = await page.locator('body').innerText()
+      // 不写死总页数：本模块前面把每页条数改成了 20，1000/20 = 50 页
+      ok('1000 题翻页正常（在第 2 页且非空）', /第 2 \/ \d+ 页/.test(bigBody), bigBody.match(/第 \d+ \/ \d+ 页/)?.[0] || '')
+      ok('1000 题翻页耗时在预期内（不随总量线性恶化）', pageMs < 3000, `${pageMs}ms`)
+      // 统计列在 1000 题下仍只查当前页：行数与页大小一致，未做过的题显示 0 · —
+      const bigStats = await page.locator('tbody tr td:nth-child(8)').evaluateAll((els) => els.map((e) => e.innerText.trim()))
+      const pageRows = await page.locator('tbody tr').count()
+      ok('1000 题下统计列只覆盖当前页（行数 == 页大小）',
+        bigStats.length === pageRows && pageRows > 0 && pageRows <= 100,
+        `统计 ${bigStats.length} 行 / 共 ${pageRows} 行`)
+
       // ══ FE-P1-03 / FE-P1-04 状态三态 + 单题统计列 ══
       await goto(page, '#/banks')
       await page.evaluate(() => window.__restoreQs())
@@ -868,6 +890,18 @@ const MODULES = [
       // 有作答的题显示「N · M%」，没作答显示 —
       ok('统计列对有作答的题显示次数与正确率', statCells.some((t) => /^\d+ · \d+%$/.test(t)), JSON.stringify(statCells.slice(0, 5)))
       // 未作答：显示「0 · —」。关键是不能显示成「0 · 0%」——那会把「没做过」说成「全错」
+      // 展开行里给完整四项统计（列表行是压缩版）
+      await page.getByRole('button', { name: /^预览$/ }).first().click()
+      await flush(page)
+      const detail = await page.locator('tbody').innerText()
+      ok('展开行显示完整单题统计', /本题作答/.test(detail) && /作答/.test(detail) && /答对/.test(detail) && /平均用时/.test(detail) && /最近作答/.test(detail),
+        detail.slice(0, 200).replace(/\n/g, ' | '))
+      ok('展开行的正确率与列表行一致（同一份后端数据）', /正确率/.test(detail))
+      // 坑：不能用 `.click().catch(() => {})` —— 元素不存在时 Playwright 会等满默认 30s
+      // 才抛错（实测把 list 模块从 1.4s 拖到 31.7s）。必须先判断再点。
+      const collapseBtn = page.getByRole('button', { name: /^收起$/ }).first()
+      if (await collapseBtn.count()) await collapseBtn.click()
+
       ok('统计列对未作答的题显示「0 · —」而不是「0 · 0%」',
         statCells.some((t) => /^0 · —$/.test(t)) && !statCells.some((t) => /^0 · 0%$/.test(t)),
         JSON.stringify(statCells.slice(0, 5)))

@@ -94,7 +94,7 @@
 | FE-P1-01 | 首页「今日任务」+ 新用户引导 | S–M | 否 | [x] |
 | FE-P1-02 | 题库页快捷入口 / 搜索 / 排序 / 复制 | M | 部分 | [x] |
 | FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [x] |
-| FE-P1-04 | 单题统计 | S–M | 是 | [ ] |
+| FE-P1-04 | 单题统计 | S–M | 是 | [x] |
 | FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [ ] |
 | FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [ ] |
 | FE-P1-07 | 模考标准卷 / 暂停 / 成绩趋势 | M–L | 部分 | [ ] |
@@ -560,11 +560,20 @@
 - 守卫：`list-filter.test.js` 30 条（+4：三态齐全与文案、抽取池口径逐字对照、录题页同源引用）、cargo +1；e2e `list` 21→32、`form` 9→14。
 - 待 FE-P0-12：抽题「配额」与材料题统计口径未定，故**没有**做按状态加权/配额分配；难度参与抽题权重属 FE-P2-02，本轮不做。
 
-### [ ] FE-P1-04 单题统计
+### [x] FE-P1-04 单题统计
 
 - `questions_list` 增加可选 `stats: true`：对当前页 50 个 id `LEFT JOIN practice_records` 聚合，返回 `attempt_count / correct_count / last_answered_at / avg_ms`。
 - 列表行展开或详情抽屉展示单题统计；错题本侧展示最近错误时间。
 - **验收**：1000 题库中翻页不出现明显卡顿；统计只查当前页，不全库扫描。
+
+**已完成（2026-10-31）**
+- `questions_list` 新增 `stats?: bool`；为 `true` 时当前页每行附 `stats: {attempt_count, correct_count, last_answered_at, avg_ms}`。**未做过的题也给零值**（`0 / 0 / null / 0`），前端不必区分「没有字段」与「0 次」两种空态。
+- **实现方式与原方案不同，且有实测依据**：原文写 `LEFT JOIN practice_records`，实际改成独立点查 `attach_question_stats`（`stats_sql(n)` 生成 `WHERE mode != 'exam' AND question_id IN (?,…) GROUP BY question_id`）。原因：主查询带 `ORDER BY + LIMIT`，JOIN 会先把流水行放大再排序，1000 题库翻页会明显变慢；分开查只对当前页 50 个 id 走 `idx_records_question`，是纯索引点查。口径只含练习/复习（模考是得分率语义，FE-P0-12 明确三者不可混算）。
+- **验收可证伪化**（不靠「翻页看着不卡」）：cargo 单测 `stats_sql_is_page_scoped_and_index_backed` 断言 ① 占位符个数 == 页大小 ② `IN (?)` 形态与 `mode != 'exam'` 口径 ③ `EXPLAIN QUERY PLAN` 走 `idx_records_question` 且不含 `SCAN practice_records`；e2e 另加 1000 题翻页断言（第 2 页非空、耗时 < 3000ms、统计列行数 == 页大小）。
+- **UI 两处**：列表行内压缩版「作答次数 · 正确率」（未作答 `0 · —`）；点「预览」展开的行里给完整四项（作答/答对/正确率/平均用时/最近作答），`fmtDuration` 负责毫秒 → 人读时长。
+- 错题本侧「最近错误时间」原已随 FE-P0-11 落地（`last_wrong_at` 列 + 展开行「上次答错」），本轮回归确认，不重复实现。
+- 守卫：cargo +1（157）；e2e `list` 32 → 37。
+- 顺带修掉 e2e 基建坑：`element.click().catch(()=>{})` 在元素不存在时会等满默认 30s（把 list 从 1.4s 拖到 31.7s），改为「先判断再点」，模块回到 1.7s。
 
 ### [ ] FE-P1-05 材料子题排序 / 改题型 / 复制题目
 
@@ -927,3 +936,4 @@
 | v7 | 2026-10-31 | **FE-P1-01 完成**（首页今日任务 + 新用户引导 + 数据安全状态）。新增 `src/utils/dailyTask.js` 纯逻辑（19 条单测）+ 设置项 `settings.dailyGoal`（1–500，纯本机偏好）+ 深链 `?types=` / `?import=1` + `window` 事件 `qbank:open-settings`。文案如实只报同步时间、明写「本地无时间点快照」，不拿「备份」冒充已实现。e2e `banks` 16 → 33 条，并修基建缺陷：点击触发的异步路由跳转不能只 `flush()`（只等 IPC），新增 `waitRouteAfterClick()` 等 hash + `requireRoute()` |
 | v8 | 2026-10-31 | **FE-P1-02 完成**（题库页快捷入口 / 搜索 / 排序 / 拖拽持久化 / 复制 / 导出）。后端新增 `banks_duplicate`（事务内新库+题目副本，题目与子题 id 全部重排，不继承流水/复习态）与 `banks_export_md`（落盘 export/，文件名后端重拼）。导出**不用 JSON**：`export_dbjson` 已随 FE-P0-01 移除且 PLAN §4 禁止以「备份」措辞新增，改导出与导入模板同格式的 Markdown，「导出→再导入」闭环由单测直接跑 `parseTemplateFile` 验证。栅格改 auto-fit。单测 +49（banks-view 28 / export-bank 21），e2e banks 33 → 67 |
 | v9 | 2026-10-31 | **FE-P1-03 完成**（难度/状态元数据产品化）。状态三态 published/draft/archived 落地：录题页下拉 + 列表徽章与筛选；抽取池口径统一到 8 处（`practice_pool` / `review_due` / `review_stats` 的 total·by_type·due_total·due_today·learning_due），历史指标刻意不按状态过滤。列表新增「最近编辑」「作答/正确率」列（未作答显示 `0 · —` 而非 `0 · 0%`）。**修掉 e2e 暴露的真缺陷**：QuestionForm 深拷贝不含顶部控件的 question，用户选「草稿」后任何表单编辑都把 status 顶回 published；现由 QuestionEditor 独占 status/type/version。单测 +4（308），e2e list 21→32、form 9→14 |
+| v10 | 2026-10-31 | **FE-P1-04 完成**（单题统计）。`questions_list` 加 `stats?`，实现改成独立索引点查（`IN (?,…)` 仅当前页 id）而非原文的 LEFT JOIN——JOIN 会把流水行放大再排序，1000 题翻页明显变慢。验收可证伪化：cargo 单测断言占位符个数==页大小 + `EXPLAIN QUERY PLAN` 走 `idx_records_question` 无全表扫描；e2e 加 1000 题翻页断言。列表行压缩版 + 展开行完整四项。顺带修 e2e `click().catch()` 空等 30s 的坑（list 31.7s → 1.7s）。cargo 157、e2e list 32→37 全量 236 |

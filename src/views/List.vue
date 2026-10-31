@@ -191,6 +191,20 @@
                   <i class="i-lucide-loader-circle animate-spin" />加载中...
                 </div>
                 <QuestionPreview v-else-if="previewCache[q.id]" :question="previewCache[q.id]" />
+                <!-- FE-P1-04 单题统计：展开行里给完整四项，列表行只放「次数 · 正确率」压缩版 -->
+                <div v-if="qStats(q)" class="mt-3 pt-3 border-t border-line flex flex-wrap items-center gap-x-6 gap-y-2 text-[12.5px]">
+                  <span class="text-muted font-600 flex items-center gap-1.5"><i class="i-lucide-sigma text-primary" />本题作答</span>
+                  <span class="text-text-secondary">作答 <b class="text-text tabular-nums">{{ qStats(q).attempt_count }}</b> 次</span>
+                  <span class="text-text-secondary">答对 <b class="tabular-nums" :class="qStats(q).correct > 0 ? 'text-success' : 'text-text'">{{ qStats(q).correct }}</b> 次</span>
+                  <span class="text-text-secondary">
+                    正确率
+                    <b :class="qStats(q).rate == null ? 'text-muted-light' : qStats(q).rate >= 0.6 ? 'text-success' : 'text-danger'">
+                      {{ qStats(q).rate == null ? '尚未作答' : Math.round(qStats(q).rate * 100) + '%' }}
+                    </b>
+                  </span>
+                  <span class="text-text-secondary">平均用时 <b class="text-text tabular-nums">{{ fmtDuration(qStats(q).avgMs) }}</b></span>
+                  <span class="text-text-secondary">最近作答 <b class="text-text">{{ qStats(q).last ? fmtDate(qStats(q).last) : '—' }}</b></span>
+                </div>
               </td>
             </tr>
             </template>
@@ -460,6 +474,17 @@ async function onBatchDelete() {
 
 async function onBatchMove() {
   await moveQuestions([...selected.value])
+}
+
+/** 毫秒 → 人读时长（统计里 avg_ms 只用于「做题快慢」感知，不参与判分） */
+function fmtDuration(ms) {
+  const n = Number(ms) || 0
+  if (n <= 0) return '—'
+  const s = n / 1000
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} 秒`
+  const m = Math.floor(s / 60)
+  const rest = Math.round(s % 60)
+  return rest ? `${m} 分 ${rest} 秒` : `${m} 分`
 }
 
 /** 状态徽章配色：草稿/停用要一眼看出「不参与抽题」，但不用危险色（不是错误） */

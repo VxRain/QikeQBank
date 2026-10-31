@@ -231,6 +231,36 @@ pub(crate) fn query_question_summaries(conn: &Connection, sql: &str, p: impl rus
 ///
 /// 口径：只统计练习/复习流水（mode != 'exam'），与错题本、正确率口径一致；
 /// 模考是「得分率」语义，混进来会让这里的「正确率」不可比（FE-P0-12 明确三者不可混算）。
+/// 单题统计的聚合 SQL（FE-P1-04）。
+///
+/// 抽成纯函数是为了让「只查当前页」这件事可断言：测试直接检查占位符个数与
+/// `IN (...)` 形态，而不是靠「翻页看着不卡」这种无法证伪的观察。
+///
+/// 为什么不是 JOIN 进主查询：主查询带 ORDER BY + LIMIT，JOIN practice_records
+/// 会先把流水行放大再排序；分成这条点查可以只对当前页 id 走 `idx_records_question`。
+pub(crate) fn stats_sql(n: usize) -> String {
+    // n == 0 时 `IN ()` 是非法 SQL；调用方已提前返回，这里再兜一层，
+    // 用永远为假的谓词保证「零 id」不会变成语法错误或全表匹配。
+    if n == 0 {
+        return "SELECT question_id, COUNT(*) AS attempt_count,
+                COALESCE(SUM(correct), 0) AS correct_count,
+                MAX(answered_at) AS last_answered_at,
+                CAST(COALESCE(AVG(NULLIF(elapsed_ms, 0)), 0) AS INTEGER) AS avg_ms
+         FROM practice_records WHERE 0 GROUP BY question_id"
+            .to_string();
+    }
+    let placeholders = std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",");
+    format!(
+        "SELECT question_id, COUNT(*) AS attempt_count,
+                COALESCE(SUM(correct), 0) AS correct_count,
+                MAX(answered_at) AS last_answered_at,
+                CAST(COALESCE(AVG(NULLIF(elapsed_ms, 0)), 0) AS INTEGER) AS avg_ms
+         FROM practice_records
+         WHERE mode != 'exam' AND question_id IN ({placeholders})
+         GROUP BY question_id"
+    )
+}
+
 pub(crate) fn attach_question_stats(
     conn: &Connection,
     rows: &mut [Value],
@@ -242,17 +272,7 @@ pub(crate) fn attach_question_stats(
     if ids.is_empty() {
         return Ok(());
     }
-    // 占位符按实际条数生成（当前页最多 500 条，远低于 SQLite 变量上限）
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT question_id, COUNT(*) AS attempt_count,
-                COALESCE(SUM(correct), 0) AS correct_count,
-                MAX(answered_at) AS last_answered_at,
-                CAST(COALESCE(AVG(NULLIF(elapsed_ms, 0)), 0) AS INTEGER) AS avg_ms
-         FROM practice_records
-         WHERE mode != 'exam' AND question_id IN ({placeholders})
-         GROUP BY question_id"
-    );
+    let sql = stats_sql(ids.len());
     let mut stmt = conn.prepare(&sql).map_err(to_str)?;
     let mut q = stmt.query(rusqlite::params_from_iter(ids.iter())).map_err(to_str)?;
     let mut map: HashMap<String, Value> = HashMap::new();
@@ -1099,6 +1119,65 @@ mod tests {
         let ids: Vec<String> = q["children"].as_array().unwrap().iter()
             .map(|c| c["id"].as_str().unwrap().to_string()).collect();
         assert_eq!(ids, vec!["parent1_c1", "keep_me"]);
+    }
+
+
+    /// FE-P1-04 验收：stats 只查当前页那批 id，禁止全库扫描。
+    ///
+    /// 断言三件事（不靠「翻页看着不卡」这种无法证伪的观察）：
+    /// ① SQL 里是 `question_id IN (?,…)`，占位符个数 == 页大小；
+    /// ② WHERE 带 `mode != 'exam'`（口径只含练习/复习）；
+    /// ③ `EXPLAIN QUERY PLAN` 走 `idx_records_question` 索引，不做全表扫描。
+    #[test]
+    fn stats_sql_is_page_scoped_and_index_backed() {
+        // 1000 题：远大于页大小，SQL 若退化成全库聚合这里会扫全表
+        let conn = test_conn();
+        for i in 0..1000 {
+            let mut q = sample_question();
+            q["id"] = json!(format!("q{i:04}"));
+            questions_create_impl(&conn, q).unwrap();
+        }
+
+        let page = questions_list_impl(
+            &conn,
+            &QuestionListQuery { summary: true, limit: Some(50), stats: true, ..Default::default() },
+        )
+        .unwrap();
+        let items = page["items"].as_array().unwrap().clone();
+        assert_eq!(items.len(), 50, "页大小仍是 50");
+        assert_eq!(page["total"], 1000);
+        // 每行都带 stats（没做过的题给零值），前端不必区分两种空态
+        for q in &items {
+            let st = q.get("stats").expect("每行都应有 stats");
+            assert_eq!(st["attempt_count"], 0);
+            assert_eq!(st["correct_count"], 0);
+            assert!(st["last_answered_at"].is_null());
+        }
+
+        // ① 占位符个数 == 页大小：这是「只查当前页」的直接证据
+        let sql = stats_sql(items.len());
+        assert_eq!(sql.matches('?').count(), 50, "占位符个数应等于页大小");
+        assert!(sql.contains("IN (?"), "必须用 IN (...) 限定当前页 id");
+        assert!(sql.contains("GROUP BY question_id"));
+        assert!(sql.contains("mode != 'exam'"), "口径只含练习/复习");
+        // stats_sql(0) 不会产出 IN () 这种非法 SQL
+        assert!(!stats_sql(0).contains("IN ("));
+
+        // ② 查询计划必须走索引（否则 1000 题就会退化成全表扫）
+        let plan_sql = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut stmt = conn.prepare(&plan_sql).unwrap();
+        let ids: Vec<String> = items.iter().map(|q| q["id"].as_str().unwrap().to_string()).collect();
+        let plan: Vec<String> = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let joined = plan.join(" | ");
+        assert!(
+            joined.contains("idx_records_question"),
+            "统计查询应走 idx_records_question，实际计划：{joined}"
+        );
+        assert!(!joined.contains("SCAN practice_records"), "不得全表扫描 practice_records：{joined}");
     }
 
     #[test]
