@@ -3,7 +3,14 @@
   <Teleport to="body">
     <Transition name="sc">
       <div v-if="open" class="sc-mask fixed inset-0 z-[1050] flex bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="$emit('close')">
-        <aside class="sc-panel ml-auto w-full max-w-[420px] h-full bg-card border-l border-line shadow-lg flex flex-col">
+        <aside
+          ref="cardEl"
+          class="sc-panel ml-auto w-full max-w-[420px] h-full bg-card border-l border-line shadow-lg flex flex-col"
+          role="dialog"
+          aria-modal="true"
+          aria-label="答题卡"
+          tabindex="-1"
+        >
           <div class="flex items-center justify-between gap-3 px-5 py-4 border-b border-line">
             <h3 class="m-0 text-[16px] font-700 text-text flex items-center gap-2">
               <i class="i-lucide-layout-grid text-primary" />答题卡
@@ -78,7 +85,8 @@
  * 材料题的粒度：**母题分组，子题作为组内小组件**——材料题的判分单位是子题，
  * 但用户心智里它是一道大题，所以分组标题用母题序号，格子用子题序号。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 import { groupSheetItems, countSheet, cellStateOf } from '@/utils/examSheet.js'
 
 const props = defineProps({
@@ -92,7 +100,14 @@ const props = defineProps({
   currentIdx: { type: Number, default: -1 }
 })
 
-defineEmits(['close', 'jump', 'submit', 'jump-first-unanswered'])
+const emit = defineEmits(['close', 'jump', 'submit', 'jump-first-unanswered'])
+// FE-P1-11：Esc 关闭 / Tab 焦点圈 / 初始焦点 / 关闭后焦点归位
+const cardEl = ref(null)
+useDialogA11y({
+  isOpen: computed(() => props.open),
+  containerRef: cardEl,
+  onClose: () => emit('close')
+})
 
 /** 与 Exam.vue 的 hasAnswer 同口径（判分前「有内容」即可，简答自评也算）——统一在 examSheet.js */
 

@@ -3,7 +3,14 @@
   <Teleport to="body">
     <Transition name="hr">
       <div v-if="open" class="hr-mask fixed inset-0 z-[1050] flex bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="$emit('close')">
-        <aside class="hr-panel ml-auto w-full max-w-[620px] h-full bg-card border-l border-line shadow-lg flex flex-col">
+        <aside
+          ref="cardEl"
+          class="hr-panel ml-auto w-full max-w-[620px] h-full bg-card border-l border-line shadow-lg flex flex-col"
+          role="dialog"
+          aria-modal="true"
+          aria-label="历史回看"
+          tabindex="-1"
+        >
           <div class="flex items-center justify-between gap-3 px-5 py-4 border-b border-line">
             <div class="min-w-0">
               <h3 class="m-0 text-[16px] font-700 text-text flex items-center gap-2">
@@ -121,8 +128,9 @@
  * 关键约束：**不依赖内存中的 sheet**。用户可能重启应用后才来回看，
  * 所以一切数据都来自 exam_detail(exam_id)；父级只负责传 examId 与开关。
  */
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { examDetail } from '@/api/exam.js'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 import { buildReviewRows } from '@/utils/examTrend.js'
 import { renderDoc } from '@/utils/render.js'
 import { TYPE_FULL_LABELS } from '@/constants/questions.js'
@@ -131,7 +139,14 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   examId: { type: String, default: '' }
 })
-defineEmits(['close'])
+const emit = defineEmits(['close'])
+// FE-P1-11：Esc 关闭 / Tab 焦点圈 / 初始焦点 / 关闭后焦点归位
+const cardEl = ref(null)
+useDialogA11y({
+  isOpen: computed(() => props.open),
+  containerRef: cardEl,
+  onClose: () => emit('close')
+})
 
 const loading = ref(false)
 const error = ref('')

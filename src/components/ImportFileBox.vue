@@ -7,7 +7,14 @@
   <Teleport to="body">
     <Transition name="dg">
       <div v-if="open" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="onClose">
-        <div class="dg-card w-[min(640px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" aria-label="导入试题文件">
+        <div
+          ref="cardEl"
+          class="dg-card w-[min(640px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5"
+          role="dialog"
+          aria-modal="true"
+          aria-label="导入试题文件"
+          tabindex="-1"
+        >
           <h3 class="m-0 mb-1 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2">
             <i class="i-lucide-file-up text-primary" />导入试题文件
           </h3>
@@ -137,7 +144,8 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { computed, ref, nextTick } from 'vue'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 import { parseTemplateFile } from '@/utils/parseTemplate.js'
 import { parseSheetRows } from '@/utils/parseSheet.js'
 import { parseDocxFile } from '@/utils/parseDocxTemplate.js'
@@ -219,6 +227,16 @@ function onClose() {
   reset()
   emit('close')
 }
+
+// FE-P1-11：Esc 关闭 / Tab 焦点圈 / 初始焦点 / 关闭后焦点归位
+const cardEl = ref(null)
+useDialogA11y({
+  isOpen: computed(() => props.open),
+  containerRef: cardEl,
+  onClose,
+  // 正在解析或导入时 Esc 不生效（与 onClose 的守卫一致，避免「关了但任务还在跑」）
+  escDisabled: () => phase.value === 'importing' || parsing.value
+})
 
 async function onFile(e) {
   const f = e.target.files?.[0]

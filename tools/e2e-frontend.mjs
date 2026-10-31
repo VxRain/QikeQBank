@@ -2140,6 +2140,66 @@ const MODULES = [
       const panelBody = await page.locator('body').innerText()
       ok('S3 面板区可展开', /云同步（S3）/.test(panelBody))
       ok('拉取未同步变更数走 sync_s3_pending', (await page.evaluate(() => window.__pendingCalls || 0)) >= 0)
+
+      // ══ FE-P1-11 弹层可访问性：Esc / Tab 焦点圈 / 初始焦点 / 关闭后归位 ══
+      await page.keyboard.press('Escape')
+      await flush(page)
+      // 触发元素 = 顶栏设置按钮；关闭后焦点必须回到它（键盘用户不该被扔到 body 顶部）
+      const focusBack = await page.evaluate(() => {
+        const el = document.activeElement
+        return el ? (el.getAttribute('title') || el.textContent || '').trim() : ''
+      })
+      ok('关闭设置后焦点回到触发按钮', /设置/.test(focusBack), focusBack || '(焦点在 body)')
+
+      // Toast 必须是 live region（否则读屏用户完全听不到反馈）
+      await page.evaluate(() => window.dispatchEvent(new Event('x')))
+      const toastAttrs = await page.evaluate(() => {
+        const el = document.querySelector('[role="status"][aria-live]')
+        return el ? { role: el.getAttribute('role'), live: el.getAttribute('aria-live') } : null
+      })
+      ok('Toast 容器带 role=status', toastAttrs?.role === 'status', JSON.stringify(toastAttrs))
+      ok('Toast 容器带 aria-live=polite', toastAttrs?.live === 'polite', JSON.stringify(toastAttrs))
+
+      // 各弹层的 role/aria-modal 一致性（原文要求「统一」）
+      await page.getByRole('button', { name: '设置' }).first().click()
+      await page.waitForSelector('.sd-card')
+      await flush(page)
+      const sdAttrs = await page.evaluate(() => {
+        const el = document.querySelector('.sd-card')
+        return { role: el?.getAttribute('role'), modal: el?.getAttribute('aria-modal'), tabindex: el?.getAttribute('tabindex') }
+      })
+      ok('设置弹层 aria-modal=true', sdAttrs?.modal === 'true', JSON.stringify(sdAttrs))
+      // 初始焦点落在搜索框
+      const sdFocus = await page.evaluate(() => document.activeElement?.className || '')
+      ok('设置弹层初始焦点在搜索框', /sd-search/.test(sdFocus) || (await page.evaluate(() => document.activeElement?.tagName)) === 'INPUT',
+        sdFocus)
+      // Tab 焦点圈：连按 Tab 多次，焦点始终留在弹层内
+      let escaped = false
+      for (let i = 0; i < 25; i++) {
+        await page.keyboard.press('Tab')
+        const inside = await page.evaluate(() => !!document.activeElement?.closest('.sd-card'))
+        if (!inside) { escaped = true; break }
+      }
+      ok('设置弹层 Tab 焦点圈不逃逸', !escaped)
+      await page.keyboard.press('Escape')
+      await flush(page)
+      ok('设置弹层 Esc 可关闭', await waitGone(page, '.sd-card'))
+
+      // 快捷键弹层：同样具备 Esc + 焦点圈
+      await page.keyboard.press('?')
+      await flush(page)
+      if (await page.locator('.sc-card').count()) {
+        let escaped2 = false
+        for (let i = 0; i < 15; i++) {
+          await page.keyboard.press('Tab')
+          const inside = await page.evaluate(() => !!document.activeElement?.closest('.sc-card'))
+          if (!inside) { escaped2 = true; break }
+        }
+        ok('快捷键弹层 Tab 焦点圈不逃逸', !escaped2)
+        await page.keyboard.press('Escape')
+        await flush(page)
+        ok('快捷键弹层 Esc 可关闭', await waitGone(page, '.sc-card'))
+      }
     }
   },
 

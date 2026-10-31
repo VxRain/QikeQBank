@@ -50,7 +50,8 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }
@@ -58,7 +59,6 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'open-search'])
 
 const cardEl = ref(null)
-let prevOverflow = ''
 
 /**
  * 键位表 —— 与各页面实际绑定逐条对应（守卫见 tests/unit/shortcuts.test.js）。
@@ -135,32 +135,18 @@ function close() {
   emit('update:modelValue', false)
 }
 
-function onKeydown(e) {
-  if (!props.modelValue) return
-  if (e.key !== 'Escape') return
-  e.preventDefault()
-  close()
-}
-
-watch(
-  () => props.modelValue,
-  async (v) => {
-    if (v) {
-      prevOverflow = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-      window.addEventListener('keydown', onKeydown)
-      await nextTick()
-      cardEl.value?.focus?.()
-    } else {
-      document.body.style.overflow = prevOverflow
-      window.removeEventListener('keydown', onKeydown)
-    }
-  }
-)
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
-  if (props.modelValue) document.body.style.overflow = prevOverflow
+/**
+ * FE-P1-11：Esc / Tab 焦点圈 / 初始焦点 / 关闭后焦点归位统一走 composable。
+ * 原来只有 Esc（没有 Tab 圈，也没有焦点归位）——用户 Esc 关掉后焦点落到 body，
+ * 键盘操作直接断在这里。
+ *
+ * 焦点策略：这个弹层只用来「看」，所以初始焦点落到卡片本身（tabindex=-1），
+ * 不抢到某个按钮上，避免 Ctrl+ 组合键误触。
+ */
+useDialogA11y({
+  isOpen: computed(() => props.modelValue),
+  containerRef: cardEl,
+  onClose: close
 })
 </script>
 

@@ -250,7 +250,14 @@
     <Teleport to="body">
       <Transition name="dg">
         <div v-if="showOverview" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="showOverview = false">
-          <div class="dg-card w-[min(640px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5 pb-4" role="dialog" aria-label="全部练习统计">
+          <div
+            ref="ovCardEl"
+            class="dg-card w-[min(640px,calc(100vw-48px))] max-h-[calc(100vh-96px)] flex flex-col bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5 pb-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="全部练习统计"
+            tabindex="-1"
+          >
             <h3 class="m-0 mb-3.5 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)] flex items-center gap-2">
               <i class="i-lucide-table text-primary" />全部练习统计
             </h3>
@@ -323,6 +330,7 @@ import { settings, normalizeDailyGoal } from '@/stores/settings.js'
 import { toast } from '@/stores/ui.js'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 import { dailyProgress, weakestType, syncFreshness, newUserSteps, entryHref } from '@/utils/dailyTask.js'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 
 const router = useRouter()
 /**
@@ -407,6 +415,14 @@ async function openOverview() {
   showOverview.value = true
   await ensureOverview()
 }
+
+// FE-P1-11：统计弹窗也是 dialog（Esc / Tab 圈 / 焦点归位）
+const ovCardEl = ref(null)
+useDialogA11y({
+  isOpen: computed(() => showOverview.value),
+  containerRef: ovCardEl,
+  onClose: () => { showOverview.value = false }
+})
 
 // 概览只拉一次：详情按钮与 streak 共用
 async function ensureOverview() {

@@ -6,7 +6,14 @@
   <Teleport to="body">
     <Transition name="dg">
       <div v-if="ui.dialog" class="dg-mask fixed inset-0 z-[1050] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="onCancel">
-        <div class="dg-card w-[min(420px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" :aria-label="ui.dialog.title">
+        <div
+          ref="cardEl"
+          class="dg-card w-[min(420px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="ui.dialog.title"
+          tabindex="-1"
+        >
           <h3 class="m-0 mb-2 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)]">{{ ui.dialog.title }}</h3>
           <p v-if="ui.dialog.message" class="m-0 mb-3.5 text-[14px] leading-[1.7] text-text-secondary whitespace-pre-line break-all">{{ ui.dialog.message }}</p>
 
@@ -35,6 +42,7 @@
             <button type="button" class="btn" @click="onCancel">{{ ui.dialog.cancelText }}</button>
             <button
               type="button"
+              data-dialog-ok
               class="btn"
               :class="ui.dialog.danger ? 'btn-danger' : 'btn-primary'"
               :disabled="(ui.dialog.type === 'prompt' || ui.dialog.type === 'select') && !inputValue.trim()"
@@ -48,8 +56,9 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, nextTick } from 'vue'
 import { ui, closeDialog } from '@/stores/ui.js'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 
 const inputValue = ref('')
 const inputEl = ref(null)
@@ -60,10 +69,31 @@ watch(
     if (d) {
       inputValue.value = d.initial || ''
       await nextTick()
-      if ((d.type === 'prompt' || d.type === 'select') && inputEl.value) inputEl.value.focus()
     }
   }
 )
+
+/**
+ * FE-P1-11：弹层可访问性统一走 composable。
+ *
+ * 为什么替换掉原来手写的 `window.addEventListener('keydown')`：
+ * 那份实现只有 Esc，没有 Tab 焦点圈，也没有「关闭后焦点回到触发元素」——
+ * 用户点「删除」确认后焦点落到 body 顶部，键盘操作断裂。
+ * 初始焦点：prompt/select 落到输入框（要输入），confirm 落到主按钮（Enter 直接确认）。
+ */
+const cardEl = ref(null)
+useDialogA11y({
+  isOpen: computed(() => !!ui.dialog),
+  containerRef: cardEl,
+  initialFocusRef: computed(() => {
+    const d = ui.dialog
+    if (!d) return null
+    if ((d.type === 'prompt' || d.type === 'select') && inputEl.value) return inputEl.value
+    // confirm：聚焦主按钮，符合「回车确认」的预期；找不到就交给默认逻辑（第一个可聚焦项）
+    return cardEl.value?.querySelector('[data-dialog-ok]') || null
+  }),
+  onClose: () => onCancel()
+})
 
 function onOk() {
   const d = ui.dialog
@@ -83,12 +113,7 @@ function onCancel() {
   closeDialog(null)
 }
 
-function onKey(e) {
-  if (!ui.dialog) return
-  if (e.key === 'Escape') onCancel()
-}
-window.addEventListener('keydown', onKey)
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+
 </script>
 
 <style scoped>

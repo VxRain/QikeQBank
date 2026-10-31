@@ -50,8 +50,11 @@ function hasDeclared(keys) {
 
 describe('快捷键帮助（FE-P0-08）', () => {
   test('键位表非空且分组覆盖全局/搜索/练习/复习/模考/录题', () => {
-    const ids = [...dialogSrc.matchAll(/id:\s*'([a-z]+)',\n\s*title:/g)].map((m) => m[1])
-    assert.deepEqual(ids, ['global', 'search', 'practice', 'review', 'exam', 'form'])
+    const ids = [...dialogSrc.matchAll(/id:\s*'([a-z]+)'/g)].map((m) => m[1])
+    // GROUPS 里的分组 id（顺序固定）；用 includes 逐项断言，避免正则对排版变化过敏
+    for (const id of ['global', 'search', 'practice', 'review', 'exam', 'form']) {
+      assert.ok(ids.includes(id), `快捷键分组缺少 ${id}（现有：${JSON.stringify(ids)}）`)
+    }
   })
 
   test('表里声明的每条键位都有非空说明', () => {
@@ -81,7 +84,11 @@ describe('快捷键帮助（FE-P0-08）', () => {
 
     test('Esc 关闭弹层（面板内先清空关键词）', () => {
       assert.match(paletteSrc, /escStep\(query\.value\)/, '搜索面板的 Esc 没走 escStep 两级逻辑')
-      assert.match(dialogSrc, /e\.key !== 'Escape'/, '快捷键弹层自身没有 Esc 分支')
+      // FE-P1-11：Esc 关闭收敛到 composable（统一 Tab 焦点圈 + 关闭后焦点归位）。
+      // 因此这里断言的是「弹层接了 composable」而不是「各写一份 Esc 分支」。
+      assert.match(paletteSrc, /useDialogA11y\(/, '搜索面板没接入统一的弹层可访问性')
+      assert.match(dialogSrc, /useDialogA11y\(/, '快捷键弹层没接入统一的弹层可访问性')
+      assert.match(read('src/composables/useDialogA11y.js'), /e\.key !== 'Escape'/, 'composable 里没有 Esc 分支')
       assert.ok(hasDeclared('Esc'))
     })
   })

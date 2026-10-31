@@ -120,6 +120,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 import SettingRow from './SettingRow.vue'
 import { SETTINGS_SECTIONS, isItemVisible, matchItem } from './registry.js'
 import { ui, confirmDialog, toast } from '@/stores/ui.js'
@@ -271,69 +272,56 @@ function close() {
   emit('update:modelValue', false)
 }
 
+/**
+ * 只保留 Ctrl/Cmd+F 聚焦搜索（Tab/Esc 已由 useDialogA11y 统一处理）。
+ * 挂在 window 上而不是弹层根节点：焦点可能在任意行内输入框里。
+ */
 function onKeydown(e) {
   if (!props.modelValue) return
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault()
     searchEl.value?.focus()
     searchEl.value?.select?.()
-    return
-  }
-  if (e.key === 'Tab') {
-    trapTab(e)
-    return
-  }
-  if (e.key !== 'Escape') return
-  // 上层确认弹窗（如云同步下载确认）正在显示时，Esc 归它处理
-  if (ui.dialog) return
-  e.preventDefault()
-  close()
-}
-
-/** 焦点圈在弹窗内：Tab / Shift+Tab 到边界时回绕，避免焦点窜到背后页面 */
-function trapTab(e) {
-  const card = cardEl.value
-  if (!card) return
-  const nodes = [...card.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')]
-    .filter((el) => !el.disabled && el.offsetParent !== null)
-  if (!nodes.length) return
-  const first = nodes[0]
-  const last = nodes[nodes.length - 1]
-  const active = document.activeElement
-  if (e.shiftKey && (active === first || active === card || !card.contains(active))) {
-    e.preventDefault()
-    last.focus()
-  } else if (!e.shiftKey && (active === last || !card.contains(active))) {
-    e.preventDefault()
-    first.focus()
   }
 }
 
-let prevOverflow = ''
+/**
+ * FE-P1-11：Esc / Tab 焦点圈 / 初始焦点 / 关闭后焦点归位统一走 composable。
+ *
+ * 这里替换掉原来手写的 `trapTab` + 自建 watch：手写版只有焦点圈，
+ * 没有「关闭后焦点归位」，而且与 SearchPalette 的同类代码各写一份（两处行为已开始分叉）。
+ * 初始焦点落到搜索框（打开设置最常见的目的是找某一项）。
+ */
+useDialogA11y({
+  isOpen: computed(() => props.modelValue),
+  containerRef: cardEl,
+  initialFocusRef: searchEl,
+  onClose: () => {
+    // 上层确认弹窗（如云同步下载确认）正在显示时，Esc 归它处理
+    if (ui.dialog) return
+    close()
+  },
+  escDisabled: () => !!ui.dialog
+})
 
+// Ctrl/Cmd+F 聚焦搜索：与 a11y 无关，单独挂
+function attachSearchHotkey() {
+  window.addEventListener('keydown', onKeydown)
+  onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+}
+attachSearchHotkey()
+
+// 打开时重置搜索态与滚动位置（视觉状态，与 a11y 无关）
 watch(
   () => props.modelValue,
   async (v) => {
-    if (v) {
-      query.value = ''
-      activeId.value = lastSectionId
-      prevOverflow = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-      window.addEventListener('keydown', onKeydown)
-      await nextTick()
-      cardEl.value?.focus?.()
-      if (paneEl.value) paneEl.value.scrollTop = 0
-    } else {
-      document.body.style.overflow = prevOverflow
-      window.removeEventListener('keydown', onKeydown)
-    }
+    if (!v) return
+    query.value = ''
+    activeId.value = lastSectionId
+    await nextTick()
+    if (paneEl.value) paneEl.value.scrollTop = 0
   }
 )
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
-  if (props.modelValue) document.body.style.overflow = prevOverflow
-})
 
 /**
  * 外部入口（全局搜索面板命中设置项时）把设置定位到具体分类 + 预填关键词。

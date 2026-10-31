@@ -20,14 +20,7 @@
   <Teleport to="body">
     <Transition name="sp">
       <div v-if="modelValue" class="sp-mask" @mousedown.self="close">
-        <div
-          ref="cardEl"
-          class="sp-card"
-          role="dialog"
-          aria-modal="true"
-          aria-label="全局搜索"
-          tabindex="-1"
-        >
+        <div ref="cardEl" class="sp-card" role="dialog" aria-modal="true" tabindex="-1" aria-label="全局搜索">
           <!-- 输入行 -->
           <div class="sp-head">
             <i class="i-lucide-search sp-head-icon" aria-hidden="true" />
@@ -190,6 +183,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 import { useRouter } from 'vue-router'
 import {
   SEARCH_DEBOUNCE,
@@ -393,6 +387,36 @@ watch(
   { immediate: true }
 )
 
+/* ───────────── 弹层可访问性（FE-P1-11）───────────── */
+/**
+ * Esc 逐级（规则在 store 的 escStep 里，单测覆盖）：
+ * - 有关键词 → 先清空
+ * - 无关键词 → 关闭面板
+ *
+ * 用 `escDisabled` 把「清空」这一级拦下来：composable 见到 escDisabled() 为 true
+ * 就不关闭，只让这里清空。这样焦点圈/关闭后焦点归位仍由 composable 统一负责，
+ * 而面板自己的逐级语义不受影响。
+ */
+function onEsc() {
+  if (escStep(query.value) === 'clear') {
+    clearQuery()
+    return
+  }
+  close()
+}
+
+useDialogA11y({
+  isOpen: computed(() => props.modelValue),
+  containerRef: cardEl,
+  initialFocusRef: inputEl,
+  onClose: () => {
+    // 走到这里说明 escDisabled 已放行 → 真正关闭
+    onEsc()
+  },
+  // 有关键词时先让「清空」这一级处理（返回 true 表示本轮 Esc 不关闭）
+  escDisabled: () => escStep(query.value) === 'clear' && (clearQuery(), true)
+})
+
 /* ───────────── 键盘 ───────────── */
 
 function onKeydown(e) {
@@ -426,20 +450,11 @@ function onKeydown(e) {
     activate(row)
     return
   }
-  if (e.key === 'Tab') {
-    // 焦点留在面板内：面板只有一个输入框，Tab 不该把焦点丢到背后页面
-    e.preventDefault()
-    inputEl.value?.focus()
-    return
-  }
+  // Tab 与 Esc 交给 useDialogA11y 统一处理（焦点圈 + 关闭），
+  // 但 Esc 的「逐级」语义仍在这里实现：composable 通过 escDisabled 让位。
+  if (e.key === 'Tab') return
   if (e.key === 'Escape' || e.key === 'Esc') {
-    e.preventDefault()
-    // Esc 逐级：有关键词先清空，再按一次才关闭（规则在 store 的 escStep 里，单测覆盖）
-    if (escStep(query.value) === 'clear') {
-      clearQuery()
-      return
-    }
-    close()
+    // 由 window 上的 composable 接管，这里不再处理（避免双触发）
     return
   }
   if (e.key === 'ArrowRight') {

@@ -101,7 +101,7 @@
 | FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [x] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [x] |
 | FE-P1-10 | 设置增强 | S–M | 部分 | [x] |
-| FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [ ] |
+| FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [x] |
 | FE-P1-12 | 前端渲染性能 | S | 否 | [ ] |
 
 ### 1.2 P2 索引
@@ -677,12 +677,25 @@
 - 守卫：`tests/unit/settings-io.test.js` 22 条 + `vue-boolean-attr.test.js`；cargo 新增 `pending_changes` 两条（无水印报未知 / 有水印按表计数）；e2e `search` 36 → 59。
 - 未做：冲突「逐条对比与取舍」需要后端返回冲突明细，属 PLAN §9 待定事项，不在本项范围。
 
-### [ ] FE-P1-11 可访问性与弹层一致性
+### [x] FE-P1-11 可访问性与弹层一致性
 
 - 所有 Teleport 弹层统一：Esc 关闭、点击遮罩关闭、Tab 焦点圈、打开后焦点落到首个可操作元素。
 - 目前只有设置弹窗做了 Tab 焦点圈；导入、题库弹窗、全局搜索未统一。
 - Toast 增加 `role="status"` / `aria-live="polite"`。
 - **文件**：`src/components/ui/*`、`ImportFileBox.vue`、`Banks.vue`。
+
+**已完成（2026-10-31）**
+- 新增 `src/composables/useDialogA11y.js`，统一 **Esc 关闭 / Tab 焦点圈 / 初始焦点 / 关闭后焦点归位** + body 滚动锁定。替换掉原来两份手写实现（`SettingsDialog` 的 `trapTab`、`SearchPalette` 的 keydown 分支），并补齐 **5 个完全没有焦点圈**的弹层：`ImportFileBox` / `Banks`（新建·重命名）/ `ExamSheet` / `ExamHistory` / `DialogHost`，外加 `Home` 的「全部练习统计」弹窗。
+- 关键设计：
+  - `keydown` 用 **capture** 注册，否则底层页面会抢先在 Tab/Esc 上做处理。
+  - `escDisabled()` 让位给上层弹层：设置页在 `ui.dialog` 存在时不响应 Esc，避免确认框与设置框一起关。
+  - SearchPalette 的 **Esc 逐级**（有关键词先清空、再无关键词才关闭）通过 `escDisabled` 实现，既保住既有行为又复用统一焦点圈。
+  - 初始焦点策略：设置→搜索框；Banks 弹层→名称输入框；prompt/select→输入框；confirm→主按钮（新增 `data-dialog-ok`）；只读弹层（快捷键/统计）→卡片本身。
+  - 关闭后焦点归位到**打开前的那个元素**（`previouslyFocused`），键盘操作链不断。
+- Toast 改 live region：容器 `role="status"` + `aria-live="polite"` + `aria-atomic="false"`，每条补 `.sr-only` 类型前缀（图标 `aria-hidden` 后类型信息会丢）。**刻意不用 assertive**：会打断屏幕阅读器正在朗读的题面，而用户此刻最需要听到的正是题面；live region 只声明一次（逐条声明会反复创建 live region 而漏播）。
+- 守卫：`tests/unit/dialog-a11y.test.js` 20 条——逐弹层断言接入 composable + `role="dialog"`/`aria-modal`/`tabindex="-1"`；「所有 `role="dialog"` 的文件都必须接 composable」（防新增弹层漏接）；**「接了就必须 import」与「用了 `computed` 就必须从 vue import」**（本轮实际漏过一次 → 运行时 `computed is not defined` 白屏，靠这条守住）；Esc 让位、capture 注册、遮罩关闭（兼容 `@mousedown.self`）。
+- e2e `search` 59 → 68：关闭设置后焦点回到触发按钮、Toast 容器属性、设置弹层 Tab 连按 25 次不逃逸、快捷键弹层 Tab 15 次不逃逸且 Esc 可关。
+- 说明：InfoTip 是 tooltip 而非 dialog，保持 `@keydown.esc` 关闭、不加焦点圈（加圈会把悬停提示变成模态，反而更差）。
 
 ### [ ] FE-P1-12 前端渲染性能
 
@@ -1000,3 +1013,4 @@
 | v14 | 2026-10-31 | **FE-P1-08 完成**（顽固错题阈值 / 导出 / 行内详情）。阈值取 0 = 永不自动移出（复用已同步的 `wrongLeaveAfterCorrect`，不新增开关）；后端 `WRONG_WHERE` 改 `(?3 = 0 OR ...)`，写成 `< 0` 会恒假让错题本全空。新增 `utils/wrongExport.js` 导出 MD/JSON（MD 人读、JSON 带 schema 且不含内部 id），落盘复用 `banks_export_md` 不新增命令。**修掉 e2e 抓到的 Vue 陷阱**：`:disabled` 绑定字符串 ref 求值为 `''` 时按钮永久禁用（导出按钮点不动），改 `!!exporting` 并加规则守卫。单测 +26（407），e2e wrong 21→39，全量 310 |
 | v15 | 2026-10-31 | **FE-P1-09 完成**（复习预测 / 多选题库 / 按题型 / 稍后搁置）。新增 `review_forecast` 命令：逾期与今日互斥、学习中可与两者重叠（UI 写「其中」）、forecast 为明天起 7 天。三条复习命令均支持 `bank_ids`（`json_each` 展开，一个占位符不拼 SQL）。题型筛选只改提示不改拉题，页面标注「材料题按母题计，口径待 FE-P0-12」。稍后只动内存队列不动 due_at。单测 +26（433）、cargo +1（159）、e2e review 18→41，全量 333 |
 | v16 | 2026-10-31 | **FE-P1-10 完成**（设置增强）。`DEFAULTS` 成为默认值单一来源；恢复默认走 `confirmDialog` 只重置偏好；导出白名单制（密钥永不进包），导入逐字段归一且只覆盖文件里出现过的键；快捷键按钮复用同一个 `ShortcutsDialog`（App 里仅 1 实例）；新增 `sync_s3_pending` 报未同步变更数（无水印报 `known:false` 而非假 0，不数 delete_log）。**同类缺陷第三次出现后升级为仓库级守卫** `vue-boolean-attr.test.js`：字符串 ref 绑布尔属性即失败（本轮据此修掉设置页三按钮永久禁用）。单测 +24（457）、cargo +2（161）、e2e search 36→59，全量 356 |
+| v17 | 2026-10-31 | **FE-P1-11 完成**（可访问性与弹层一致性）。新增 `useDialogA11y` 统一 Esc/Tab 圈/初始焦点/关闭后归位 + 滚动锁定，补齐 5 个原本完全没有焦点圈的弹层；SearchPalette 的 Esc 逐级语义经 `escDisabled` 保留；Esc 用 capture 注册并让位给上层弹层。Toast 改 live region（`role=status` + `aria-live=polite`，刻意不用 assertive）+ `.sr-only` 类型前缀。守卫 20 条，含「接了 composable 就必须 import / 用了 computed 就必须 import」（本轮实际漏过导致白屏）。e2e search 59→68，全量 365 |

@@ -177,7 +177,14 @@
     <Teleport to="body">
       <Transition name="dg">
         <div v-if="dlg" class="dg-mask fixed inset-0 z-[1000] flex items-center justify-center bg-[rgba(15,23,42,0.45)] backdrop-blur-[3px]" @click.self="dlg = null">
-          <div class="dg-card w-[min(420px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5" role="dialog" :aria-label="dlg.mode === 'create' ? '新建题库' : '重命名题库'">
+          <div
+            ref="dlgCardEl"
+            class="dg-card w-[min(420px,calc(100vw-48px))] bg-card border border-line rounded-lg shadow-[0_20px_40px_rgba(2,6,23,0.25),0_4px_12px_rgba(2,6,23,0.12)] px-6 pt-5.5 pb-4.5"
+            role="dialog"
+            aria-modal="true"
+            :aria-label="dlg.mode === 'create' ? '新建题库' : '重命名题库'"
+            tabindex="-1"
+          >
             <h3 class="m-0 mb-3.5 text-[17px] font-700 tracking-[-0.01em] text-text font-[var(--serif)]">
               {{ dlg.mode === 'create' ? '新建题库' : '重命名题库' }}
             </h3>
@@ -225,6 +232,7 @@ import { bankStore, loadBanks } from '@/stores/bank.js'
 import { createBank, updateBank, removeBank, duplicateBank, exportBankMarkdown } from '@/api/banks.js'
 import { list } from '@/api/questions.js'
 import { toast, confirmDialog, promptDialog } from '@/stores/ui.js'
+import { useDialogA11y } from '@/composables/useDialogA11y.js'
 import {
   BANK_SORT_OPTIONS,
   DEFAULT_BANK_SORT,
@@ -412,6 +420,21 @@ async function onExport(b) {
 
 // ── 新建 / 重命名弹窗 ──
 const dlg = ref(null) // { mode: 'create'|'rename', id, name, description, saving }
+
+// FE-P1-11：新建/重命名弹层共用一套弹层可访问性（Esc / Tab 圈 / 初始焦点 / 归位）
+const dlgCardEl = ref(null)
+useDialogA11y({
+  isOpen: computed(() => !!dlg.value),
+  containerRef: dlgCardEl,
+  // 初始焦点落到名称输入框：这是用户打开这个弹层的唯一目的
+  initialFocusRef: computed(() => dlgCardEl.value?.querySelector('#bank-dlg-name') || null),
+  onClose: () => {
+    // 保存中不允许 Esc 关掉（否则用户以为取消了但请求已发出）
+    if (dlg.value?.saving) return
+    dlg.value = null
+  },
+  escDisabled: () => !!dlg.value?.saving
+})
 
 function openCreate() {
   dlg.value = { mode: 'create', id: '', name: '', description: '', saving: false }
