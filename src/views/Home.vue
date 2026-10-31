@@ -25,6 +25,141 @@
       <button type="button" class="btn btn-small shrink-0" @click="load">重试</button>
     </div>
 
+    <!-- FE-P1-01 新用户三步引导：只在题库真为空时出现，有题即隐藏 -->
+    <section v-if="guide.show" class="card flex flex-col gap-3.5">
+      <div class="card-head !mb-0">
+        <h2 class="section-title flex items-center gap-2">
+          <i class="i-lucide-sparkles text-primary" />三步开始
+        </h2>
+        <span class="badge">首次使用</span>
+      </div>
+      <div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3">
+        <div
+          v-for="(s, i) in guide.steps"
+          :key="s.key"
+          class="relative flex flex-col gap-1.5 p-3 border border-line rounded-[12px] bg-bg-accent"
+          :class="s.done && 'border-success-border bg-success-bg'"
+        >
+          <div class="flex items-center gap-2">
+            <span
+              class="w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-[12px] font-700"
+              :class="s.done ? 'bg-success text-white' : 'bg-card border border-line text-muted'"
+            >
+              <i v-if="s.done" class="i-lucide-check text-[14px]" />
+              <template v-else>{{ i + 1 }}</template>
+            </span>
+            <span class="text-[14px] font-600 text-text">{{ s.title }}</span>
+          </div>
+          <div class="text-[12px] text-muted leading-[1.6]">{{ s.desc }}</div>
+          <button type="button" class="btn btn-small mt-auto self-start" @click="go(s.href)">
+            去这一步<i class="i-lucide-arrow-right text-[13px]" />
+          </button>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 pt-1 border-t border-line">
+        <span class="text-[12px] text-muted flex items-center gap-1.5">
+          <i class="i-lucide-file-down text-primary" />已有现成题目？下载模板批量导入
+        </span>
+        <span class="flex gap-2 ml-auto">
+          <button type="button" class="btn btn-small" @click="openTemplate()"><i class="i-lucide-file-text" />打开模板文件夹</button>
+          <button type="button" class="btn btn-small" @click="go('/library', { import: '1' })"><i class="i-lucide-file-up" />导入试题</button>
+        </span>
+      </div>
+    </section>
+
+    <!-- FE-P1-01 今日任务卡 -->
+    <section v-else class="card flex flex-col gap-3.5">
+      <div class="card-head !mb-0">
+        <h2 class="section-title flex items-center gap-2">
+          <i class="i-lucide-target text-primary" />今日任务
+        </h2>
+        <span class="text-[12px] text-muted-light">{{ todayLabel }}</span>
+      </div>
+
+      <div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3.5">
+        <!-- 到期复习 -->
+        <div class="flex flex-col gap-1 p-3 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[12px] text-muted">待复习到期</div>
+          <div class="text-[26px] font-800 leading-none font-[var(--serif)]" :class="dueCount > 0 ? 'text-primary' : 'text-text'">
+            {{ stats ? dueCount : '—' }}
+          </div>
+          <div class="text-[12px] text-muted-light">今日到期 {{ stats?.due_today ?? '—' }} · 学习中 {{ stats?.learning_due ?? '—' }}</div>
+        </div>
+
+        <!-- 今日进度 -->
+        <div class="flex flex-col gap-1 p-3 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[12px] text-muted flex items-center gap-1.5">
+            今日已刷 <b class="text-text">{{ progress.done }}</b> / {{ progress.goal }}
+            <button type="button" class="i-btn !p-0.5" title="修改每日目标" @click="editGoal">
+              <i class="i-lucide-pencil text-[12px]" />
+            </button>
+          </div>
+          <div class="progress-track mt-1"><div class="progress-inner" :style="{ width: progress.pct + '%' }"></div></div>
+          <div class="text-[12px]" :class="progress.reached ? 'text-success font-600' : 'text-muted-light'">
+            {{ progress.reached ? '今日目标已完成' : `还差 ${progress.remain} 题达标` }}
+          </div>
+        </div>
+
+        <!-- 最弱题型 -->
+        <div class="flex flex-col gap-1 p-3 border border-line rounded-[12px] bg-bg-accent">
+          <div class="text-[12px] text-muted">最弱题型</div>
+          <template v-if="weak">
+            <div class="text-[17px] font-700 text-text flex items-center gap-1.5">
+              <span class="badge badge-type">{{ weak.label }}</span>
+            </div>
+            <div class="text-[12px] text-danger font-700">
+              正确率 {{ Math.round(weak.rate * 100) }}% · {{ weak.count }} 次作答
+            </div>
+          </template>
+          <template v-else>
+            <div class="text-[17px] font-700 text-muted">暂无弱项</div>
+            <div class="text-[12px] text-muted-light">多刷几题后按题型正确率给出</div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 两个一键入口：首页 → 开始作答只要 1 次点击 -->
+      <div class="flex flex-wrap gap-2.5">
+        <button
+          type="button"
+          class="btn btn-primary"
+          :disabled="dueCount === 0"
+          @click="go(entryHref('/review', { bank: currentBank }), { bank: currentBank })"
+        >
+          <i class="i-lucide-repeat" />开始今日复习<template v-if="dueCount > 0">（{{ dueCount }}）</template>
+        </button>
+        <button type="button" class="btn" :disabled="!weak" @click="go(entryHref('/practice', { bank: currentBank, types: weak ? [weak.type] : null }))">
+          <i class="i-lucide-crosshair" />弱项专练<template v-if="weak">（{{ weak.label }}）</template>
+        </button>
+        <button type="button" class="btn" @click="go(entryHref('/practice', { bank: currentBank }))">
+          <i class="i-lucide-zap" />直接刷题
+        </button>
+      </div>
+      <div v-if="dueCount === 0 && stats" class="text-[12px] text-muted-light flex items-center gap-1.5">
+        <i class="i-lucide-info" />当前没有到期复习卡，先刷几题或去复习页手动抽题。
+      </div>
+    </section>
+
+    <!-- FE-P1-01 数据安全状态：只有同步时间可用，不拿「备份」冒充已实现 -->
+    <div class="card flex flex-wrap items-center gap-2.5" :class="fresh.overdue && '!border-danger-border'">
+      <i
+        class="text-[18px]"
+        :class="fresh.overdue ? 'i-lucide-hard-drive-upload text-danger' : 'i-lucide-cloud text-muted-light'"
+      />
+      <span class="text-[13px] text-text-secondary">
+        上次同步：<b class="text-text">{{ fresh.text }}</b>
+        <span class="text-muted-light">（本地无时间点快照，建议开启 S3 同步防意外）</span>
+      </span>
+      <span class="flex gap-2 ml-auto">
+        <button type="button" class="btn btn-small" @click="openSettings"><i class="i-lucide-settings" />同步设置</button>
+      </span>
+    </div>
+    <div v-if="fresh.overdue" class="card !border-danger-border flex flex-wrap items-center gap-2.5">
+      <i class="i-lucide-triangle-alert text-danger text-[18px]" />
+      <span class="text-[13px] text-text">已经有 {{ fresh.days }} 天没有成功同步了，去检查一下同步配置或手动上传一次。</span>
+      <button type="button" class="btn btn-small ml-auto" @click="openSettings"><i class="i-lucide-refresh-cw" />去处理</button>
+    </div>
+
     <div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3.5">
       <div class="card card-interactive cursor-pointer flex flex-col gap-1" role="link" tabindex="0" title="进入试题列表" @click="go('/library')" @keyup.enter="go('/library')">
         <div class="flex items-start justify-between gap-2">
@@ -181,12 +316,27 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { stats as fetchStats, recordsOverview, isPortableMode } from '@/api/practice.js'
+import { stats as fetchStats, recordsOverview, isPortableMode, openTemplatesDir } from '@/api/practice.js'
+import { s3Status } from '@/api/sync.js'
+import { bankStore, loadBanks } from '@/stores/bank.js'
+import { settings, normalizeDailyGoal } from '@/stores/settings.js'
+import { toast } from '@/stores/ui.js'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
+import { dailyProgress, weakestType, syncFreshness, newUserSteps, entryHref } from '@/utils/dailyTask.js'
 
 const router = useRouter()
-function go(path) {
-  router.push(path)
+/**
+ * 页内跳转。
+ * @param {string} path 目标路径（可带 query）
+ * @param {{bank?:string, import?:string}} [query] 额外查询参数（合并到已有 query 上）
+ */
+function go(path, query) {
+  const [base, qs] = String(path).split('?')
+  const merged = { ...Object.fromEntries(new URLSearchParams(qs || '')) }
+  if (query && typeof query === 'object') {
+    for (const [k, v] of Object.entries(query)) if (v) merged[k] = v
+  }
+  router.push({ path: base, query: Object.keys(merged).length ? merged : undefined })
 }
 
 const stats = ref(null)
@@ -198,6 +348,55 @@ const ovLoading = ref(false)
 const ovError = ref('')
 const ovDays = ref([])
 const ovTypes = ref([])
+// 同步状态：只用来回答「上次同步是什么时候」（FE-P1-01 数据安全状态）
+const lastSyncAt = ref('')
+
+const todayLabel = computed(() =>
+  new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
+)
+// 首页入口统一不带题库筛选（首页是全局视角）；先保留 currentBank 占位，FE-P1-02 题库页才是按库入口
+const currentBank = ref('')
+const dueCount = computed(() => Number(stats.value?.due_total) || 0)
+const progress = computed(() => dailyProgress(stats.value, settings.dailyGoal))
+const weak = computed(() => weakestType(ovTypes.value, (t) => typeLabel(t, { full: true })))
+const guide = computed(() => newUserSteps(stats.value, bankStore.banks.length))
+const fresh = computed(() => syncFreshness(lastSyncAt.value))
+
+/** 修改每日目标：走应用内 prompt（禁止原生 prompt） */
+async function editGoal() {
+  const { promptDialog } = await import('@/stores/ui.js')
+  const v = await promptDialog({
+    title: '每日刷题目标',
+    message: `当前目标 ${settings.dailyGoal} 道/天；只影响首页进度展示，不限制实际刷题量。`,
+    placeholder: '1–500 的整数',
+    initial: String(settings.dailyGoal)
+  })
+  if (v == null) return
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 1 || n > 500) {
+    toast('请输入 1–500 之间的整数', 'error')
+    return
+  }
+  settings.dailyGoal = normalizeDailyGoal(n)
+  toast(`每日目标已设为 ${settings.dailyGoal} 道`, 'success')
+}
+
+/** 打开模板文件夹：与导入弹层同一个后端命令，模板目录随包内嵌 */
+async function openTemplate() {
+  try {
+    await openTemplatesDir()
+    toast('已打开模板文件夹，可下载或直接复制', 'success')
+  } catch (e) {
+    toast('打开模板文件夹失败：' + (e?.message || e), 'error')
+  }
+}
+
+/** 同步设置就在设置弹层的「同步」分组：首页只负责把用户送到那里 */
+function openSettings() {
+  // 设置弹层由 App.vue 持有，这里用全局键位同款的 Esc 无关入口：直接派发自定义事件太重，
+  // 改为导航到题库页顶部无法触达设置 → 因此改用 window 事件，App.vue 负责监听。
+  window.dispatchEvent(new CustomEvent('qbank:open-settings', { detail: { sectionId: 'sync' } }))
+}
 
 function fmtSec(ms) {
   const s = Number(ms) / 1000
@@ -274,6 +473,19 @@ async function load() {
     const r = await isPortableMode()
     isPortable.value = !!r
   } catch { /* ignore */ }
+  // 题库数（新用户引导第一步是否完成）
+  try {
+    await loadBanks()
+  } catch { /* 拿到 0 个题库也不算错：引导会显示第一步未完成 */ }
+  // 同步时间：没配 S3 时 sync_s3_status 会失败，按「尚未同步过」处理
+  try {
+    const st = await s3Status()
+    const a = String(st?.last_push_at || '')
+    const b = String(st?.last_pull_at || '')
+    lastSyncAt.value = a > b ? a : b
+  } catch {
+    lastSyncAt.value = ''
+  }
   try {
     stats.value = await fetchStats()
   } catch (e) {
@@ -281,7 +493,7 @@ async function load() {
     stats.value = null
     error.value = '加载统计失败：' + (e?.message || e)
   }
-  // streak 静默计算：失败就当 0 天，不污染错误区
+  // streak / 最弱题型都来自 records_overview：失败当「无记录」，不影响其他卡片
   try {
     await ensureOverview()
   } catch { /* ignore */ }

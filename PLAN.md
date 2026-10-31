@@ -460,6 +460,21 @@ export function persistBankFilter(page, id)
 - 多选：首列勾选（表头全选本页）+ 选中条（批量移动 / 批量删除 / 取消选择），表格常驻不隐藏；多选时行内编辑禁用，移动/删除可用；翻页/重查后清空。
 - 移动（单题/批量共用）：行内「移动」按钮或选中条「移动」→ `selectDialog` 弹窗选目标库 → 确定执行。
 
+### Home.vue（首页 / 仪表盘，FE-P1-01）
+- **今日任务卡**（`total > 0` 时）：待复习到期（含今日到期 / 学习中）+ 今日已刷/目标（`settings.dailyGoal`，默认 20，可点铅笔改，走 `promptDialog`）+ 最弱题型（`records_overview.by_type` 里正确率最低且作答 ≥3 次、且正确率 <60% 的题型）+ 三个入口：「开始今日复习（N）」（`/review`，无到期时禁用）/「弱项专练（题型）」（`/practice?types=<type>`）/「直接刷题」（`/practice`）。首页 → 开始作答 = 1 次点击。
+- **新用户引导**（`total === 0` 时取代任务卡）：三步「建一个题库 → 录入或导入第一题 → 开始刷题」，每步带 `done` 状态与直达按钮；底部「打开模板文件夹」（复用 `open_templates_dir`）与「导入试题」（`/library?import=1`）。
+- **数据安全状态**：只显示「上次同步：今天/N 天前/尚未同步过」（取 `sync_s3_status` 的 `last_push_at`/`last_pull_at` 较新者）；`≥7` 天额外一条 danger 提示。**本地时间点快照/备份面板不做**（JSON 导出导入接口已随 FE-P0-01 移除，等数据保全方案定案），文案明确写明「本地无时间点快照」。
+- 纯逻辑全在 `src/utils/dailyTask.js`（`dailyProgress` / `weakestType` / `syncFreshness` / `newUserSteps` / `entryHref`），由 `tests/unit/daily-task.test.js`（19 条）锁住「数据缺失不冒充 0」的分支。
+- 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
+- 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
+
+### Practice.vue 深链参数
+- `?bank=<id>`：须仍存在，否则回落 `resolveBankFilter`。
+- `?types=single,multi`：非法项忽略，写回 `runConfig`（与手动勾选同语义）；`?retry=1` 时忽略（续做要沿用上次会话范围）。
+
+### List.vue 深链参数
+- `?import=1`：挂载后若有 `?bank=`，直接弹 ImportFileBox 并 `router.replace` 掉该参数（避免刷新重复弹层）。
+
 ### stores/ui.js（弹层服务）
 - `selectDialog({title,message,options:[{value,label}],okText})` → resolve 选中 value，取消为 null；DialogHost 新增 select 类型（下拉 + 确定）。与 confirm/prompt 同视觉语言。
 
@@ -542,12 +557,12 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 164 条 / 9 模块 / **16.3s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 181 条 / 9 模块 / **16.5s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 | 21 | ~1.5s |
   | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~1.1s |
-  | `banks` | 题库管理：新建 / 重命名 / 删除保护 | 16 | ~1.0s |
+  | `banks` | 题库管理：新建 / 重命名 / 删除保护 + 首页今日任务/新用户引导（FE-P1-01） | 33 | ~1.3s |
   | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 | 9 | ~1.2s |
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 | 8 | ~0.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |

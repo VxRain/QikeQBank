@@ -658,6 +658,13 @@ onMounted(async () => {
   sort.value = saved.sort
   pageSize.value = saved.pageSize
   await fetchList()
+  // FE-P1-01 首页「导入试题」深链：/library?bank=x&import=1 直接弹出导入弹层
+  if (route.query.import === '1' && bankId.value) {
+    showImport.value = true
+    // 消费掉参数：否则刷新或页内导航会反复弹层
+    const { import: _drop, ...rest } = route.query
+    router.replace({ query: rest })
+  }
 })
 
 /**

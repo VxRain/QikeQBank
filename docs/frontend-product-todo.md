@@ -91,7 +91,7 @@
 
 | ID | 任务 | 规模 | 后端 | 状态 |
 |---|---|---|---|---|
-| FE-P1-01 | 首页「今日任务」+ 新用户引导 | S–M | 否 | [ ] |
+| FE-P1-01 | 首页「今日任务」+ 新用户引导 | S–M | 否 | [x] |
 | FE-P1-02 | 题库页快捷入口 / 搜索 / 排序 / 复制 | M | 部分 | [ ] |
 | FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [ ] |
 | FE-P1-04 | 单题统计 | S–M | 是 | [ ] |
@@ -507,13 +507,23 @@
 
 ## 3. P1 详细任务
 
-### [ ] FE-P1-01 首页「今日任务」+ 新用户引导
+### [x] FE-P1-01 首页「今日任务」+ 新用户引导
 
 - **今日任务卡**：到期数 + 今日已刷/目标 + 最弱题型 + 「开始今日复习 / 弱项专练」。
 - **新用户引导**：`total === 0` 时显示「三步开始」：建题库 → 导入模板/新增第一题 → 开始刷题；提供模板下载与导入入口。
 - **数据安全状态**：显示上次备份 / 上次同步时间；超过 7 天给一次提示（备份口径随数据保全方案定；当前仅有同步时间可用）。
 - **指标**：首次启动 3 分钟内完成第一题；首页到开始刷题 ≤ 2 次点击。
 - **文件**：`src/views/Home.vue`（备份面板暂不做：JSON 备份接口在 FE-P0-01 移除时一并删除，等数据保全方案定案）。
+
+**已完成（2026-10-31）**
+- 新增 `src/utils/dailyTask.js`：`dailyProgress` / `weakestType` / `syncFreshness` / `newUserSteps` / `entryHref` 五个纯函数；「数据缺失不冒充 0」的分支（stats 失败、无练习记录、从未同步过、零题、脏数据）全部由 `tests/unit/daily-task.test.js`（19 条）锁住。
+- `Home.vue`：`total > 0` 显示今日任务卡（到期/今日进度/最弱题型 + 三入口），`total === 0` 改为「三步开始」引导（每步带 done 态与直达按钮、模板文件夹入口、`/library?import=1` 导入深链）。首页→开始作答 = 1 次点击。
+- 数据安全状态如实只报同步时间（`sync_s3_status` 的 `last_push_at`/`last_pull_at` 较新者），文案明写「本地无时间点快照」；`>= 7` 天额外 danger 提示 + 「去处理」直开设置同步分组。备份面板按原文不做。
+- 新增设置项 `settings.dailyGoal`（1–500，默认 20，纯本机偏好不进 `SYNC_KEYS`），设置页「刷题」分组可改；首页铅笔按钮走 `promptDialog` 同口径校验。
+- 新增跨组件契约：`window` 事件 `qbank:open-settings`（App.vue 监听 → `settingsRef.focusItem`），让任意页面/卡片能打开设置指定分组。
+- 深链：`/practice?types=single,multi`（弱项专练，非法项忽略、写回 runConfig、`?retry=1` 时让位）、`/library?import=1`（直接弹 ImportFileBox 并 `router.replace` 消费掉参数）。
+- 守卫：`tests/unit/daily-task.test.js` 19 条；e2e `banks` 模块新增 17 条首页断言（任务卡/进度/弱项/两入口/深链预选/同步状态/零题引导），模块基准 16 → 33。
+- 顺带修掉 e2e 基建缺陷：新增 `waitRouteAfterClick()`——点击触发的异步路由跳转不能只靠 `flush()`（只等 IPC，动态 chunk 未加载完 hash 还是旧值），必须等 hash 命中 + `requireRoute()`。
 
 ### [ ] FE-P1-02 题库页快捷入口 / 搜索 / 排序 / 复制
 
@@ -895,3 +905,4 @@
 | v4 | 2026-10-30 | FE-P0-09/10/11 完成并勾选（列表排序筛选与页码收敛 / 批量操作单事务命令 / 错题本搜索排序统计）。后端：`questions_list` 与 `wrong_list` 各加参数、新增 `questions_batch_update`、`questions_batch_remove`、`wrong_stats` 共 3 条命令，**schema 零改动**。范围调整：FE-P0-11 的「导出错题」移出（落到 FE-P1-08），FE-P0-10 的「与 FE-P0-02 恢复语义一致」标注为待 FE-P0-02。修掉 3 个只在运行时暴露的缺陷（SQL 三值逻辑致 NULL 过滤全表、CTE 不可嵌套、前端 TDZ 白屏）。cargo 157、单测 154、E2E 98 |
 | v5 | 2026-10-30 | **E2E 分层改造（不新增功能、断言零丢失 103→103）**。背景：原 e2e 为 769 行单文件无模块边界，改一行页面也要跑完 6 个页面共 93s，且需手动先起 dev server。①**规定层修正**（消除「改一行跑全量」的制度成因）：`AGENTS.md` 验证门禁原不含 e2e 且与本文件 §0.3 自相矛盾，现补入并按「单模块为默认 / 全量为提交前」分级；三处文档（`AGENTS.md` / 本文件 §0.3 / `PLAN.md §8`）统一 7 个模块名。②**脚本模块化**：拆为 `list`/`batch`/`form`/`practice`/`review`/`exam`/`wrong`，每模块独立 browser context、支持位置参数过滤、`--changed` 按 git 改动选模块。③**dev server 自动起/复用**。④顺带修掉一个既有真 bug：`vite.config.js` 的 `watch.ignored` 未排除 `dist-portable/`，其中被 WebView 独占的 Cookies 文件会触发 `EBUSY` 直接把 dev server 打挂（这正是「手动起 server 经常白跑」的根因）。⑤**等待语义重写**：62 处 `waitForTimeout`（共 62s）全部改为「等真实 DOM 谓词 + Vue 更新批次」，并实测对照证明「等 IPC 静默」为 6/10 成功（flaky 源）、「等真实挂载标记」为 10/10。**实测**：单模块 1.3~3.3s、全量 14.5~17.7s（93s → ~16s，-83%），连跑 5 次 0 flaky，断言 103/103 逐条对齐无丢失。⑥新增 FE-ARCH-09：E2E 迁 `@playwright/test`（方案 C，手调等待无法根治 flaky；并记下 `@playwright/test` 已在 `node_modules` 却未声明于 `package.json` 这一会导致 CI 必坏的隐患） |
 | v6 | 2026-10-30 | **E2E 正确性与等待机制再修（P0~P3，不新增功能）**。v5 的等待方案有两处按官方标准不该留的东西，本轮按 Playwright 一手文档纠正。①**P0 修静默吞失败**：`waitForSelector(marker).catch(() => {})` 会在标记失效时静默继续，导致后续断言在**错误页面**上求值（误导性失败甚至假绿）。改为 `requireRoute()` 超时**必抛**，异常带实际 `title/inflight/hash/页面文本`。实测：注入失效标记后立即报「期望 #/wrong 页面就绪，实际页面：…」，而非等到后面报「按钮找不到」。②**P1 `page.clock` 消除时间等待**：实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 **3ms**（对照真实等待 2029ms）。仅 `form`/`review` 启用（`exam`/`practice` 有 12 处 `Date.now()` 算用时/限时，风险高，暂不开）。顺带把 review 撤销从「碰巧在 5000ms 窗口内」升级为**精确边界测试**（4.9s 仍可撤销 / 5.2s 自动消失，+4 条断言）。③**P2 就绪信号换源**：从「界面文案」（`/新建题库/` 等 19 处，产品改文案即废）换成「`document.title`(= `meta.title` + APP_NAME) 且 `__inflight === 0`」。前者是**路由元数据**、后者靠 `bridge.js` 唯一 IPC 漏斗，二者都与文案/布局解耦。实测 6 个路由 ×8 次全 8/8、平均 6~77ms。同时**删除 `networkidle`**——Playwright API 文档明确标注 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead." ④**前置契约守卫**：新增 `tests/unit/e2e-ready-signal.test.js`（7 项），e2e 启动前自动执行（~0.3s，失败 exit 3），防 `ROUTE_TITLE ↔ meta.title` 漂移、title 格式变更、inflight 漏 try/finally、networkidle 回流、超时被吞；实测改 `meta.title` 后 **0.29s 被拦下**而非白跑 30s 超时。⑤**P3 分层**：新增 `tests/unit/request-params-wiring.test.js`（6 项静态守卫，校验 `fetchList` 真的把 query/type/difficulty/status/sort/limit/offset 拼进请求，含空值守卫），注入「忘记下发 difficulty」后两条守卫同时报警。**注意**：实测从 e2e 删除 5 条纯参数断言**并未提速**（list 1493→1539ms、wrong 649→699ms，属噪声），说明耗时由「操作 + 等待」驱动而非断言条数，故**保留 E2E 覆盖**、单测守卫作补充而非替代。**实测**：全量 16.9s → **9.8~11.0s**，断言 108 → **112**，连跑 5 次 0 flaky；单测 154 → **167**；build/smoke/clippy 全绿 |
+| v7 | 2026-10-31 | **FE-P1-01 完成**（首页今日任务 + 新用户引导 + 数据安全状态）。新增 `src/utils/dailyTask.js` 纯逻辑（19 条单测）+ 设置项 `settings.dailyGoal`（1–500，纯本机偏好）+ 深链 `?types=` / `?import=1` + `window` 事件 `qbank:open-settings`。文案如实只报同步时间、明写「本地无时间点快照」，不拿「备份」冒充已实现。e2e `banks` 16 → 33 条，并修基建缺陷：点击触发的异步路由跳转不能只 `flush()`（只等 IPC），新增 `waitRouteAfterClick()` 等 hash + `requireRoute()` |

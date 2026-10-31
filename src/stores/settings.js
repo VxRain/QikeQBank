@@ -42,6 +42,13 @@ export function normalizeSyncInterval(v) {
   if (!Number.isFinite(n)) return 30
   return Math.min(60, Math.max(10, Math.round(n)))
 }
+// 每日刷题目标归一化：整数道，钳制 1–500，非法回退 20（FE-P1-01 首页「今日任务」用）
+export function normalizeDailyGoal(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return DAILY_GOAL_LIMIT.def
+  return Math.min(DAILY_GOAL_LIMIT.max, Math.max(DAILY_GOAL_LIMIT.min, Math.round(n)))
+}
+export const DAILY_GOAL_LIMIT = { min: 1, max: 500, def: 20 }
 
 // ── FSRS 间隔复习参数归一化 ──
 export const FSRS_LIMITS = {
@@ -95,6 +102,8 @@ export const settings = reactive({
   autoNextDelayMs: normalizeDelay(saved.autoNextDelayMs),
   // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
   rememberBankFilter: saved.rememberBankFilter ?? false,
+  // 每日刷题目标（道）；纯本机偏好，不进 SYNC_KEYS（不同设备节奏可以不同）
+  dailyGoal: normalizeDailyGoal(saved.dailyGoal),
   // 错题本：连续答对多少次后自动移出，默认 1（进库同步）
   wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
   // 自动同步：定时在后台与云端合并（设备本机行为，不进 SYNC_KEYS）
@@ -158,6 +167,7 @@ function persistLocalCache() {
         autoNextOnCorrect: settings.autoNextOnCorrect,
         autoNextDelayMs: settings.autoNextDelayMs,
         rememberBankFilter: settings.rememberBankFilter,
+        dailyGoal: settings.dailyGoal,
         wrongLeaveAfterCorrect: settings.wrongLeaveAfterCorrect,
         autoSyncEnabled: settings.autoSyncEnabled,
         autoSyncIntervalMin: settings.autoSyncIntervalMin,

@@ -304,7 +304,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
-import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter, bankExists } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
 import { gradeQuestion } from '@/utils/gradeQuestion.js'
@@ -342,6 +342,21 @@ const availStats = ref(null)
 const availLoading = ref(false)
 let availSeq = 0 // 只采信最后一次请求，避免快速切题库时旧结果覆盖新结果
 const pickedTypes = computed(() => (selectedTypes.value.length === ALL_TYPES.length ? null : selectedTypes.value))
+
+/**
+ * 深链题型预选（FE-P1-01 首页「弱项专练」）：?types=single,multi
+ * 非法项忽略；全部命中「全部题型」则等价于不传。写回 runConfig 让下次进页保持一致（与手动选择同语义）。
+ * @param {unknown} raw
+ */
+function applyDeepLinkTypes(raw) {
+  const text = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.join(',') : ''
+  if (!text) return
+  const wanted = new Set(text.split(',').map((s) => s.trim()).filter(Boolean))
+  const kept = ALL_TYPES.filter((t) => wanted.has(t))
+  if (!kept.length) return
+  selectedTypes.value = kept
+  saveRunConfig('practice', { types: pickedTypes.value, count: count.value }, ALL_TYPES)
+}
 const availableCount = computed(() => availableCountOf(availStats.value, pickedTypes.value))
 const plan = computed(() => plannedCountOf(count.value, availableCount.value ?? 0))
 const noAvailable = computed(() => availableCount.value === 0)
@@ -1013,7 +1028,17 @@ onMounted(async () => {
       console.error(e)
     }
   }
-  bankId.value = resolveBankFilter('practice')
+  // 深链入口（FE-P1-01 首页弱项专练 / 今日任务）：?bank= 题库、?types=single,multi 题型预选。
+  // 必须让位于「重练/续做」：这两种要沿用上次的会话范围，不能被首页参数改写。
+  const deepBank = route.query.bank
+  if (typeof deepBank === 'string' && bankExists(deepBank)) {
+    bankId.value = deepBank
+  } else {
+    bankId.value = resolveBankFilter('practice')
+  }
+  if (!route.query.retry) {
+    applyDeepLinkTypes(route.query.types)
+  }
   // FE-P0-05：进入即拉一次可用题量（统计跟随当前题库，与实际抽题范围一致）
   refreshAvailable()
   if (route.query.retry) {

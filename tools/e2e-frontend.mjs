@@ -129,9 +129,11 @@ const MODULE_BASELINE = {
   review: 18,
   exam: 20,
   wrong: 21,
-  banks: 16,
+  banks: 33,
   search: 36
 }
+
+/** 各模块可用工具：waitRouteAfterClick 解决「点击后异步路由跳转」的就绪问题 */
 
 /** 注入 mock IPC：覆盖本批功能涉及的全部命令 */
 function mockScript() {
@@ -210,7 +212,9 @@ function mockScript() {
   window.__recorded = []
   window.__reverted = []
   window.__creates = 0
-  window.__stats = { total: 10, by_type: { single: 10, multi: 0, judge: 0, fill: 0, short: 0, material: 0 }, due_total: 5, due_today: 5, learning_due: 1, practiced_total: 0, practiced_today: 0, correct_rate: null, records_7d: [] }
+  window.__stats = { total: 10, by_type: { single: 10, multi: 0, judge: 0, fill: 0, short: 0, material: 0 }, due_total: 5, due_today: 5, learning_due: 1, practiced_total: 40, practiced_today: 8, correct_rate: null, records_7d: [] }
+  // FE-P1-01：首页两种态（新用户空库 / 有题）靠这两个开关切换
+  window.__forceZeroStats = false
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args) => {
       window.__inflight++
@@ -354,7 +358,20 @@ function mockScript() {
           }
         }
         case 'wrong_dismiss': return { success: true, data: { id: args?.questionId } }
-        case 'records_overview': return { success: true, data: { total_practiced: 0, today_practiced: 0, correct_rate: null } }
+        case 'records_overview': return {
+          success: true,
+          // FE-P1-01：首页「今日任务」的最弱题型读 by_type（口径与 Home 一致：count=作答次数）
+          data: {
+            total_practiced: 0,
+            today_practiced: 0,
+            correct_rate: null,
+            days: [],
+            by_type: [
+              { type: 'single', count: 10, correct: 9, avg_ms: 4200 },
+              { type: 'multi', count: 5, correct: 1, avg_ms: 6100 }
+            ]
+          }
+        }
         case 'is_portable_mode': return { success: true, data: false }
         case 'banks_create': window.__lastBankCreate = args; return { success: true, data: { id: 'bank_new', name: args?.name } }
         case 'banks_update': return { success: true, data: { id: args?.id } }
@@ -389,6 +406,9 @@ function mockScript() {
         case 'sync_assets_push': return { success: true, data: { items: [], skipped: [], total_bytes: 0 } }
         case 'review_stats':
           if (window.__statsFail) throw 'stats backend down'
+          if (window.__forceZeroStats) {
+            return { success: true, data: { ...window.__stats, total: 0, by_type: {}, due_total: 0, due_today: 0, learning_due: 0, practiced_total: 0, practiced_today: 0 } }
+          }
           return { success: true, data: window.__stats }
 
         // ── S3 云同步（C2）──────────────────────────────────────────
@@ -403,7 +423,9 @@ function mockScript() {
         }
         case 'sync_s3_status': return {
           success: true,
-          data: { device_id: 'dev_mock', push_seq: 0, push_watermark: '', cursors: {}, bootstrapped: false, last_push_at: '', last_pull_at: '' }
+          // last_push_at 给一个固定历史时间：首页「上次同步」要能算出天数（mock 时钟与真实时钟无关，
+          // 所以这里只断言文案形态，不断言具体天数）
+          data: { device_id: 'dev_mock', push_seq: 0, push_watermark: '', cursors: {}, bootstrapped: false, last_push_at: '2026-10-30T00:00:00.000Z', last_pull_at: '2026-10-29T00:00:00.000Z' }
         }
         case 'sync_s3_push': return { success: true, data: { pushed: 0, assets: 0 } }
         case 'sync_s3_pull': return { success: true, data: { applied: 0, skipped: 0, assets: 0 } }
@@ -661,6 +683,27 @@ async function goto(page, hash) {
   }
 }
 
+/**
+ * 等「页面内点击导致的异步路由跳转」落定。
+ *
+ * 为什么不能只用 flush：点击后 router.push 要先动态 import 目标页的 chunk，
+ * 运段内没有 IPC，flush（等 __inflight 归零）会立即返回，此时 hash 还是旧值。
+ * 这里先等 hash 命中目标路由，再走同一套 requireRoute 就绪判定（title + inflight）。
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} hash 形如 '#/practice'
+ * @param {number} [timeout]
+ */
+async function waitRouteAfterClick(page, hash, timeout = 6000) {
+  try {
+    await page.waitForFunction((h) => location.hash.startsWith(h), hash, { timeout, polling: 25 })
+  } catch {
+    throw new Error(`点击后未跳转到 ${hash}，实际 hash=${await page.evaluate(() => location.hash)}`)
+  }
+  await requireRoute(page, hash, timeout)
+  await flush(page)
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * 模块定义：每个模块自带导航，独立 context 运行，断言语句与拆分前逐条一致
  * owns：命中这些源文件改动就跑它（--changed 用）
@@ -671,7 +714,7 @@ const MODULES = [
     id: 'list',
     label: '试题列表：排序 / 筛选 / 页码收敛',
     owns: ['src/views/List.vue', 'src/stores/listFilter.js', 'src/stores/bank.js'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-09：列表排序 / 筛选 / 页码收敛 ──
       await goto(page, '#/banks')
       await goto(page, '#/library?bank=bank_default')
@@ -781,7 +824,7 @@ const MODULES = [
     id: 'batch',
     label: '批量操作：单次 IPC / 逐项失败重试',
     owns: ['src/views/List.vue'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // 独立 context：先自己进列表页并把筛选归零（原来靠上一段遗留状态）
       await goto(page, '#/banks')
       await goto(page, '#/library?bank=bank_default')
@@ -859,7 +902,7 @@ const MODULES = [
     usesClock: true,
     label: '录题：脏徽章 / 离开确认 / Ctrl+S / 草稿',
     owns: ['src/views/Form.vue', 'src/stores/formDraft.js', 'src/components/QuestionForm.vue', 'src/components/QuestionEditor.vue', 'src/components/TiptapDocEditor.vue'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-03：脏徽章 / 离开确认 / Ctrl+S / 保存后清草稿 ──
       await goto(page, '#/create?bank=bank_default')
       await page.locator('.ProseMirror').first().click()
@@ -905,7 +948,7 @@ const MODULES = [
     id: 'practice',
     label: '刷题：可用题量 / 导航 / 跳过 / 离开提示',
     owns: ['src/views/Practice.vue', 'src/stores/runConfig.js', 'src/composables/'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-05：可用题量 ──
       await goto(page, '#/practice')
       ok('刷题页显示可用题量', /可用 \d+ 题/.test(await page.locator('body').innerText()))
@@ -940,7 +983,7 @@ const MODULES = [
     usesClock: true,
     label: '复习：间隔预览 / 撤销 / 最后一题',
     owns: ['src/views/Review.vue', 'src/utils/reviewPreview.js'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-06(Review)：间隔预览 + 撤销 ──
       await goto(page, '#/review')
       ok('复习页显示待复习数', /待复习/.test(await page.locator('body').innerText()))
@@ -1050,7 +1093,7 @@ const MODULES = [
     id: 'exam',
     label: '模考：答题卡 / 交卷 / 历史回看',
     owns: ['src/views/Exam.vue', 'src/components/exam/', 'src/utils/examSheet.js', 'src/utils/examTrend.js'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-07：答题卡 + 回看 ──
       await goto(page, '#/exam')
       ok('准备页显示成绩趋势（SVG）', (await page.locator('svg[role=img]').count()) >= 1)
@@ -1118,7 +1161,7 @@ const MODULES = [
     id: 'wrong',
     label: '错题本：搜索 / 排序 / 统计',
     owns: ['src/views/Wrong.vue', 'src/api/practice.js'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-11：错题本搜索 / 排序 / 统计 ──
       await goto(page, '#/wrong')
       const wBody = await page.locator('body').innerText()
@@ -1198,7 +1241,7 @@ const MODULES = [
       'src/router/index.js',
       'src/App.vue'
     ],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── FE-P0-08：全局搜索升级为命令面板 ──
       await goto(page, '#/banks')
 
@@ -1336,7 +1379,7 @@ const MODULES = [
     // Home.vue 也归到这里：它只调 stats / records_overview / is_portable_mode，
     // 与题库页共享同一批 mock 与首屏链路。
     owns: ['src/views/Banks.vue', 'src/views/Home.vue', 'src/stores/bank.js', 'src/stores/ui.js', 'src/api/banks.js'],
-    async run({ page, ok }) {
+    async run({ page, ok, waitRouteAfterClick }) {
       // ── 题库列表与进入 ──
       await goto(page, '#/banks')
       const body = await page.locator('body').innerText()
@@ -1418,6 +1461,60 @@ const MODULES = [
       const homeBody = await page.locator('body').innerText()
       ok('首页有进入刷题的入口', /刷题/.test(homeBody))
       ok('首页不出现加载失败提示', !/加载失败|失败：/.test(homeBody), homeBody.slice(0, 80))
+
+      // ── FE-P1-01 今日任务卡：到期 / 今日进度 / 最弱题型 / 两个一键入口 ──
+      ok('首页有「今日任务」卡', /今日任务/.test(homeBody), homeBody.slice(0, 120))
+      ok('今日任务显示待复习到期数', /待复习到期/.test(homeBody) && /\b5\b/.test(homeBody))
+      // 进度文案必须是「8 / 20」（mock stats.practiced_today=8、settings.dailyGoal 默认 20）
+      ok('今日进度显示 已刷/目标', /8\s*\/\s*20/.test(homeBody), homeBody.match(/今日已刷[^\n]*/)?.[0] || '')
+      // 弱项题型来自 records_overview.by_type：multi 1/5=20% 最低且作答量 5≥3
+      // 文案用全称（多选题），与列表页 typeLabel(t,{full:true}) 口径一致
+      ok('最弱题型取正确率最低的一类', /多选题/.test(homeBody) && /20%/.test(homeBody), homeBody.match(/正确率[^\n]*/)?.[0] || '')
+      // 口径守卫：达成/未达成都要有明确文案，不能只画个进度条
+      ok('今日任务给出目标达成状态', /还差\s*12\s*题达标|今日目标已完成/.test(homeBody))
+
+      // 两个一键入口存在，且弱项专练带 ?types= 深链（首页 → 开始作答 1 次点击）
+      const weakBtn = page.getByRole('button', { name: /弱项专练/ })
+      ok('有「弱项专练」按钮', (await weakBtn.count()) === 1)
+      await weakBtn.click()
+      // 点击后是异步路由跳转，必须等 hash + 就绪信号（flush 只等 IPC）
+      await waitRouteAfterClick(page, '#/practice')
+      const practiceHash = await page.evaluate(() => location.hash)
+      ok('弱项专练跳到刷题页并带 types 参数', /^#\/practice\?.*types=multi/.test(practiceHash), practiceHash)
+
+      // 刷题页真的按深链预选了题型（6 个题型里只剩 multi 选中：选中态是 border-primary-border）
+      // 注：这里用 evaluateAll 自己比对文本，不用 locator.hasText 正则 —— 元素的
+      // textContent 带缩进换行，`^…$` 锛定正则永远命不中。
+      const pickedLabels = await page.locator('label').evaluateAll((els) =>
+        els
+          .map((el) => ({ text: (el.textContent || '').trim(), on: el.className.includes('border-primary-border') }))
+          .filter((r) => /^(单选|多选|判断|填空|简答|材料)题$/.test(r.text) && r.on)
+          .map((r) => r.text)
+      )
+      ok('刷题页按 ?types= 预选题型', pickedLabels.length === 1 && pickedLabels[0].includes('多选'), JSON.stringify(pickedLabels))
+
+      // 「开始今日复习」入口存在（有到期时可用）
+      await goto(page, '#/')
+      const reviewBtn = page.getByRole('button', { name: /开始今日复习/ })
+      ok('有「开始今日复习」按钮', (await reviewBtn.count()) === 1)
+      ok('有到期时「开始今日复习」可点', !(await reviewBtn.isDisabled()))
+
+      // ── FE-P1-01 数据安全状态：只报同步时间，不假装有本地备份 ──
+      ok('首页显示上次同步时间', /上次同步/.test(await page.locator('body').innerText()))
+      ok('首页明确说明本地无时间点快照', /本地无时间点快照/.test(await page.locator('body').innerText()))
+
+      // ── FE-P1-01 新用户引导：零题时必须出现三步开始 ──
+      await page.evaluate(() => { window.__forceZeroStats = true })
+      await goto(page, '#/wrong')
+      await goto(page, '#/')
+      const emptyBody = await page.locator('body').innerText()
+      ok('零题时显示「三步开始」引导', /三步开始/.test(emptyBody), emptyBody.slice(0, 120))
+      ok('引导给出三步且可点', /建一个题库/.test(emptyBody) && /录入或导入第一题/.test(emptyBody) && /开始刷题/.test(emptyBody))
+      ok('零题时不显示今日任务卡', !/今日任务/.test(emptyBody))
+      ok('引导提供模板入口', /打开模板文件夹/.test(emptyBody))
+      // 零题时不得伪造到期数：没有今日任务卡就不会出现这些标签
+      ok('零题时不出现「待复习到期」', !/待复习到期/.test(emptyBody))
+      await page.evaluate(() => { window.__forceZeroStats = false })
     }
   }
 ]
@@ -1607,7 +1704,7 @@ for (const mod of selected) {
     if (!shellReady) throw new Error('等待就绪超时：首屏导航未渲染（header nav a）')
     await requireRoute(page, '#/banks', 10000)
     await page.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
-    await mod.run({ page, ok })
+    await mod.run({ page, ok, goto, flush, waitRouteAfterClick })
   } catch (e) {
     ok('脚本执行未中断', false, String(e?.message || e))
   }

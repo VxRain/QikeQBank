@@ -105,6 +105,23 @@ export const SETTINGS_SECTIONS = [
         set: (v) => {
           settings.autoNextDelayMs = Math.round(v * 1000)
         }
+      },
+      {
+        key: 'dailyGoal',
+        title: '每日刷题目标',
+        desc: '首页「今日任务」按这个数显示「今日已刷 / 目标」与完成进度；只影响展示，不限制实际可刷题量。',
+        keywords: '每日 目标 今日 任务 考核 进度 goal',
+        type: 'number',
+        unit: '道',
+        min: 1,
+        max: 500,
+        integer: true,
+        width: 'w-[92px]',
+        invalidMsg: '每日目标请输入 1～500 之间的整数（道）',
+        value: () => settings.dailyGoal,
+        set: (v) => {
+          settings.dailyGoal = Math.round(v)
+        }
       }
     ]
   },

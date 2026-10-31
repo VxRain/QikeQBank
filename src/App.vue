@@ -55,7 +55,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { loadBanks, bankStore } from '@/stores/bank.js'
 import { initAutoSync } from '@/stores/autoSync.js'
@@ -103,6 +103,17 @@ function onOpenSettingsFromSearch(payload) {
  *   否则用户打问号会被吞掉（练习页的填空、录题的题干编辑器都会用到「?」）。
  * - Esc 关闭快捷键帮助（搜索面板的 Esc 由面板自己管，它还要处理「先清空」一级）
  */
+/**
+ * 任意视图经 window 事件打开设置弹层（FE-P1-01 首页「同步设置」）：
+ * 设置弹层由 App.vue 独占持有，页面无法直接触及，因此约定一个自定义事件而不是把状态提进 store。
+ * detail: { sectionId?, query? }
+ */
+function onOpenSettingsEvent(e) {
+  showSettings.value = true
+  const d = e?.detail || {}
+  if (d.sectionId) nextTick(() => settingsRef.value?.focusItem?.(d.sectionId, d.query))
+}
+
 function isTypingTarget(t) {
   if (!t || !t.closest) return false
   return !!t.closest('input, textarea, select, [contenteditable], .tiptap, .ProseMirror')
@@ -161,6 +172,7 @@ function maybeNotifyFsrsUpgrade() {
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('qbank:open-settings', onOpenSettingsEvent)
   loadBanks()
   maybeNotifyFsrsUpgrade()
   // 自动同步：按设置开关排期（首次延迟 60 秒，避开启动高峰）
@@ -168,6 +180,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('qbank:open-settings', onOpenSettingsEvent)
 })
 </script>
 
