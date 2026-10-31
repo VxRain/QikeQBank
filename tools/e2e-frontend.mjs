@@ -127,7 +127,7 @@ const MODULE_BASELINE = {
   form: 27,
   practice: 27,
   review: 18,
-  exam: 20,
+  exam: 38,
   wrong: 21,
   banks: 67,
   search: 36
@@ -164,6 +164,13 @@ function mockScript() {
   window.__restoreQs = () => { qs.length = 0; qs.push(...freshQs()) }
   // 可调题量：验「删掉末页最后一题后页码收敛」需要真的造出第 2 页
   window.__setCount = (n) => { qs.length = 0; qs.push(...freshQs(n)) }
+  // 整批替换题池：标准卷/难度筛选等用例需要「分值可控」的题，
+  // freshQs 的固定 5 分无法构造 100 分配比与不可达场景。传 undefined 复位。
+  window.__setQs = (list) => {
+    qs.length = 0
+    if (Array.isArray(list)) qs.push(...list)
+    else qs.push(...freshQs())
+  }
   const sessions = [
     { exam_id: 'e1', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 3, correct_count: 1, score: 5, full_score: 15 },
     { exam_id: 'e2', started_at: '2026-09-05T10:00:00.000Z', ended_at: '2026-09-05T10:20:00.000Z', item_count: 3, correct_count: 2, score: 10, full_score: 15 }
@@ -320,11 +327,28 @@ function mockScript() {
         }
         case 'questions_create': window.__creates++; window.__lastCreate = args; return { success: true, data: { id: 'qNew' } }
         case 'questions_update': window.__lastUpdate = args; return { success: true, data: {} }
-        case 'practice_pool': return { success: true, data: args && args.ids ? args.ids.map((id) => qs.find((q) => q.id === id)).filter(Boolean) : qs }
+        case 'practice_pool': {
+          // FE-P1-07：标准卷按题型拉候选（带 typeFilter + limit），mock 必须如实过滤，
+          // 否则「按分值凑 100 分」这一步测不出真实行为
+          window.__poolArgs = (window.__poolArgs || []).concat(args)
+          if (args && args.ids) return { success: true, data: args.ids.map((id) => qs.find((q) => q.id === id)).filter(Boolean) }
+          let pool = qs.slice()
+          if (args?.typeFilter) pool = pool.filter((q) => q.type === args.typeFilter)
+          if (args?.bankId) pool = pool.filter((q) => q.bank_id === args.bankId)
+          const lim = args?.limit ?? pool.length
+          return { success: true, data: pool.slice(0, lim) }
+        }
         case 'review_due': return { success: true, data: qs.slice(0, window.__reviewOnly ? 1 : 5) }
         case 'record_answer': window.__recorded.push(args); return { success: true, data: { inserted: 1, skipped: 0 } }
         case 'review_revert': window.__reverted.push(args); return { success: true, data: { reverted: 1, skipped: 0 } }
-        case 'exam_sessions': return { success: true, data: { items: sessions } }
+        case 'exam_sessions': {
+          // FE-P1-07：按题库筛选（场次题库来自 detail.bank_id）
+          window.__sessionsArgs = args
+          const all = window.__sessionsWithBank || sessions
+          const bid = args?.bankId && String(args.bankId).trim() ? String(args.bankId).trim() : ''
+          const items = bid ? all.filter((x) => x.bank_id === bid) : all
+          return { success: true, data: { items } }
+        }
         case 'exam_detail': window.__detailArg = args; return { success: true, data: detail }
         case 'assets_resolve': return { success: true, data: {} }
         case 'wrong_list': {
@@ -1477,6 +1501,135 @@ const MODULES = [
       const shortText2 = await page.locator('body').innerText()
       ok('简答回看显示我的答案', /我写的答案ABC/.test(shortText2), shortText2.match(/我的答案：[^\n]*/)?.[0] || '(未找到)')
       ok('简答回看显示参考答案', /参考答案：\s*标准参考答案XYZ/.test(shortText2), shortText2.match(/参考答案：[^\n]*/)?.[0] || '(未找到参考答案)')
+
+      // ══ FE-P1-07 100 分标准卷（总分必须严格等于 100）══
+      await page.evaluate(() => {
+        sessionStorage.clear()
+        // 造一套分值可控的题池：单选 5 分 ×40、多选 5 分 ×40、判断 2 分 ×40、
+        // 填空 5 分 ×40、简答 10 分 ×40 —— 默认配比 40/20/20/10/10 必须能精确凑出 100
+        const doc = (t) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] })
+        const mk = (id, type, score) => ({
+          id, bank_id: 'bank_default', type, version: 2, difficulty: 2, score, status: 'published',
+          stem: doc('标准卷' + id), options: [{ id: 'o1', content: doc('A') }, { id: 'o2', content: doc('B') }],
+          answer: type === 'fill' ? { blanks: [{ id: 'b1', answers: ['x'] }] } : type === 'short' ? { reference: doc('参考') } : { ids: ['o1'] },
+          analysis: null, plain_text: '标准卷' + id,
+          created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z'
+        })
+        const pool = []
+        const plan = [['single', 5, 40], ['multi', 5, 40], ['judge', 2, 40], ['fill', 5, 40], ['short', 10, 40]]
+        let n = 0
+        for (const [type, score, count] of plan) {
+          for (let i = 0; i < count; i++) pool.push(mk('p' + (++n), type, score))
+        }
+        window.__setQs(pool)
+        localStorage.setItem('qbank.exam.paperMode', 'standard')
+      })
+      await goto(page, '#/banks')
+      await goto(page, '#/exam')
+      ok('准备页有「100 分标准卷」模式', (await page.getByRole('button', { name: '100 分标准卷' }).count()) === 1)
+      ok('标准卷模式显示题型配比', /题型配比/.test(await page.locator('body').innerText()))
+      const mixSumText = await page.locator('body').innerText()
+      ok('默认配比合计 100', /合计\s*100\s*\/\s*100/.test(mixSumText), mixSumText.match(/合计[^\n]*/)?.[0] || '')
+
+      await page.getByRole('button', { name: /^开始模考$/ }).click()
+      await waitRouteAfterClick(page, '#/exam')
+      await page.waitForFunction(() => /第 \d+ \/ \d+ 题/.test(document.body.innerText), null, { timeout: 8000, polling: 25 })
+      await flush(page)
+      // 交卷看总分：必须正好 100
+      await page.getByRole('button', { name: /^交卷/ }).last().click()
+      await flush(page)
+      const confirmBtn = page.locator('.dg-card button').filter({ hasText: /^(确认交卷|交卷)$/ }).last()
+      if (await confirmBtn.count()) { await confirmBtn.click(); await flush(page) }
+      const scoreText = await page.locator('body').innerText()
+      ok('标准卷交卷后总分正好 100', /\/\s*100(\.0)?(\s|分|$)/.test(scoreText),
+        scoreText.match(/\d+(\.\d+)?\s*\/\s*\d+(\.\d+)?/)?.[0] || '(未找到总分)')
+
+      // 配比不可达时如实报错，不静默交一张不满分的卷
+      await page.evaluate(() => {
+        sessionStorage.clear()
+        // 只有 7 分题：凑不出默认配比要求的 20/10 分档位
+        const doc = (t) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] })
+        const mk = (id, type, score) => ({
+          id, bank_id: 'bank_default', type, version: 2, difficulty: 2, score, status: 'published',
+          stem: doc('怪分' + id), options: [{ id: 'o1', content: doc('A') }, { id: 'o2', content: doc('B') }],
+          answer: { ids: ['o1'] }, analysis: null, plain_text: '怪分' + id,
+          created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z'
+        })
+        window.__setQs(Array.from({ length: 30 }, (_, i) => mk('odd' + i, 'single', 7)))
+        localStorage.setItem('qbank.exam.mix', JSON.stringify({ single: 100, multi: 0, judge: 0, fill: 0, short: 0, material: 0 }))
+      })
+      await goto(page, '#/banks')
+      await goto(page, '#/exam')
+      await page.getByRole('button', { name: /^开始模考$/ }).click()
+      await flush(page)
+      const failText = await page.locator('body').innerText()
+      ok('凑不出 100 分时如实提示（不静默交不满分的卷）', /凑不出|没有可用于组卷/.test(failText),
+        failText.match(/凑不出[^\n]*/)?.[0] || failText.slice(0, 80))
+      ok('凑不出时停留在准备页（未进入作答）', !/第 1 \/ \d+ 题/.test(failText))
+
+      // ══ FE-P1-07 暂停 / 继续：计时必须同步冻结 ══
+      await page.evaluate(() => {
+        sessionStorage.clear()
+        localStorage.removeItem('qbank.exam.mix')
+        localStorage.setItem('qbank.exam.paperMode', 'count')
+        window.__setQs(undefined)
+      })
+      await goto(page, '#/banks')
+      await goto(page, '#/exam')
+      await page.getByRole('button', { name: '30 分钟' }).click()
+      await flush(page)
+      await page.getByRole('button', { name: '全部', exact: true }).click()
+      await page.getByRole('button', { name: '开始模考' }).click()
+      await flush(page)
+      const readClock = async () => {
+        const t = await page.locator('body').innerText()
+        return t.match(/\b(\d{2}):(\d{2})\b/)?.[0] || ''
+      }
+      const beforePause = await readClock()
+      await page.getByRole('button', { name: /^暂停$/ }).click()
+      await flush(page)
+      ok('暂停后显示暂停遮罩', /已暂停/.test(await page.locator('body').innerText()))
+      ok('暂停后仍然显示剩余时间（不是 00:00）', (await readClock()) !== '00:00')
+      const atPause = await readClock()
+      // 暂停 3 秒：计时不得变化（这是「暂停」的全部意义）
+      await page.waitForTimeout(1500)
+      await page.waitForTimeout(1500)
+      const afterWait = await readClock()
+      ok('暂停期间计时冻结（等待 3s 后剩余时间不变）', afterWait === atPause, `${atPause} → ${afterWait}`)
+      await page.getByRole('button', { name: /继续作答/ }).click()
+      await flush(page)
+      ok('继续后遮罩消失', !/已暂停/.test(await page.locator('body').innerText()))
+      // 继续后计时恢复走动（继续后等待 2s，剩余时间应减少而不是跳掉一大段）
+      const atResume = await readClock()
+      await page.waitForTimeout(2200)
+      const afterResume = await readClock()
+      const toSec = (s) => { const [m, x] = s.split(':').map(Number); return m * 60 + x }
+      const drop = toSec(atResume) - toSec(afterResume)
+      ok('继续后计时恢复流动', drop >= 1 && drop <= 4, `${atResume} → ${afterResume}（掉 ${drop}s）`)
+      ok('继续后剩余时间没有被暂停时长吃掉', Math.abs(toSec(atResume) - toSec(atPause)) <= 2, `${atPause} vs ${atResume}`)
+      ok('暂停前后剩余时间都在 30 分钟内', toSec(beforePause) > 0 && toSec(beforePause) <= 30 * 60)
+
+      // ══ FE-P1-07 成绩趋势按题库 ══
+      await page.evaluate(() => {
+        sessionStorage.clear()
+        window.__sessionsWithBank = [
+          { exam_id: 'sa', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 2, correct_count: 2, score: 10, full_score: 10, bank_id: 'bank_default' },
+          { exam_id: 'sb', started_at: '2026-09-02T10:00:00.000Z', ended_at: '2026-09-02T10:20:00.000Z', item_count: 2, correct_count: 0, score: 0, full_score: 10, bank_id: 'bank_b' }
+        ]
+      })
+      await goto(page, '#/banks')
+      await goto(page, '#/exam')
+      ok('全部题库视角标出范围', /全部题库/.test(await page.locator('body').innerText()))
+      ok('全部题库视角说明含历史场次', /早期场次未记录题库归属/.test(await page.locator('body').innerText()))
+      // 切换到某个题库：趋势范围随之收窄
+      await page.locator('select').first().selectOption('bank_b')
+      await flush(page)
+      const scopeArgs = await page.evaluate(() => window.__sessionsArgs)
+      ok('切题库后按 bank 重新拉场次', scopeArgs?.bankId === 'bank_b', JSON.stringify(scopeArgs))
+      const scopedText = await page.locator('body').innerText()
+      ok('当前题库视角标出范围', /当前题库/.test(scopedText), scopedText.match(/当前题库|全部题库/)?.[0] || '')
+      const rowsAfter = await page.getByRole('button', { name: '回看' }).count()
+      ok('按库筛选后只显示该库场次', rowsAfter === 1, `${rowsAfter} 条`)
     }
   },
 

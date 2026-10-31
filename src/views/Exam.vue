@@ -33,6 +33,55 @@
       </div>
 
       <div class="mb-5">
+        <div class="field-label">组卷方式</div>
+        <div class="flex gap-2 flex-wrap">
+          <button type="button" class="seg" :class="paperMode === 'count' && 'seg-on'" @click="setPaperMode('count')">按题量</button>
+          <button type="button" class="seg" :class="paperMode === 'standard' && 'seg-on'" @click="setPaperMode('standard')">100 分标准卷</button>
+        </div>
+        <div v-if="paperMode === 'standard'" class="mt-2.5 text-[12px] text-muted leading-[1.7]">
+          <i class="i-lucide-info text-primary mr-1" />按各题型目标分值组卷，<b>实际总分严格等于 {{ STANDARD_TOTAL }}</b>。
+          凑不出时会如实提示（不会静默交一张不满分的卷）。
+        </div>
+      </div>
+
+      <!-- 100 分标准卷：题型配比（各题型目标分值） -->
+      <div v-if="paperMode === 'standard'" class="mb-5">
+        <div class="field-label !flex items-center justify-between gap-3">
+          <span>题型配比（目标分值）</span>
+          <span class="text-[12px] font-400" :class="mixSum === STANDARD_TOTAL ? 'text-muted-light' : 'text-danger'">
+            合计 <b>{{ mixSum }}</b> / {{ STANDARD_TOTAL }}
+            <button type="button" class="i-btn !p-0.5 ml-1" title="恢复默认配比" @click="resetMix"><i class="i-lucide-rotate-ccw text-[12px]" /></button>
+          </span>
+        </div>
+        <div class="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+          <label v-for="t in ALL_TYPES" :key="'mix-' + t" class="flex items-center gap-2 px-2.5 py-2 border border-line rounded-[8px] bg-card">
+            <span class="text-[12.5px] text-text-secondary flex-1 min-w-0 truncate">{{ TYPE_FULL_LABELS[t] }}</span>
+            <input
+              v-model.number="mix[t]"
+              type="number"
+              min="0"
+              max="100"
+              step="5"
+              class="input px-1.5 py-1 text-[12px] w-[64px]"
+              :aria-label="TYPE_FULL_LABELS[t] + ' 目标分值'"
+              @change="saveMix"
+            />
+          </label>
+        </div>
+        <div v-if="mixSum !== STANDARD_TOTAL" class="text-[12px] text-muted mt-2 flex items-center gap-1.5">
+          <i class="i-lucide-info" />配比合计不等于 {{ STANDARD_TOTAL }} 时会按比例自动缩放（保持相对权重），不必手动凑满。
+        </div>
+      </div>
+
+      <div v-if="paperMode === 'standard'" class="mb-5">
+        <div class="field-label">难度（可选）</div>
+        <div class="flex gap-2 flex-wrap">
+          <button type="button" class="seg" :class="paperDifficulty === '' && 'seg-on'" @click="paperDifficulty = ''">不限</button>
+          <button v-for="d in 5" :key="'pd' + d" type="button" class="seg" :class="paperDifficulty === d && 'seg-on'" @click="paperDifficulty = d">难度 {{ d }}</button>
+        </div>
+      </div>
+
+      <div v-if="paperMode === 'count'" class="mb-5">
         <div class="field-label !flex items-center justify-between gap-3">
           <span>题量</span>
           <span class="text-[12px] font-400 text-muted-light">
@@ -92,7 +141,7 @@
         </div>
       </div>
 
-      <div v-if="noAvailable" class="mb-4 p-3 bg-bg-accent border border-line rounded-[12px] flex items-center justify-between gap-3 flex-wrap">
+      <div v-if="noAvailable && paperMode === 'count'" class="mb-4 p-3 bg-bg-accent border border-line rounded-[12px] flex items-center justify-between gap-3 flex-wrap">
         <span class="text-[13px] text-text-secondary">
           <i class="i-lucide-info text-primary mr-1" />当前范围没有可组卷的试题。
         </span>
@@ -106,12 +155,12 @@
         <button
           type="button"
           class="btn btn-primary btn-big"
-          :disabled="!selectedTypes.length || fetching || noAvailable"
+          :disabled="fetching || (paperMode === 'standard' ? !mixSum : (!selectedTypes.length || noAvailable))"
           @click="start"
         >
           <i class="i-lucide-play" />{{ fetching ? '正在抽题…' : '开始模考' }}
         </button>
-        <div v-if="noAvailable" class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
+        <div v-if="noAvailable && paperMode === 'count'" class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
           <i class="i-lucide-info" />换一个题库或题型后即可开始（或先录入题目）
         </div>
         <div v-else class="text-[12px] text-muted-light mt-2.5 flex items-center gap-1.5">
@@ -121,9 +170,16 @@
     </section>
 
     <!-- 最近模考 -->
-    <section v-if="phase === 'setup' && history.length" class="card max-w-[640px]">
+    <section v-if="phase === 'setup' && (history.length || historyLoading)" class="card max-w-[640px]">
       <div class="card-head">
         <h2 class="section-title flex items-center gap-2"><i class="i-lucide-history text-primary" />最近模考</h2>
+        <!-- FE-P1-07：趋势按题库展示，范围必须写出来，否则用户会以为数字变了 -->
+        <span class="badge" :title="historyScope ? '只统计当前所选题库的场次' : '统计全部题库的场次'">
+          {{ historyScope ? '当前题库' : '全部题库' }}
+        </span>
+      </div>
+      <div v-if="!historyScope" class="text-[12px] text-muted-light mb-3 flex items-center gap-1.5">
+        <i class="i-lucide-info" />在「全部题库」视角下含历史场次（早期场次未记录题库归属）；选具体题库后只显示该库成绩。
       </div>
 
       <!-- FE-P0-07b：成绩趋势（纯 SVG） -->
@@ -169,12 +225,36 @@
           >
             <i class="i-lucide-flag" />{{ flagged[cur?.uid] ? '取消标记' : '标记' }}
           </button>
+          <button
+            v-if="durationMin > 0"
+            type="button"
+            class="btn"
+            :class="paused && 'seg-on'"
+            :title="paused ? '继续作答（计时恢复）' : '暂停计时，休息一下再继续'"
+            @click="togglePause"
+          >
+            <i :class="paused ? 'i-lucide-play' : 'i-lucide-pause'" />{{ paused ? '继续' : '暂停' }}
+          </button>
           <button type="button" class="btn" title="答题卡" @click="sheetOpen = true">
             <i class="i-lucide-layout-grid" />答题卡<span v-if="flaggedCount" class="ml-1 text-danger">{{ flaggedCount }}</span>
           </button>
         </div>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
+
+      <!-- 暂停遮罩（FE-P1-07）：暂停期间盖住题面，否则「暂停计时」等于还能偷看题 -->
+      <div v-if="paused" class="paused-mask" role="status" aria-live="polite">
+        <div class="text-center flex flex-col items-center gap-3 px-6">
+          <i class="i-lucide-pause-circle text-primary text-[42px]" />
+          <div class="text-[17px] font-700 text-text font-[var(--serif)]">已暂停</div>
+          <div class="text-[13px] text-muted max-w-[320px] leading-[1.7]">
+            计时已停，题目暂时隐藏。点击「继续」后从原来的剩余时间接着考。
+          </div>
+          <button type="button" class="btn btn-primary" @click="togglePause">
+            <i class="i-lucide-play" />继续作答
+          </button>
+        </div>
+      </div>
 
       <QuestionRunner
         :item="cur"
@@ -358,6 +438,7 @@ import ExamHistory from '@/components/exam/ExamHistory.vue'
 import { hasAnswerEntry, remapFlaggedUids, firstUnansweredIndex } from '@/utils/examSheet.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { planStandardPaper, DEFAULT_STANDARD_MIX, STANDARD_TOTAL } from '@/utils/examPaper.js'
 
 // 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板与成绩单用完整名
 const ALL_TYPES = QUESTION_TYPE_KEYS
@@ -376,6 +457,8 @@ const DURATION_OPTIONS = [
 ]
 const MULTI_RULE_KEY = 'qbank.exam.multiRule'
 const DURATION_KEY = 'qbank.exam.durationMin'
+const PAPER_MODE_KEY = 'qbank.exam.paperMode'
+const MIX_KEY = 'qbank.exam.mix'
 
 const router = useRouter()
 const phase = ref('setup') // setup | card | result
@@ -418,6 +501,36 @@ watch(
   { deep: true }
 )
 watch([pickedTypes, bankId], refreshAvailable, { deep: true })
+// ── 组卷方式（FE-P1-07）：按题量 / 100 分标准卷 ──
+const paperMode = ref(localStorage.getItem(PAPER_MODE_KEY) === 'standard' ? 'standard' : 'count')
+function setPaperMode(m) {
+  paperMode.value = m
+  try { localStorage.setItem(PAPER_MODE_KEY, m) } catch { /* 忽略持久化失败 */ }
+}
+// 题型目标分值（配比）；非法值在 planStandardPaper 里统一归一化
+const mix = reactive({ ...DEFAULT_STANDARD_MIX })
+function loadMix() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MIX_KEY) || 'null')
+    if (raw && typeof raw === 'object') {
+      for (const t of ALL_TYPES) if (Number.isFinite(Number(raw[t]))) mix[t] = Number(raw[t])
+    }
+  } catch { /* 脏数据用默认配比 */ }
+}
+function saveMix() {
+  // 负数/非数字就地归零，避免界面上显示 -5 这种额度
+  for (const t of ALL_TYPES) if (!(Number(mix[t]) > 0)) mix[t] = 0
+  try { localStorage.setItem(MIX_KEY, JSON.stringify({ ...mix })) } catch { /* 忽略 */ }
+}
+function resetMix() {
+  for (const t of ALL_TYPES) mix[t] = DEFAULT_STANDARD_MIX[t] ?? 0
+  saveMix()
+}
+const mixSum = computed(() => ALL_TYPES.reduce((s, t) => s + (Number(mix[t]) || 0), 0))
+// 难度筛选：'' = 不限
+const paperDifficulty = ref('')
+loadMix()
+
 const multiRule = ref(localStorage.getItem(MULTI_RULE_KEY) === 'strict' ? 'strict' : 'partial')
 const durationMin = ref(Number(localStorage.getItem(DURATION_KEY)) || 60)
 function setMultiRule(r) {
@@ -545,7 +658,61 @@ function dedupeShuffle(list) {
   return out
 }
 
+/**
+ * 100 分标准卷的候选题目池（FE-P1-07）。
+ *
+ * 为什么要单独拉一批而不是用已有的 count 逻辑：
+ * 标准卷是按**分值**凑的，必须先拿到足够多的候选（含各自 score）才能做子集和。
+ * 这里按「每题型最多 500」分题型拉全量候选（后端 practice_pool 上限 500），
+ * 题型只取配比里 > 0 的那几个——少拉一批无关题型，也避免把材料题混进来。
+ */
+async function fetchStandardCandidates() {
+  const usedTypes = ALL_TYPES.filter((t) => Number(mix[t]) > 0)
+  if (!usedTypes.length) return []
+  const out = []
+  for (const t of usedTypes) {
+    const part = await practicePool({ limit: MAX_PER_ROUND, type: t, bankId: bankId.value })
+    out.push(...(part || []))
+  }
+  return out
+}
+
+/** 组好的标准卷 → 逐题展示文案（准备页/错误提示共用） */
+function standardOutcomeText(r) {
+  if (r.ok) return `已组卷 ${r.picked.length} 题，总分 ${r.total} 分`
+  return r.reason || `凑不出 ${STANDARD_TOTAL} 分`
+}
+
+async function startStandard() {
+  error.value = ''
+  fetching.value = true
+  try {
+    const pool = await fetchStandardCandidates()
+    if (!pool.length) {
+      error.value = '当前范围内没有可用于组卷的题目（检查题库 / 题型 / 难度筛选）'
+      return
+    }
+    const plan = planStandardPaper(pool, {
+      mix: { ...mix },
+      difficulty: paperDifficulty.value === '' ? null : Number(paperDifficulty.value)
+    })
+    if (!plan.ok) {
+      // 凑不出就停下来如实报，绝不交一张不满分的卷（那样「标准卷」这个词就失去意义）
+      error.value = plan.reason
+      return
+    }
+    const ok = await beginExam(plan.picked, randomUUID(), Date.now())
+    if (!ok) return
+  } catch (e) {
+    console.error(e)
+    error.value = '组卷失败：' + (e?.message || e)
+  } finally {
+    fetching.value = false
+  }
+}
+
 async function start() {
+  if (paperMode.value === 'standard') return startStandard()
   const types = selectedTypes.value
   if (!types.length) { error.value = '请至少选择一种题型'; return }
   if (fetching.value) return
@@ -612,6 +779,7 @@ async function beginExam(rawQuestions, id, startTs) {
   rowOpen.clear()
   sheet.value = null
   remainingMs.value = durationMin.value > 0 ? startedAt.value + durationMin.value * 60000 - Date.now() : 0
+  paused.value = false
   phase.value = 'card'
   startTimer()
   saveDraft()
@@ -635,6 +803,44 @@ function startTimer() {
 }
 function stopTimer() {
   if (timerId) { clearInterval(timerId); timerId = null }
+}
+
+/**
+ * 暂停 / 继续（FE-P1-07）。
+ *
+ * ── 为什么要挪 startedAt 而不是「停止刷新 remainingMs」──
+ * 计时是从 `startedAt + 限时` 反推剩余时间的（`remainingMs = startedAt + 限时 - now`），
+ * 单纯停掉 interval 只能让画面停住，一继续就会**立刻跳到真实流逝后的剩余时间**
+ * （暂停 5 分钟 = 白扣 5 分钟）。所以暂停时记下时长，继续时把 `startedAt` 往后推这么多，
+ * 让「限时」真正被冻结住。
+ *
+ * 暂停期间也停掉单题计时累计（itemStartTs），否则暂停时间会被算进「本题用时」。
+ */
+const paused = ref(false)
+let pausedAtMs = 0
+function togglePause() {
+  if (!(durationMin.value > 0) || (phase.value !== 'card' && !paused.value)) return
+  if (!paused.value) {
+    pausedAtMs = Date.now()
+    // 把当前这题的用时结算掉，暂停期间不再累计
+    if (cur.value) {
+      itemElapsed[cur.value.uid] += pausedAtMs - itemStartTs
+      itemStartTs = pausedAtMs
+    }
+    stopTimer()
+    paused.value = true
+    saveDraft()
+    return
+  }
+  // 继续：把暂停时长从截止时间里补回来
+  const frozen = Date.now() - pausedAtMs
+  startedAt.value += frozen
+  itemStartTs = Date.now()
+  paused.value = false
+  remainingMs.value = startedAt.value + durationMin.value * 60000 - Date.now()
+  startTimer()
+  saveDraft()
+  focusCard()
 }
 
 function go(idx) {
@@ -666,7 +872,11 @@ function draftSnapshot() {
       itemElapsed: { ...itemElapsed },
       questionIds: paperRaw.value.map((q) => q.id),
       // FE-P0-07a：标记状态也要恢复（只存 uid 列表，不存题面）
-      flaggedUids: Object.keys(flagged)
+      flaggedUids: Object.keys(flagged),
+      // FE-P1-07：暂停态也要恢复。恢复时按「暂停起点」重新计时，
+      // 否则关掉窗口再回来，暂停期间的时间会被白扣掉。
+      paused: paused.value,
+      pausedAt: paused.value ? Date.now() : 0
     }
   }
 }
@@ -691,11 +901,25 @@ async function restoreDraft(d) {
   fetching.value = true
   try {
     durationMin.value = d.extra?.durationMin ?? 60
+    // FE-P1-07：恢复暂停态时要把「关窗口 → 再打开」这段时长补回截止时间，
+    // 等价于「暂停期间不计时」；否则用户回来发现少了好几十分钟。
+    const wasPaused = !!d.extra?.paused
+    const pausedAt = Number(d.extra?.pausedAt) || 0
     multiRule.value = d.extra?.multiRule || 'partial'
     // 按 id 重拉试卷（practice_pool 保持传入顺序）；题目被删则缺项按未作答处理
     const ids = d.extra?.questionIds || parentIdsOf(d.keys)
     const raw = await practicePool({ ids })
-    const ok = await beginExam(raw, d.extra?.examId || randomUUID(), d.startedAt || Date.now())
+    let startTs = d.startedAt || Date.now()
+    if (wasPaused && pausedAt > 0) {
+      // 把暂停期间的时长从开始时间里去掉（startedAt 后移 = 剩余时间不减）
+      startTs += Math.max(0, Date.now() - pausedAt)
+    }
+    const ok = await beginExam(raw, d.extra?.examId || randomUUID(), startTs)
+    if (ok && wasPaused) {
+      paused.value = true
+      pausedAtMs = Date.now()
+      stopTimer()
+    }
     if (!ok) { clearDraft(); return }
     // 恢复作答：uid 形如 `<题目id>_<序号>`，序号会随被删题目前移，因此按题目 id 重映射
     const qidOf = (k) => String(k).replace(/_\d+$/, '')
@@ -785,6 +1009,7 @@ useSessionLeaveNotice(
 // 交卷：全卷统一判分落库（mode='exam'，不建 FSRS 卡；材料拆子题，一子题一条流水）
 async function submitPaper(timeout = false) {
   if (phase.value !== 'card' || submitting.value) return
+  paused.value = false
   stopTimer()
   if (cur.value) itemElapsed[cur.value.uid] += Date.now() - itemStartTs
   const opts = { multiRule: multiRule.value }
@@ -805,7 +1030,7 @@ async function submitPaper(timeout = false) {
           grade: ratioToGrade(res.ratio),
           elapsed_ms: Math.round(uid ? itemElapsed[uid] || 0 : 0),
           detail: buildExamDetail(c, e.ans.children?.[c.id] || {}, res, {
-            examId: examId.value, seq: e.pi + 1, childIndex: ci + 1, parentId: e.q.id, timeout
+            examId: examId.value, seq: e.pi + 1, childIndex: ci + 1, parentId: e.q.id, timeout, bankId: bankId.value
           })
         })
       })
@@ -817,7 +1042,7 @@ async function submitPaper(timeout = false) {
         mode: 'exam',
         grade: ratioToGrade(e.res.ratio),
         elapsed_ms: Math.round(uid ? itemElapsed[uid] || 0 : 0),
-        detail: buildExamDetail(e.q, e.ans, e.res, { examId: examId.value, seq: e.pi + 1, timeout })
+        detail: buildExamDetail(e.q, e.ans, e.res, { examId: examId.value, seq: e.pi + 1, timeout, bankId: bankId.value })
       })
     }
   }
@@ -893,15 +1118,29 @@ function fmtDur(s) {
   return fmtMs(Math.max(0, new Date(s.ended_at) - new Date(s.started_at)))
 }
 
+/**
+ * 拉最近场次（FE-P1-07 起支持按题库）。
+ *
+ * 展示口径：默认跟随当前题库筛选（准备页选了某个库，就该看那个库的成绩趋势），
+ * 选「全部题库」时看全库。没有 bank_id 的历史场次只在全库视角出现——
+ * 这点在 UI 上写明，避免用户以为场次丢了。
+ */
+const historyScope = computed(() => bankId.value || '')
+const historyLoading = ref(false)
 async function loadHistory() {
+  historyLoading.value = true
   try {
-    const d = await examSessions(10)
+    const d = await examSessions(10, historyScope.value || undefined)
     history.value = (d && d.items) || []
   } catch (e) {
     console.error(e)
     history.value = []
+  } finally {
+    historyLoading.value = false
   }
 }
+// 切换题库后重新拉该库的成绩趋势（趋势按库展示是 FE-P1-07 的验收项）
+watch(bankId, () => { if (phase.value === 'setup') loadHistory() })
 
 // 错题重练：复用错题本的 retryIds 通道（练习模式判分，计入复习/错题本口径）
 async function retryWrong() {

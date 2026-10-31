@@ -312,7 +312,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 | `record_answer` | `items[]`：`{id?, question_id, mode, grade?, answered_at?, elapsed_ms?, detail?, card?, fsrs_log?}` | `id` 合法 UUID 采用（离线幂等，缺省生成；非法 Err）；`answered_at` 合法 ISO 采用 + 未来钳制（缺省 now）；`INSERT OR IGNORE`，同 ID 同内容跳过、异内容整批 Err；题目不存在/有墓碑则该项跳过（`skipped`）；**仅实际插入才 upsert `review_state`**；`review_state.updated_at = last_reviewed_at = answered_at`（发生时间），gated 比较防补退。返回 `{inserted, skipped}` |
 | `records_overview` | `limit_days?` | 全部练习统计：`{days:[{date,count,correct,avg_ms}]}` 倒序（默认 365 天、上限 1000）+ `{by_type:[{type,count,correct,avg_ms}]}` |
 | `review_revert` | `items[]`：`{record_id, question_id, card?}` | 撤销上一条复习评分（FE-P0-06）：只接受 `mode='review'` 流水（否则整批 Err）；删 `practice_records` 后按 `card` 写回 `review_state`（`card=null` 则整行删除，回到「从没复习过」）；重复撤销同 ID 返回 `reverted:0/skipped:1`（幂等）。返回 `{reverted, skipped}` |
-| `exam_sessions` | `limit?` | 模考场次摘要：`mode='exam'` 按 `detail.exam_id` 聚合，默认 10 条、上限 50；`{items:[{exam_id,started_at,ended_at,item_count,correct_count,score,full_score}]}` 按开始时间倒序 |
+| `exam_sessions` | `limit?, bank_id?` | 模考场次摘要：`mode='exam'` 按 `detail.exam_id` 聚合，默认 10 条、上限 50；按开始时间倒序。**FE-P1-07 新增 `bank_id`**：场次题库取自 `detail.bank_id`（组卷时由 `buildExamDetail` 写入，**schema 零改动**——模考流水本身没有题库列，加列会波及同步契约）。空白视为不筛选；传入时**排除**没有 `detail.bank_id` 的历史场次（UI 在「全部题库」视角有说明）。返回项新增 `bank_id`（历史场次为 null） |
 | `exam_detail` | `exam_id: String` | 单场模考逐题明细（FE-P0-07b）：复用 `detail_json`，按 `answered_at` 升序；`LEFT JOIN questions` 带出 `{id,type,stem,answer,analysis,score,options,children}`（题被删时 `question=null`）。**`options` 与 `children` 必带回**：材料题的流水挂母题 id，题面/选项/答案在子题里，缺了就只能显示母题题面与内部选项 id；前端按 `detail.child_id` 切到子题。`exam_id` 空白 Err，未知场次返回空列表。返回 `{exam_id,item_count,score,full_score,items:[{record_id,question_id,grade,correct,answered_at,elapsed_ms,detail,question}]}` |
 | `import_questions` | `items[], bank_id?` | 批量导入：逐条独立 inserted/duplicate/error，可重入；库内 plain_text 一致判重（含本批次内）；返回 `{batch_id, items:[{index,status,id?,message?}]}` |
 | `open_templates_dir` | — | 建 export/ + 补模板后**后端直调 opener 打开**（便携目录静态 capability 写不出，前端 openPath 会被 scope 拦），返回 `{"path"}` |
@@ -479,6 +479,24 @@ export function persistBankFilter(page, id)
 - 设置弹层的「每日刷题目标」在 `components/settings/registry.js` 的「刷题」分组（1–500 整数，纯本机偏好不进 `SYNC_KEYS`）。
 - 跨组件打开设置：`window` 自定义事件 `qbank:open-settings`（detail: `{sectionId}`），App.vue 监听后调 `settingsRef.focusItem`。
 
+### 模考标准卷 / 暂停 / 成绩趋势（FE-P1-07）
+- **100 分标准卷**（`utils/examPaper.js`）：按**分值**分配而不是按题数凑——先定各题型目标分值
+  （`normalizeMix` 把任意配比按比例缩放成合计严格等于 100，零头补给最大项），再在题型内做
+  **子集和 DP**（分值 ×2 转整数单位，0.5 分粒度）选出一组「总和正好 100」的题。
+  为什么必须 DP：贪心在「目标 20 分、题池只有 6/6/6/8」这类场景会失败，只有子集和能保证「存在解必找到」。
+  某一题型题不够时用其它题型的富余题补缺口；**凑不出就如实报不可达并在准备页停下**，
+  绝不静默交一张 95/105 分的卷子（否则「标准卷」一词失去意义）。
+- **暂停 / 继续**：计时从 `startedAt + 限时` 反推剩余，所以暂停不能只是停止刷新——继续时会立刻
+  跳掉暂停期间流逝的时间。做法是暂停时记时刻，继续时把 `startedAt` 后移相同时长，真正冻结限时；
+  同时结算并冻结当前题用时，避免暂停时长被算进「本题用时」。暂停期间用遮罩盖住题面
+  （否则「暂停计时」等于还能偷看题）；暂停态写进会话草稿，关窗再打开时把这段时长补回。
+- **成绩趋势按题库**：`exam_sessions` 新增可选 `bank_id`；场次题库写在 `detail.bank_id`
+  （`buildExamDetail` 新增 `meta.bankId`，schema 零改动）。准备页切换题库即重新拉取，
+  标题旁徽章写明「当前题库 / 全部题库」；「全部题库」视角额外提示含未记录归属的历史场次。
+- 守卫：`tests/unit/exam-paper.test.js` 21 条（配比归一化/精确凑 100/不可达如实报/难度筛选/材料题满分/
+  0.5 分粒度/脏数据）；cargo 新增 `exam_sessions_filter_by_bank_and_keep_legacy_rows_unfiltered`（158）；
+  e2e `exam` 20 → 38（标准卷总分实测 100、不可达提示、暂停冻结与恢复、按库趋势与范围标签）。
+
 ### 刷题反馈与完成闭环（FE-P1-06）
 - **选项自身标色**：判分后选项直接显示对错（`.option-btn-right` / `.option-btn-wrong` + 图标 + `aria-label`），
   不依赖下方答案对照行。`markOf()` 的口径：正确选项一律绿（漏选的也要绿，否则看不出漏了哪个）、
@@ -615,7 +633,7 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 274 条 / 9 模块 / **22.0s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 292 条 / 9 模块 / **28.1s**）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 + 状态三态/统计列/展开统计/1000 题翻页/另存为副本（FE-P1-03/04/05） | 43 | ~1.9s |
@@ -624,7 +642,7 @@ export function persistBankFilter(page, id)
   | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 + 状态三态 + 材料子题排序·改题型·复制（FE-P1-03/05） | 27 | ~2.4s |
   | `practice` | 刷题：可用题量 / 导航 / 跳过 / 离开提示 + 选项标色/完成闭环/弱项专练/计时与难度（FE-P1-06） | 27 | ~5.6s |
   | `review` | 复习：间隔预览 / 撤销 / 最后一题 | 18 | ~1.3s |
-  | `exam` | 模考：答题卡 / 交卷 / 历史回看 | 20 | ~2.5s |
+  | `exam` | 模考：答题卡 / 交卷 / 历史回看 + 100 分标准卷/暂停继续/按库趋势（FE-P1-07） | 38 | ~9.0s |
   | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~0.7s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |
   - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 13.9s**）只在提交前 / 发版前 / 真跨模块改动时跑。

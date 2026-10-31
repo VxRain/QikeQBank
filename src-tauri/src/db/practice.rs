@@ -774,29 +774,47 @@ pub(crate) fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) 
 /// 模考场次列表：mode='exam' 按 detail.exam_id 聚合（供 /exam 准备页「最近模考」）。
 /// 流水天然进同步链（records 段）；题被删则级联清除，场次随之收敛，无需额外表。
 #[tauri::command]
-pub fn exam_sessions(limit: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+pub fn exam_sessions(
+    limit: Option<u64>,
+    bank_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(exam_sessions_impl(&conn, limit)?)
+    ok(exam_sessions_impl(&conn, limit, bank_id)?)
 }
 
-pub(crate) fn exam_sessions_impl(conn: &Connection, limit: Option<u64>) -> Result<Value, String> {
+/// 模考场次列表：mode='exam' 按 detail.exam_id 聚合（供 /exam 准备页「最近模考」与成绩趋势）。
+///
+/// **FE-P1-07 新增 `bank_id`**：场次的题库来自 `detail.bank_id`（组卷时写入，见 utils/grading.js）。
+/// 为什么存在 detail 而不是加列：模考流水本身没有题库归属字段，而 detail_json 已在同步链里，
+/// 加列会改 schema 并波及同步契约——这与 P1 的「schema 零改动」边界冲突。
+/// 历史场次（该字段上线前落库的）没有 `detail.bank_id`：按库筛选时会被排除，
+/// 这一点在 UI 上有说明（避免用户以为场次丢了）。
+pub(crate) fn exam_sessions_impl(
+    conn: &Connection,
+    limit: Option<u64>,
+    bank_id: Option<String>,
+) -> Result<Value, String> {
     let limit = limit.unwrap_or(10).clamp(1, 50) as i64;
+    let bank_id = bank_id.filter(|s| !s.trim().is_empty());
     let mut stmt = conn
         .prepare(
             "SELECT json_extract(detail_json, '$.exam_id') AS exam_id,
                     MIN(answered_at) AS started_at, MAX(answered_at) AS ended_at,
                     COUNT(*) AS item_count, COALESCE(SUM(correct), 0) AS correct_count,
                     COALESCE(SUM(CAST(json_extract(detail_json, '$.score_earned') AS REAL)), 0) AS score,
-                    COALESCE(SUM(CAST(json_extract(detail_json, '$.full_score') AS REAL)), 0) AS full_score
+                    COALESCE(SUM(CAST(json_extract(detail_json, '$.full_score') AS REAL)), 0) AS full_score,
+                    json_extract(detail_json, '$.bank_id') AS bank_id
              FROM practice_records
              WHERE mode = 'exam' AND detail_json IS NOT NULL
                AND json_extract(detail_json, '$.exam_id') IS NOT NULL
+               AND (?2 IS NULL OR json_extract(detail_json, '$.bank_id') = ?2)
              GROUP BY exam_id
              ORDER BY started_at DESC
              LIMIT ?1",
         )
         .map_err(to_str)?;
-    let mut rows = stmt.query(params![limit]).map_err(to_str)?;
+    let mut rows = stmt.query(params![limit, bank_id]).map_err(to_str)?;
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(to_str)? {
         items.push(json!({
@@ -807,6 +825,7 @@ pub(crate) fn exam_sessions_impl(conn: &Connection, limit: Option<u64>) -> Resul
             "correct_count": row.get::<_, i64>(4).map_err(to_str)?,
             "score": row.get::<_, f64>(5).map_err(to_str)?,
             "full_score": row.get::<_, f64>(6).map_err(to_str)?,
+            "bank_id": row.get::<_, Option<String>>(7).map_err(to_str)?,
         }));
     }
     Ok(json!({ "items": items }))
@@ -1235,7 +1254,7 @@ mod tests {
             params![generate_id()],
         )
         .unwrap();
-        let v = exam_sessions_impl(&conn, None).unwrap();
+        let v = exam_sessions_impl(&conn, None, None).unwrap();
         let items = v["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["exam_id"], "e2");
@@ -1245,8 +1264,56 @@ mod tests {
         assert_eq!(items[1]["score"], 5.0);
         assert_eq!(items[1]["full_score"], 10.0);
         assert_eq!(items[1]["started_at"], "2026-09-15T10:00:00.000Z");
-        let limited = exam_sessions_impl(&conn, Some(1)).unwrap();
+        let limited = exam_sessions_impl(&conn, Some(1), None).unwrap();
         assert_eq!(limited["items"].as_array().unwrap().len(), 1);
+    }
+
+    /// FE-P1-07：场次按题库筛选（题库来自 detail.bank_id，schema 零改动）。
+    ///
+    /// 同时锁住两条容易做错的点：
+    /// ① 不传 bank_id 时**不受影响**（历史场次没有 bank_id 也要能列出来）；
+    /// ② 传了 bank_id 时，没有 bank_id 的历史场次被排除（不是静默当成「属于所有库」）。
+    #[test]
+    fn exam_sessions_filter_by_bank_and_keep_legacy_rows_unfiltered() {
+        let conn = test_conn();
+        // practice_records.question_id 有外键，先落一条真题目
+        let mut q = sample_question();
+        q["id"] = json!("q1");
+        questions_create_impl(&conn, q).unwrap();
+        let rec = |exam_id: &str, at: &str, bank: Option<&str>| {
+            let detail = match bank {
+                Some(b) => format!(
+                    "{{\"exam_id\":\"{exam_id}\",\"score_earned\":5,\"full_score\":5,\"bank_id\":\"{b}\"}}"
+                ),
+                None => format!("{{\"exam_id\":\"{exam_id}\",\"score_earned\":5,\"full_score\":5}}"),
+            };
+            conn.execute(
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at)
+                 VALUES (?1, 'q1', 'exam', 'good', 1, ?2, ?3, ?2)",
+                params![generate_id(), at, detail],
+            )
+            .unwrap();
+        };
+        rec("a1", "2026-09-10T10:00:00.000Z", Some("bank_a"));
+        rec("a2", "2026-09-11T10:00:00.000Z", Some("bank_a"));
+        rec("b1", "2026-09-12T10:00:00.000Z", Some("bank_b"));
+        rec("legacy", "2026-09-13T10:00:00.000Z", None);
+
+        // 不筛选：四条全在，且带出 bank_id
+        let all = exam_sessions_impl(&conn, None, None).unwrap();
+        let items = all["items"].as_array().unwrap();
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0]["exam_id"], "legacy");
+        assert!(items[0]["bank_id"].is_null(), "历史场次没有 bank_id 时应为 null");
+
+        // 按库筛选：只剩该库的场次
+        let a = exam_sessions_impl(&conn, None, Some("bank_a".into())).unwrap();
+        let aids: Vec<String> = a["items"].as_array().unwrap().iter()
+            .map(|v| v["exam_id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(aids, vec!["a2", "a1"]);
+
+        // 空串/空白等于不筛选（与其它命令的 filter 归一化一致）
+        assert_eq!(exam_sessions_impl(&conn, None, Some("  ".into())).unwrap()["items"].as_array().unwrap().len(), 4);
     }
 
     #[test]

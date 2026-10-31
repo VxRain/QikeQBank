@@ -139,6 +139,9 @@ export function buildExamDetail(q, ans, res, meta = {}) {
     full_score: res.full,
     score_ratio: Math.round((res.ratio || 0) * 1000) / 1000
   }
+  // FE-P1-07：场次要支持「按题库看成绩趋势」，但模考流水没有独立的题库字段，
+  // 因此把组卷时的题库写进 detail（有题库才写，全部题库时不写空串）。
+  if (meta.bankId) d.bank_id = meta.bankId
   if (res.unanswered) d.unanswered = true
   if (meta.timeout) d.submitted_after_timeout = true
   if (meta.childIndex !== undefined) {
