@@ -555,8 +555,11 @@ export function persistBankFilter(page, id)
   | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~0.7s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |
   | `header` | 顶栏：窄窗（含 1024 最小窗）不错乱 / 不裁切 | 54 | ~0.8s |
-  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 17.0s / 218 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
-  - 新增页面行为时：把断言加到对应模块；新模块必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
+  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 16.6s / 218 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
+  - **代码结构（2026-11 拆分，原 1818 行单体）**：`tools/e2e-frontend.mjs` 现在只是驱动器（装载 / dev server / 浏览器 / 汇总，约 280 行），其余按职责分开：
+    `tools/e2e/mock.js`（mock IPC）、`tools/e2e/helpers.js`（flush / requireRoute / goto / waitGone 等等待与就绪）、`tools/e2e/runner.js`（断言记录器 + 基准数 + 单模块执行）、`tools/e2e/modules/<id>.js`（每页一个模块，`export default { id, label, owns, run }`）。
+  - 新增页面行为时：把断言加到对应模块；新模块 = `modules/` 加文件 + `MODULE_IDS` 登记 + `runner.js` 记基准数，且必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
+  - **性能约束**：新增用例若需要多视口 / 多状态，优先「一次导航 + 反复改状态」，不要反复 `page.reload()` —— `header` 模块去掉 7 次多余刷新后从 2.5s 降到 0.76s。
   - **等待约定（重要，别退回固定 sleep / 文案标记）**：`goto(page, hash)` 不接受任何标记参数，就绪判定统一走 `requireRoute()`：**`document.title === meta.title + ' · ' + APP_NAME` 且 `window.__inflight === 0`**。
     - 为什么不是界面文案：`meta.title` 是路由元数据（写在 `router/index.js`），改界面文案/布局不影响它；而 `/新建题库/` 这类文案一改就废。
     - 为什么加 inflight：7 个视图的 `onMounted` 都经 `bridge.js` 发 IPC，归零即首屏数据到齐（mock 里用 try/finally 计数）。

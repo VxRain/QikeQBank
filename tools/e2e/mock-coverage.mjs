@@ -88,11 +88,17 @@ export function backendCommands() {
  * @returns {string[]}
  */
 export function mockedCommands() {
-  const src = read('tools/e2e-frontend.mjs')
-  const at = src.indexOf('function mockScript()')
-  if (at < 0) throw new Error('tools/e2e-frontend.mjs 里找不到 mockScript()')
-  const body = src.slice(at)
-  return [...body.matchAll(/case '([a-z_0-9]+)':/g)].map((m) => m[1])
+  // 2026-11：mockScript 已从 tools/e2e-frontend.mjs 拆到 tools/e2e/mock.js。
+  // 两个位置都试，拆分与回退都不会让覆盖率守卫失效。
+  const candidates = ['tools/e2e/mock.js', 'tools/e2e-frontend.mjs']
+  for (const f of candidates) {
+    const src = read(f)
+    const at = src.indexOf('function mockScript()')
+    if (at >= 0) {
+      return [...src.slice(at).matchAll(/case '([a-z_0-9]+)':/g)].map((m) => m[1])
+    }
+  }
+  throw new Error(`找不到 mockScript()（已找过：${candidates.join(' / ')}）`)
 }
 
 /**

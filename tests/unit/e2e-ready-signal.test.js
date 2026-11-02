@@ -13,7 +13,7 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
@@ -22,8 +22,28 @@ const root = resolve(here, '../..')
 const read = (p) => readFileSync(resolve(root, p), 'utf8')
 
 const routerSrc = read('src/router/index.js')
-const e2eSrc = read('tools/e2e-frontend.mjs')
 const appSrc = read('src/App.vue')
+
+/**
+ * ── 2026-11：e2e 拆分后的读取策略 ──
+ * 单体 tools/e2e-frontend.mjs 已拆成 tools/e2e/*.js + tools/e2e/modules/*.js，
+ * 各处契约也分散到了不同文件：
+ *   ROUTE_TITLE / APP_SUFFIX / requireRoute     → tools/e2e/helpers.js
+ *   mockScript 的 invoke / inflight try-finally → tools/e2e/mock.js
+ *   模块的 goto 调用（不得用界面文案当就绪标记）  → tools/e2e/modules/*.js
+ *
+ * 这里按「源集合」读：无论契约在单体里还是拆开后，守卫都查得到。
+ * 这样拆分本身不会让守卫失效，也不必把路径写死成某一个文件。
+ */
+const e2eHelpersSrc = read('tools/e2e/helpers.js')
+const e2eMockSrc = read('tools/e2e/mock.js')
+const E2E_ENTRY = 'tools/e2e-frontend.mjs'
+const moduleSrcs = readdirSync(resolve(root, 'tools/e2e/modules'))
+  .filter((f) => f.endsWith('.js'))
+  .map((f) => read(`tools/e2e/modules/${f}`))
+
+/** helpers + mock：断言「实现细节」时用（它们现在住这里） */
+const e2eSrc = e2eHelpersSrc + '\n' + e2eMockSrc
 
 /** 从 router 源码里抽 { path -> meta.title }（只取带 meta.title 的路由） */
 function routerTitles() {

@@ -83,13 +83,30 @@ import { dirname, resolve } from 'node:path'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
 
+/**
+ * 解析各模块的 { id, owns }。
+ *
+ * 2026-11：模块定义已从 tools/e2e-frontend.mjs 拆到 tools/e2e/modules/<id>.js，
+ * 每个文件 export default { id, label, owns, run }。这里直接读目录，
+ * 顺带断言「文件名与 id 一致」—— 文件名不一致会让 --changed 与 --list 对不上。
+ */
+function readModules() {
+  const dir = resolve(root, 'tools/e2e/modules')
+  const files = readdirSync(dir).filter((f) => f.endsWith('.js'))
+  return files.map((f) => {
+    const src = readFileSync(resolve(dir, f), 'utf8')
+    const id = src.match(/^\s*id: '(\w+)',?$/m)?.[1]
+    assert.ok(id, `${f} 里找不到 id 字段（模块必须 export default { id, label, owns, run }）`)
+    assert.equal(`${id}.js`, f, `模块文件名必须是 <id>.js：${f} 的 id 是 '${id}'`)
+    const ownsBody = src.match(/owns: \[([^\]]+)\]/)?.[1]
+    assert.ok(ownsBody != null, `${f} 里找不到 owns 数组`)
+    return { id, owns: [...ownsBody.matchAll(/'([^']+)'/g)].map((x) => x[1]) }
+  })
+}
+
 describe('E2E 模块 owns 覆盖率（C1）', () => {
   test('src/views 下每个页面都至少被一个模块 owns', () => {
-    const src = readFileSync(resolve(root, 'tools/e2e-frontend.mjs'), 'utf8')
-    const mods = [...src.matchAll(/id: '(\w+)',[\s\S]*?owns: \[([^\]]+)\]/g)].map((m) => ({
-      id: m[1],
-      owns: [...m[2].matchAll(/'([^']+)'/g)].map((x) => x[1])
-    }))
+    const mods = readModules()
     assert.ok(mods.length >= 8, `解析到的模块过少：${mods.length}`)
 
     const views = readdirSync(resolve(root, 'src/views')).filter((f) => f.endsWith('.vue'))
@@ -108,11 +125,7 @@ describe('E2E 模块 owns 覆盖率（C1）', () => {
   })
 
   test('每个模块的 owns 必须是真实存在的路径', () => {
-    const src = readFileSync(resolve(root, 'tools/e2e-frontend.mjs'), 'utf8')
-    const mods = [...src.matchAll(/id: '(\w+)',[\s\S]*?owns: \[([^\]]+)\]/g)].map((m) => ({
-      id: m[1],
-      owns: [...m[2].matchAll(/'([^']+)'/g)].map((x) => x[1])
-    }))
+    const mods = readModules()
     const bad = []
     for (const m of mods) {
       for (const o of m.owns) {
