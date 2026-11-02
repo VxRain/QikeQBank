@@ -20,7 +20,14 @@ import { dirname, resolve } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
-const read = (p) => readFileSync(resolve(root, p), 'utf8')
+
+/**
+ * 跨平台容错：本仓库 .gitattributes 未归一化行尾，core.autocrlf=true 的 Windows
+ * 检出会把几乎所有文件变成 CRLF，而下方守卫的正则全部按 LF（`\n`）书写。
+ * 不归一化时，任何带 `\n` 的多行正则在 Windows 上**静默失配**（断言拿到 [] 而不是报错），
+ * 是"本地绿 / CI 红"或反过来的经典来源。故读取即归一化，让守卫与行尾无关。
+ */
+const read = (p) => readFileSync(resolve(root, p), 'utf8').replace(/\r\n/g, '\n')
 
 const dialogSrc = read('src/components/ui/ShortcutsDialog.vue')
 const appSrc = read('src/App.vue')

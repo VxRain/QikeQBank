@@ -542,7 +542,7 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-10-31 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 164 条 / 9 模块 / **16.3s**）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-11-02 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 218 条 / 10 模块）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 | 21 | ~1.5s |
@@ -554,7 +554,8 @@ export function persistBankFilter(page, id)
   | `exam` | 模考：答题卡 / 交卷 / 历史回看 | 20 | ~2.5s |
   | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~0.7s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |
-  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 13.9s**）只在提交前 / 发版前 / 真跨模块改动时跑。
+  | `header` | 顶栏：窄窗（含 1024 最小窗）不错乱 / 不裁切 | 54 | ~0.8s |
+  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 17.0s / 218 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
   - 新增页面行为时：把断言加到对应模块；新模块必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
   - **等待约定（重要，别退回固定 sleep / 文案标记）**：`goto(page, hash)` 不接受任何标记参数，就绪判定统一走 `requireRoute()`：**`document.title === meta.title + ' · ' + APP_NAME` 且 `window.__inflight === 0`**。
     - 为什么不是界面文案：`meta.title` 是路由元数据（写在 `router/index.js`），改界面文案/布局不影响它；而 `/新建题库/` 这类文案一改就废。

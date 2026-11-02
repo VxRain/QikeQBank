@@ -3,27 +3,35 @@
     <header
       class="sticky top-0 z-20 border-b border-line bg-[rgba(244,241,234,0.88)] backdrop-blur-[12px] backdrop-saturate-[160%]"
     >
-      <div class="max-w-[1140px] mx-auto px-7 flex items-center gap-10 h-[60px]">
-        <div class="flex items-center gap-2.5 shrink-0" style="font-family:var(--serif)">
-          <span class="text-[20px] font-700 tracking-[-0.01em] text-text">奇客题库</span>
+      <!--
+        顶栏响应式（2026-11 修 1024 最小窗错乱）：
+        原实现 header-inner 用 gap-10 + 三段都不收缩约束，max-content 需求
+        81(logo)+461(nav)+342(右侧)+80(两处 gap)+56(padding)=1020px，
+        而 1024 窗实际 clientWidth 只有 1014（10px 滚动条）→ 溢出。
+        浏览器只能压宽 + 换行：nav 文字与「设置」被挤成竖排，右侧按钮组溢出被裁。
+        现在：三段 shrink-0/nowrap 立住，靠 gap 与搜索入口按断点逐级收窄腾空间。
+      -->
+      <div class="header-inner max-w-[1140px] mx-auto px-7 flex items-center justify-between h-[60px]">
+        <div class="flex items-center shrink-0" style="font-family:var(--serif)">
+          <span class="text-[20px] font-700 tracking-[-0.01em] text-text whitespace-nowrap">奇客题库</span>
         </div>
-        <nav class="flex items-center gap-1 h-full ml-1">
+        <nav class="flex items-center gap-1 h-full shrink-0">
           <router-link
             v-for="item in navItems"
             :key="item.to"
             :to="item.to"
             active-class="active"
-            class="nav-link relative inline-flex items-center gap-1 px-3.5 h-full text-[14px] font-500 no-underline text-text-secondary transition-[color] duration-150 hover:text-text"
+            class="nav-link relative inline-flex items-center gap-1 px-3.5 h-full text-[14px] font-500 no-underline text-text-secondary whitespace-nowrap transition-[color] duration-150 hover:text-text"
           ><i :class="item.icon" aria-hidden="true" />{{ item.label }}</router-link>
         </nav>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="flex items-center gap-2 shrink-0">
           <!--
             顶栏搜索入口：不再自带下拉结果，点击直接唤起命令面板（Ctrl/Cmd+K）。
             外观仍像输入框，但它是按钮 —— 两套搜索逻辑（自绘下拉 + 面板）正是 FE-P0-08 要消除的问题。
           -->
           <button
             type="button"
-            class="sp-trigger hidden sm:flex"
+            class="sp-trigger"
             title="全局搜索（Ctrl+K）"
             aria-label="全局搜索"
             @click="openSearch"
@@ -32,10 +40,10 @@
             <span class="sp-trigger-text">搜索试题、题库、页面…</span>
             <kbd class="sp-trigger-kbd">Ctrl K</kbd>
           </button>
-          <button type="button" class="i-btn px-2.5 py-1.5 text-[13px]" title="快捷键帮助（?）" @click="showShortcuts = true">
+          <button type="button" class="i-btn px-2.5 py-1.5 text-[13px] whitespace-nowrap" title="快捷键帮助（?）" @click="showShortcuts = true">
             <i class="i-lucide-keyboard text-[15px]" />
           </button>
-          <button type="button" class="i-btn px-2.5 py-1.5 text-[13px]" title="设置" @click="showSettings = true">
+          <button type="button" class="i-btn px-2.5 py-1.5 text-[13px] whitespace-nowrap" title="设置" @click="showSettings = true">
             <i class="i-lucide-settings-2 text-[15px]" />设置
           </button>
         </div>
@@ -267,6 +275,7 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
 
 /* 顶栏搜索入口：外观是输入框，实际是打开命令面板的按钮（FE-P0-08） */
 .sp-trigger {
+  display: flex;
   align-items: center;
   gap: 7px;
   height: 32px;
@@ -286,7 +295,10 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
 }
 .sp-trigger-icon { font-size: 14px; color: var(--muted-light); }
 .sp-trigger:hover .sp-trigger-icon { color: var(--primary); }
-.sp-trigger-text { min-width: 0; }
+.sp-trigger-text {
+  min-width: 0;
+  white-space: nowrap;
+}
 .sp-trigger-kbd {
   margin-left: 6px;
   padding: 1px 5px;
@@ -299,6 +311,44 @@ button { user-select: none; -webkit-user-select: none; color: inherit; font: inh
   font-size: 10.5px;
   line-height: 1.5;
   white-space: nowrap;
+}
+
+/* ── 顶栏响应式：靠间距分级腾空间，不靠压文字换行 ──
+ *
+ * 硬约束：应用最小窗宽 1024（lib.rs min_inner_size），扣掉 10px 滚动条与 56px 左布
+ * → 内容区 1014。三段 max-content：logo 81 + nav 478 + 右侧组 342（搜索 233 +
+ * 两个图标钮 93 + 间距 16）。原实现用 gap-10：
+ *   81 + 478 + 342 + 80(gap) + 56(padding) = 1020 > 1014 → 溢 6px。
+ * 又因为三段都没有 shrink 约束 / nowrap，浏览器只能压宽 + 换行，于是 nav 文字与
+ * 「设置」被挤成竖排两行，右侧按钮组溢出后被裁掉（用户截图即此）。
+ *
+ * 修法：三段都 shrink-0 + nowrap 立住，空间只从「装饰」上腾（不碰字）：
+ *   ≥1080   gap 24，nav padding 14，搜索入口完整（提示 + Ctrl K）
+ *   <1080   gap 16，nav padding 10（省 48），隐藏 Ctrl K 键标（省 47）
+ *           → 1024 下实需 941，余 73
+ *   <1000  搜索入口只留图标（已低于桌面端最小窗，仅浏览器窗口会到这）
+ *   <820    隐藏搜索入口（Ctrl+K 始终可用）
+ *
+ * 要点：不靠 overflow:hidden 做省略号 —— 那会把 span 变成滚动容器，使按钮的
+ * max-content 塌陷，于是即使空间富余也会被截断。宁可在断点上隐去装饰，
+ * 实在挤不下也是 header 横向溢出（局部、可救），不再是全局错乱。
+ */
+.header-inner { gap: 24px; }
+@media (max-width: 1079px) {
+  .header-inner { gap: 16px; }
+  header .nav-link { padding-left: 10px; padding-right: 10px; }
+  .sp-trigger-kbd { display: none; }
+}
+@media (max-width: 999px) {
+  .sp-trigger-text { display: none; }
+}
+@media (max-width: 819px) {
+  .sp-trigger { display: none; }
+}
+/* 低于 720 已远超桌面端与最小窗宽，再无可挥霍的空间：
+   顶栏改为横向滚动保底，宁可左右滚也不裁切、不换行。 */
+@media (max-width: 719px) {
+  .header-inner { overflow-x: auto; }
 }
 
 /* 设置弹窗入场动画已随组件迁入 components/settings/SettingsDialog.vue（scoped） */
