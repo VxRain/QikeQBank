@@ -91,6 +91,144 @@ export default {
     }
     await page.evaluate(() => { window.__forceSingleBank = false })
 
+    // ── FE-P1-02：搜索 / 排序（题库数 >3 才出现）──
+    // 阈值与排序逻辑有 35 条单测，这里只验「真的接上了、真的渲染出来」。
+
+    // 3 个题库：不应出现搜索框与排序下拉
+    // 题库页 onMounted 才拉 banks_list，改完 __bankCount 必须切走再切回才会重新挂载
+    await page.evaluate(() => { window.__bankCount = 3 })
+    await goto(page, '#/')
+    await goto(page, '#/banks')
+    ok(
+      '3 个题库时不显示搜索框',
+      (await page.locator('input[aria-label="搜索题库"]').count()) === 0
+    )
+    ok(
+      '3 个题库时不显示排序下拉',
+      (await page.locator('select[aria-label="排序方式"]').count()) === 0
+    )
+
+    // 5 个题库：都应出现（含 English，用来验拼音序与描述搜索）
+    await page.evaluate(() => { window.__bankCount = 5 })
+    await goto(page, '#/')
+    await goto(page, '#/banks')
+    const searchBox = page.locator('input[aria-label="搜索题库"]')
+    const sortSel = page.locator('select[aria-label="排序方式"]')
+    ok('5 个题库时出现搜索框', (await searchBox.count()) === 1)
+    ok('5 个题库时出现排序下拉', (await sortSel.count()) === 1)
+
+    const sortOpts = await sortSel.locator('option').allTextContents()
+    ok('排序共 6 档', sortOpts.length === 6, sortOpts.join(' / '))
+    ok(
+      '排序档位含自定义/创建时间/最近更新/题数/名称',
+      /自定义顺序/.test(sortOpts[0]) &&
+        /创建时间/.test(sortOpts[1]) &&
+        /最近更新/.test(sortOpts[2]) &&
+        /题数（多→少）/.test(sortOpts[3]) &&
+        /题数（少→多）/.test(sortOpts[4]) &&
+        /名称/.test(sortOpts[5]),
+      sortOpts.join(' / ')
+    )
+
+    // 按名称排序：zh-CN collation 下汉字按拼音、拉丁字母排在汉字之后
+    // （Node 与 Chromium 的 ICU 行为一致，实测 English 返回 1 = 更靠后）
+    const nameOf = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll('.bank-card, .bank-row')].map((el) => {
+          const t = el.querySelector('.font-700')
+          return t ? t.textContent.trim() : ''
+        })
+      )
+    await sortSel.selectOption('name_asc')
+    await flush(page)
+    const byName = await nameOf()
+    ok(
+      'name_asc 生效（拼音序：第二 < 化学 < 默认 < 物理 < English）',
+      byName.join('|') === '第二题库|化学库|默认题库|物理库|English',
+      byName.join(' / ')
+    )
+
+    // 按题数排序：物理库 30 > English 20 > 化学库 10
+    await sortSel.selectOption('count_desc')
+    await flush(page)
+    const byCount = await nameOf()
+    ok('count_desc 生效（物理库排首位）', byCount[0] === '物理库', byCount.join(' / '))
+
+    // 搜索命中名称
+    await sortSel.selectOption('custom')
+    await searchBox.fill('化学')
+    await flush(page)
+    ok('搜索命中名称只留 1 个', (await page.locator('.bank-card').count()) === 1)
+    const searched = await nameOf()
+    ok('搜索结果是化学库', searched[0] === '化学库', searched.join(' / '))
+
+    // 搜索命中描述（English 的 description 是 Vocabulary）
+    await searchBox.fill('Vocabulary')
+    await flush(page)
+    const byDesc = await nameOf()
+    ok('搜索命中描述（Vocabulary → English）', byDesc.length === 1 && byDesc[0] === 'English', byDesc.join(' / '))
+
+    // 搜不到：给出清除入口，而不是空白
+    await searchBox.fill('不存在的题库名')
+    await flush(page)
+    const emptySearch = await page.locator('body').innerText()
+    ok('搜不到时提示没有匹配', /没有匹配/.test(emptySearch), emptySearch.slice(0, 120))
+    ok('搜不到时提供清除搜索', (await page.getByRole('button', { name: '清除搜索' }).count()) === 1)
+    await page.getByRole('button', { name: '清除搜索' }).click()
+    await flush(page)
+    ok('清除搜索后恢复全部', (await page.locator('.bank-card').count()) === 5, `${await page.locator('.bank-card').count()} 个`)
+
+    // ── FE-P1-02：拖拽排序 + 持久化 ──
+    // 搜索时不可拖（落位语义无法确定）
+    await searchBox.fill('库')
+    await flush(page)
+    const dragHint = await page.locator('body').innerText()
+    ok('搜索时提示不可拖动的原因', /搜索结果中不可拖动/.test(dragHint), dragHint.slice(0, 150))
+    await searchBox.fill('')
+    await flush(page)
+
+    // 非自定义顺序时不可拖
+    await sortSel.selectOption('name_asc')
+    await flush(page)
+    const nonCustomHint = await page.locator('body').innerText()
+    ok('非自定义顺序时提示切换后才可拖', /切换到「自定义顺序」后可拖动/.test(nonCustomHint))
+    await sortSel.selectOption('custom')
+    await flush(page)
+    const customHint = await page.locator('body').innerText()
+    ok('自定义顺序时提示可拖动', /拖动卡片可调整顺序/.test(customHint))
+    ok(
+      '可拖时出现抓取手柄',
+      (await page.locator('.bank-card .i-lucide-grip-vertical').count()) > 0
+    )
+
+    // 真实拖拽：把第 1 个卡片拖到第 3 个位置
+    const before = await nameOf()
+    const cards = page.locator('.bank-card')
+    await cards.nth(0).dragTo(cards.nth(2))
+    await flush(page)
+    const after = await nameOf()
+    ok('拖拽后顺序改变', JSON.stringify(before) !== JSON.stringify(after), `${before.join('/')} → ${after.join('/')}`)
+    ok('被拖的卡片落到第 3 位', after[2] === before[0], `期望 ${before[0]} 在第 3 位，实际 ${after.join('/')}`)
+
+    // 持久化：重进页面顺序仍在
+    const orderAfterDrag = await nameOf()
+    await goto(page, '#/')
+    await goto(page, '#/banks')
+    const afterReload = await nameOf()
+    ok('重进页面后拖拽顺序仍在', JSON.stringify(afterReload) === JSON.stringify(orderAfterDrag), `拖后 ${orderAfterDrag.join('/')} vs 重进 ${afterReload.join('/')}`)
+
+    // 排序方式也持久化
+    await sortSel.selectOption('count_desc')
+    await flush(page)
+    await goto(page, '#/')
+    await goto(page, '#/banks')
+    const sortAfterReload = await sortSel.inputValue()
+    ok('重进页面后排序方式仍在', sortAfterReload === 'count_desc', `实际 ${sortAfterReload}`)
+
+    await page.evaluate(() => { window.__bankCount = null })
+    await sortSel.selectOption('custom')
+    await flush(page)
+
     // ── 首页：能进、不报错 ──
     await goto(page, '#/banks')
     await goto(page, '#/')

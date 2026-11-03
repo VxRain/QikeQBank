@@ -17,6 +17,13 @@ export function mockScript() {
   const bank = { id: 'bank_default', name: '默认题库', description: '', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
   // 第二个题库：错题本统计条要按库分组，需要一个真实可解析的库名
   const bank2 = { id: 'bank_b', name: '第二题库', description: '', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
+  // FE-P1-02：题库数 >3 才出现搜索/排序，需要能造出 4+ 个题库来验阈值与排序。
+  // 名称/创建时间/题数刻意各不相同，排序结果才可断言。
+  const extraBanks = [
+    { id: 'bank_c', name: '物理库', description: '力学与电磁学', question_count: 30, created_at: '2026-01-03T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+    { id: 'bank_d', name: '化学库', description: '无机与有机', question_count: 10, created_at: '2026-01-02T00:00:00.000Z', updated_at: '2026-01-09T00:00:00.000Z' },
+    { id: 'bank_e', name: 'English', description: 'Vocabulary', question_count: 20, created_at: '2026-01-04T00:00:00.000Z', updated_at: '2026-01-05T00:00:00.000Z' }
+  ]
   const mk = (i, t) => ({
     id: 'q' + i, bank_id: 'bank_default', type: t || 'single', version: 2,
     // 难度/状态各不同，供 FE-P0-09 的筛选与排序验证（q1..q3 难度 1..3，q4.. 循环）
@@ -95,7 +102,14 @@ export function mockScript() {
       try {
       window.__calls.push(cmd)
       switch (cmd) {
-        case 'banks_list': return { success: true, data: window.__forceSingleBank ? [bank] : [bank, bank2] }
+        case 'banks_list': {
+          // __bankCount 用于验「题库数 >3 才显示搜索/排序」的阈值与排序档位
+          if (window.__forceSingleBank) return { success: true, data: [bank] }
+          if (window.__bankCount != null) {
+            return { success: true, data: [bank, bank2, ...extraBanks].slice(0, window.__bankCount) }
+          }
+          return { success: true, data: [bank, bank2] }
+        }
         case 'questions_list': {
           // 真实实现一遍筛选/排序/分页，E2E 才能验「参数真的生效」而不是只看请求发出去了
           window.__listArgs = args

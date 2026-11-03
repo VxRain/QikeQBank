@@ -55,7 +55,8 @@ export const MODULE_BASELINE = {
   review: 18,
   exam: 20,
   wrong: 21,
-  banks: 16,
+  // banks 16 → 38：FE-P1-02 搜索/排序/拖拽 22 条
+  banks: 38,
   search: 36,
   // 7 宽度 × 7 + 1024 两条 + 1280 一条 + 动态缩放 1 条 + harness 的 pageerror 1 条 = 54
   header: 54

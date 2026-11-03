@@ -24,8 +24,43 @@
         </div>
       </div>
 
+      <!--
+        搜索 + 排序（FE-P1-02）：题库数 >3 才出现。
+        两个题库时搜索框只是噪音（一眼看全），三个已开始需要扫视，四个起才真需要找。
+      -->
+      <div v-if="bankStore.loaded && showSearchSort" class="flex items-center gap-2.5 flex-wrap mb-3.5">
+        <div class="relative flex-1 min-w-[200px] max-w-[320px]">
+          <i class="i-lucide-search absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-light text-[14px]" aria-hidden="true" />
+          <input
+            v-model="query"
+            type="search"
+            class="input w-full !pl-8 text-[13px]"
+            placeholder="搜索题库名称或描述…"
+            aria-label="搜索题库"
+          />
+        </div>
+        <select v-model="sort" class="select w-[150px] text-[13px]" aria-label="排序方式" @change="onSortChange">
+          <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <span v-if="query.trim()" class="text-[12px] text-muted">
+          找到 {{ visibleBanks.length }} / {{ bankStore.banks.length }} 个
+        </span>
+        <!-- 拖拽状态说明：不可拖时给原因，而不是让用户白拖一次 -->
+        <span v-if="!dragEnabled" class="text-[12px] text-muted-light flex items-center gap-1">
+          <i class="i-lucide-info text-[13px]" aria-hidden="true" />{{ dragDisabledReason }}
+        </span>
+        <span v-else class="text-[12px] text-muted-light flex items-center gap-1">
+          <i class="i-lucide-grip-vertical text-[13px]" aria-hidden="true" />拖动卡片可调整顺序
+        </span>
+      </div>
+
       <div v-if="!bankStore.loaded" class="text-muted py-2 flex items-center gap-2">
         <i class="i-lucide-loader-circle animate-spin" />正在加载题库…
+      </div>
+      <!-- 搜索无结果：与「一个题库都没有」区分开，否则用户以为数据丢了 -->
+      <div v-else-if="showSearchSort && visibleBanks.length === 0" class="text-muted py-2 flex items-center gap-2">
+        <i class="i-lucide-search-x" />没有匹配「{{ query }}」的题库
+        <button type="button" class="btn btn-tiny ml-1" @click="query = ''">清除搜索</button>
       </div>
 
       <div v-else-if="bankStore.banks.length === 0" class="text-muted py-2 flex items-center gap-2">
@@ -35,15 +70,23 @@
       <!-- 列表视图：每行一库，信息与操作横向铺开，密度高于卡片 -->
       <div v-else-if="view === 'list'" class="flex flex-col gap-2">
         <div
-          v-for="b in bankStore.banks"
+          v-for="(b, i) in visibleBanks"
           :key="b.id"
           role="button"
           tabindex="0"
+          :draggable="dragEnabled"
           class="bank-row card card-interactive flex items-center gap-4 cursor-pointer !px-4 !py-3"
+          :class="dragEnabled && 'bank-draggable'"
           :title="`进入「${b.name}」`"
           @click="onEnter(b)"
           @keyup.enter="onEnter(b)"
+          @dragstart="onDragStart(i, $event)"
+          @dragover.prevent="onDragOver(i)"
+          @drop.prevent="onDrop(i)"
+          @dragend="onDragEnd"
         >
+          <!-- 拖拽手柄：仅自定义顺序且未搜索时出现，明确「这里可以拖」 -->
+          <i v-if="dragEnabled" class="i-lucide-grip-vertical text-[15px] shrink-0 text-muted-light cursor-grab" aria-hidden="true" />
           <i class="i-lucide-folder text-[19px] shrink-0 text-muted-light" />
           <div class="flex items-center gap-2.5 min-w-0 w-[240px] shrink-0">
             <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
@@ -64,17 +107,24 @@
       <!-- 卡片视图：固定三列，描述两行固定高保持等高 -->
       <div v-else class="grid grid-cols-3 gap-3.5">
         <div
-          v-for="b in bankStore.banks"
+          v-for="(b, i) in visibleBanks"
           :key="b.id"
           role="button"
           tabindex="0"
+          :draggable="dragEnabled"
           class="bank-card card card-interactive flex flex-col cursor-pointer !p-4 !pt-4.5"
+          :class="[dragEnabled && 'bank-draggable', dragOver === i && dragEnabled && 'bank-drag-over']"
           :title="`进入「${b.name}」`"
           @click="onEnter(b)"
           @keyup.enter="onEnter(b)"
+          @dragstart="onDragStart(i, $event)"
+          @dragover.prevent="onDragOver(i)"
+          @drop.prevent="onDrop(i)"
+          @dragend="onDragEnd"
         >
           <div class="flex items-start justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
+              <i v-if="dragEnabled" class="i-lucide-grip-vertical text-[15px] shrink-0 text-muted-light cursor-grab" aria-hidden="true" />
               <i class="i-lucide-folder text-[18px] shrink-0 text-muted-light" />
               <span class="font-700 text-[14px] text-text truncate">{{ b.name }}</span>
             </div>
@@ -155,6 +205,18 @@ import { bankStore, loadBanks } from '@/stores/bank.js'
 import { createBank, updateBank, removeBank } from '@/api/banks.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
+import {
+  BANK_SORT_OPTIONS,
+  DEFAULT_BANK_SORT,
+  shouldShowSearchSort,
+  sortAndFilterBanks,
+  canDragBanks,
+  reorderIds,
+  loadCustomOrder,
+  saveCustomOrder,
+  loadBankSort,
+  saveBankSort
+} from '@/stores/banksView.js'
 
 const router = useRouter()
 
@@ -176,6 +238,76 @@ function setView(v) {
 const totalCount = computed(() =>
   bankStore.banks.reduce((s, b) => s + (b.question_count ?? 0), 0)
 )
+
+// ── 搜索 / 排序 / 拖拽（FE-P1-02）──
+// 纯逻辑全在 stores/banksView.js（35 条单测），这里只做接线与持久化。
+const sortOptions = BANK_SORT_OPTIONS
+const query = ref('')
+const sort = ref(loadBankSort())
+const customOrder = ref(loadCustomOrder())
+const dragFrom = ref(-1)
+const dragOver = ref(-1)
+
+/** 题库数 >3 才显示搜索与排序控件 */
+const showSearchSort = computed(() => shouldShowSearchSort(bankStore.banks.length))
+
+/** 搜索 + 排序后的可见列表（模板里两处 v-for 都用它） */
+const visibleBanks = computed(() =>
+  sortAndFilterBanks(bankStore.banks, {
+    sort: sort.value,
+    query: query.value,
+    customOrder: customOrder.value
+  })
+)
+
+/** 拖拽仅在「自定义顺序 + 无搜索」时开放 */
+const dragEnabled = computed(() => canDragBanks({ sort: sort.value, query: query.value }))
+
+/** 不可拖时给出具体原因，而不是让用户白拖一次 */
+const dragDisabledReason = computed(() => {
+  if (query.value.trim()) return '搜索结果中不可拖动，清除搜索后可调整顺序'
+  return '切换到「自定义顺序」后可拖动调整'
+})
+
+function onSortChange() {
+  saveBankSort(sort.value)
+  // 切走自定义顺序时清掉落位高亮，避免残留
+  dragFrom.value = -1
+  dragOver.value = -1
+}
+
+function onDragStart(i, e) {
+  if (!dragEnabled.value) return
+  dragFrom.value = i
+  // Firefox 要求设置 dataTransfer 才会开始拖拽
+  try {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', String(i))
+  } catch { /* 忽略 */ }
+}
+
+function onDragOver(i) {
+  if (!dragEnabled.value) return
+  dragOver.value = i
+}
+
+function onDragEnd() {
+  dragFrom.value = -1
+  dragOver.value = -1
+}
+
+function onDrop(i) {
+  if (!dragEnabled.value) return onDragEnd()
+  const ids = reorderIds(
+    { banks: bankStore.banks, sort: sort.value, query: query.value, customOrder: customOrder.value },
+    dragFrom.value,
+    i
+  )
+  onDragEnd()
+  if (!ids) return
+  customOrder.value = ids
+  saveCustomOrder(ids)
+}
 
 // ── 进入 ──
 function onEnter(b) {
@@ -274,6 +406,13 @@ onMounted(async () => {
 .bank-actions { opacity: .35; transition: opacity .15s ease; }
 .bank-card:hover .bank-actions, .bank-card:focus-visible .bank-actions,
 .bank-row:hover .bank-actions, .bank-row:focus-visible .bank-actions { opacity: 1; }
+/* 拖拽（FE-P1-02）：可拖时给出抓取光标，落点高亮用主色淡底 + 虚线边 */
+.bank-draggable { cursor: grab; }
+.bank-draggable:active { cursor: grabbing; }
+.bank-drag-over { border-color: var(--primary-border) !important; background: var(--primary-bg) !important; }
+/* 拖拽中的源卡片半透明，明确「它正在被移动」 */
+.bank-draggable[draggable="true"]:active { opacity: .6; }
+
 /* 弹窗入场（与 DialogHost 同语言） */
 .dg-enter-active, .dg-leave-active { transition: opacity .18s ease; }
 .dg-enter-active .dg-card, .dg-leave-active .dg-card { transition: transform .18s ease; }
