@@ -510,30 +510,11 @@ export function persistBankFilter(page, id)
 - 键盘流：未判分 A–F 选题 / M 切材料 / 简答看答案后 1-2 自评 / Enter 提交；判分后 Enter 下一题，Esc 取消自动下一题；背题模式 ←/→ 或 Enter 翻题；输入区/组词/弹窗/修饰键不劫持。
 - **判分后选项自身标色（FE-P1-06）**：`.option-btn-right` / `.option-btn-wrong` + 对勾/叉图标 + `aria-label`，不依赖下方答案对照行。口径在 `utils/practiceLoop.js::optionMarkOf`：正确选项一律绿（**漏选的也绿**，否则看不出漏了哪个）、我选了但不对的标红、**未判分恒返回空**（作答中绝不泄露答案）。样式在 `uno.config.js` 成对定义且带 `!` —— 必须同时压过 `option-btn` 默认底色与 `option-btn-on` 选中态。
 - **完成页三入口**：「同配置再来一轮」（复位会话后直接再走 `start()`，不刷新页面）/「去复习」/「去错题本」。后两者带 `?bank=` 且**目标页真的认这个参数**（`Review.vue`/`Wrong.vue` 把它传给 `resolveBankFilter`）——带了不认等于白带。
-- **弱项专练**：`utils/practiceLoop.js::rankWeakTypes`，排序优先级「正确率最低 → 错题数多 → 样本大」，门槛 `count >= 3` 且 `rate < 0.6`。数据源 `records_overview.by_type`（`review_stats.by_type` 只有题量，缺「做过多少、对了多少」），**只在完成页出现时拉取**。入口地址带 `again=1`：弱项专练是「按这个题型开一轮新的」；不带的话在完成页点它只会改 URL 而 `phase` 仍是 `done`，用户看到「点了没反应」（e2e 抓到的真实缺陷，devBak 原用例只验了 hash 带 `types`）。推荐前按 `availableByType` 过滤掉「历史很弱但现在一道题都不剩」的题型——推一个点了就报错的入口比不推更糟。
+- **弱项专练**：`utils/practiceLoop.js::rankWeakTypes`，排序优先级「正确率最低 → 错题数多 → 样本大」，门槛 `count >= 3` 且 `rate < 0.6`。数据源 `records_overview.by_type`（`review_stats.by_type` 只有题量，缺「做过多少、对了多少」），**只在完成页出现时拉取**。入口地址须带 `again=1`（否则 `phase` 仍是 `done`，点了没反应）。推荐前按 `availableByType` 过滤掉「历史很弱但现在一道题都不剩」的题型——推一个点了就报错的入口比不推更糟。
 - **单题计时 + 难度标识**：计时用「累计 + 本次进入时刻」而非「进入至今」，跳走再跳回接着算而不是从 0 重开；判分后停表。难度点阵样式从 `List.vue` 的 scoped 提到 `App.vue` 全局（scoped 会让第二处静默失效：DOM 正常但没样式）。
 - **同路由深链必须 watch**：完成页跳 `/practice?types=…` 命中同一条路由，组件不重新挂载 → `onMounted` 的深链逻辑不再执行。必须 `watch([route.query.bank/types/count/again])` 重新应用（`?retry=1` 时让位）。
 
-### 模考暂停继续 / 成绩趋势按题库（FE-P1-07）
-- **暂停/继续**：剩余时间由 `startedAt + 限时 - now` 反推，所以暂停**不能只停刷新**——
-  一继续就会立刻跳掉暂停期间流逝的时间（暂停 5 分钟＝白扣 5 分钟）。实现上暂停记时刻、
-  结算当前题用时，继续时把 `startedAt` 后移同样长，真正冻结限时；暂停态写进草稿，
-  重开窗口时按 `pausedAt` 补回。**暂停期间必须遮罩盖住题面**，否则「暂停计时」等于还能偷看题。
-- **成绩趋势按题库**：`exam_sessions` 加可选 `bank_id`，场次题库取 `detail.bank_id`
-  （`buildExamDetail` 的 `meta.bankId` 写入，schema 零改动——模考流水没有题库列，
-  加列会波及同步契约）。按库筛选时**排除无归属的历史场次**：不能把「不知道属于哪个库」
-  当成「属于所有库」。UI 用徽章标出当前范围，全部题库视角提示含早期场次。
-- **按分值组卷的算法基建**（`utils/examPaper.js`，**当前无 UI 调用**）：
-  `subsetSum`（子集和 DP，分值 ×2 转整数做 0.5 分粒度）、`normalizeMix`（配比归一化，
-  零头补最大项）、`planStandardPaper`（两轮：按配额 + 用富余题型补缺口）。
-  **满分是参数不是常量**（`DEFAULT_TOTAL = 100` 仅缺省值），支持 120/135/150。
-  凑不出时如实报不可达，绝不返回差几分的卷子（跨场次成绩不可比）。
-  35 条单测 + 5 个变异验证守着，等「考试模式」来复用。
-- **为什么不做「100 分标准卷」**：考试满分本来就可能是 120/135/150，把 100 写死
-  只是「刚好 100 分的题库」才用得了；那层产品外壳（组卷方式开关 / 题型配比面板 /
-  难度专属按钮）已移除，只留算法。
-
-### Review.vue（W3b）### Review.vue（W3b）
+### Review.vue（W3b）
 - 顶部设置同 Practice（题库下拉 + 题量输入框默认 20/全部按钮，题量按 `stores/runConfig.js` 记忆）；`reviewDue({limit, bankId})`；徽章 SM-2→FSRS；待复习文案拆“其中学习中 N 题”（`stats.learning_due`，>0 才显示）；卡片 Learning/Relearning 态打“学习中”徽标。
 - `reviewGrade` 四键 1:1 映射 FSRS Rating，前端算卡（`cardFromRow(it.parent?.fsrs ?? it.q.fsrs)`）后 `card` + `fsrs_log` 并入 recordAnswer；其余（自评统计、材料记父题 id）不动。
 - 四键显示下次间隔：`utils/reviewPreview.js` 预计算四个 rating 的 due，**只计算不写库**（不得为了预览先落记录）。
@@ -547,6 +528,8 @@ export function persistBankFilter(page, id)
   - 标记按 uid 记入草稿 `extra.flaggedUids`，恢复时经 `remapFlaggedUids` 按题目 id 重映射（uid 的序号会随被删题目前移）。
 - 交卷：全卷统一判分落库（`mode='exam'`，**不建 FSRS 卡**，不进错题本与复习统计）；材料题拆子题，一子题一条流水，`detail` 带 `exam_id/exam_seq/score_earned/full_score`；确认对话框同时报告未答数与标记数。
 - 历史回看：`components/exam/ExamHistory.vue` + `exam_detail(exam_id)`，**不依赖内存 sheet**（重启后仍可回看）；题目被删时展示占位；选项 id 映射回字母。
+- 暂停/继续：剩余时间由 `startedAt + 限时 - now` 反推，因此暂停**不能只停刷新**——继续时会立刻跳掉暂停期间流逝的时间。暂停时结算当前题用时、记下时刻；继续时把 `startedAt` 后移同样长，真正冻结限时。暂停态写进草稿，重开窗口按 `pausedAt` 补回。**暂停期间必须遮罩盖住题面**，否则「暂停计时」等于还能偷看题。
+- 成绩趋势按题库：`exam_sessions(limit, bank_id)`，场次题库取 `detail.bank_id`（模考流水没有题库列，加列会波及同步契约）。按库筛选时**排除无归属的历史场次**——不能把「不知道属于哪个库」当成「属于所有库」。UI 用徽章标出当前范围。
 
 ### Home.vue（W3c）
 - 统计卡片可点击：总题数→/library、待复习→/review、累计刷题→/practice；待复习 >0 时行动条（开始复习/去刷题）。
@@ -568,7 +551,7 @@ export function persistBankFilter(page, id)
   **虚拟滚动：结论是不做**。列表是服务端分页（每页 20 / 50 / 100，后端上限 500），同时在 DOM 的只有一页；实测（2026-11-03，`node tools/perf-render.mjs`）100 行滚动 20 屏 327ms、长任务 0 个；合成 500 行单页布局+首帧 90ms、长任务 0 个；20 图题目 renderDoc 首帧 <0.2ms；10 个 mathBlock 10.4ms。引入虚拟滚动的成本（行高测量、焦点/Tab 顺序重做、与 `content-visibility` 叠加行为不确定）远大于收益。若将来出现「单页 >500 行」或「行内渲染富文本预览」，先用 `tools/perf-render.mjs --json` 复测，出现长任务再上。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-11-04 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 284 条 / 10 模块 / 24.4s）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-11-04 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 300 条 / 11 模块 / 25.9s）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
   | `list` | 试题列表：排序 / 筛选 / 页码收敛 / 单题统计 | 22 | ~1.6s |
@@ -582,7 +565,7 @@ export function persistBankFilter(page, id)
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 33 | ~4.0s |
   | `header` | 顶栏：窄窗（含 1024 最小窗）不错乱 / 不裁切 | 54 | ~0.8s |
   | `settings` | 设置：恢复默认（应用内确认）/ 快捷键入口让位 | 16 | ~2.7s |
-  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~1.6s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 24.4s / 284 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
+  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~1.8s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 25.9s / 300 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
   - **代码结构（2026-11 拆分，原 1818 行单体）**：`tools/e2e-frontend.mjs` 现在只是驱动器（装载 / dev server / 浏览器 / 汇总，约 280 行），其余按职责分开：
     `tools/e2e/mock.js`（mock IPC）、`tools/e2e/helpers.js`（flush / requireRoute / goto / waitGone 等等待与就绪）、`tools/e2e/runner.js`（断言记录器 + 基准数 + 单模块执行）、`tools/e2e/modules/<id>.js`（每页一个模块，`export default { id, label, owns, run }`）。
   - 新增页面行为时：把断言加到对应模块；新模块 = `modules/` 加文件 + `MODULE_IDS` 登记 + `runner.js` 记基准数，且必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
@@ -595,29 +578,9 @@ export function persistBankFilter(page, id)
     - **前置契约守卫**：跑 e2e 前自动执行 `tests/unit/e2e-ready-signal.test.js`（7 项），检测 `ROUTE_TITLE ↔ meta.title` 漂移、title 拼接格式、inflight 的 try/finally、无 networkidle、超时必抛；不过则 **exit 3 中止**（~0.3s），不会白跑 30s 超时。`--skip-guard` 仅排障用。
     - **时间相关断言用 `page.clock`**（仅 `form`/`review` 模块启用：`usesClock: true`）。实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 3ms。`exam`/`practice` 有 `Date.now()` 算用时/限时，**不启用**——实测给 `practice` 装 clock 后 `flush()` 的那一帧（`requestAnimationFrame`）不推进，会卡到超时。
     - **e2e 只放「浏览器才能证伪」的事**：纯函数口径（排序/阈值/地址拼接）由单测锁死，不在 e2e 里抄第二遍结论。判断标准是「这条断言如果换成等价重构，会不会误报」——会，就不是 e2e 该管的。
-    - **2026-11 审查结论（e2e ↔ 单测分工）**：全量过了一遍 286 条断言，分三类。
-      **A 类（参数形状/调用次数）**：`__listArgs.sort === 'x'` / `只触发 1 次 IPC` 这类，mock 只是回显 args，等于把「前端拼参数」再确认一遍，且**下一条断言已证明结果正确**（首行为第 1 题 / 只剩 2 行 / stats 覆盖 id 数 == 行数）。删掉不损失覆盖，只减少假绿面积。实测**删断言几乎不省时间**（耗时由操作次数驱动，非断言条数）。
-      **B 类（纯逻辑寄居在视图里）**：`qStats` / `getPlainText` / `lettersOf` / `fmtMs` / `buildItems` / `dedupeShuffle` / `blankAnswersOf` / `truncate` 等原本是各页局部函数，只能靠 e2e 匹配表格文本验证（`/^0 · —$/` 这种），调列宽/加图标/改文案就误报。**正确做法不是删 e2e，而是抽成 `src/utils/{listFormat,questionDisplay}.js` 纯函数 + 单测**，e2e 只留「渲染真的用上了」一条。抽取过程中发现 **3 个真实缺陷**（见下）。
-      **C 类（约 120 条）**：渲染链路、交互可达、跨进程状态（sessionStorage 真实读写）、ProseMirror contenteditable、vue-router 同路由不重挂载、`page.clock` 时序边界、统计失败降级 —— 这些**不能下沉**。
-    - **B 类抽取时发现的真实缺陷**（都是复制粘贴漂移，界面上看不出来）：
-      ① `blankAnswersOf` 空值口径不一致：`Wrong.vue` 给「—」，`Practice/Review` 给空串 → 空串在界面留下看不见的空位，用户以为答案丢了。
-      ② `getPlainText` 在 `List.vue` 认 `plainText` 驼峰别名，`Wrong.vue` 不认 → 同一题在两个页面显示不同。
-      ③ 材料题**有 `plain_text` 时丢掉子题数标注**（装饰逻辑只写在 stem 分支里），用户看不出这题里还有几问。
-      ④ `rowStats` 对 `attempt_count` 为负/`correct > attempts` 没有钳制 → 显示负数次数或 >100% 正确率。
-    - **结果**：e2e 286 → **269 条**，单测 373 → **421 条**；e2e 全量 23.5s → 23.3s（**时间几乎不变，收益在代码质量与守卫可靠性**，不要为了提速预期去删断言）。
 - **主线程集成**：`pnpm build`、`cargo test`、migrate+smoke 复跑、`pnpm test:e2e`、debug EXE 启动建库冒烟、git commit。
 
 **升级条件**（同 v1）：失败 ≥2 次或计划假设失真 → 停止如实汇报，禁止臆造。
-
-## 8.1 devBak 特性迁移台账
-
-`devBak` 分支是 2026-10-31 那批快速堆特性的产物（13 提交 / 约 8600 行），实现质量参差，
-**不按提交号 cherry-pick**（每个提交都改 e2e 单体，且彼此串行叠在同一批文件上），
-而是按「能力」逐项重写进 main。
-
-**权威清单见 `docs/devbak-migration.md`**：待迁移 7 项（FE-P1-05/06/07/08/09/10/11）、
-已迁 3 项（P1-04 / P1-12 / P1-02 部分）、以及**已审核明确不做的范围**。
-开工前先读该文件的「每项完成标准」，不要在清单外自行扩范围。
 
 ## 9. 待定事项（Open——勿在文档 / UI 中当作已定能力宣传）
 

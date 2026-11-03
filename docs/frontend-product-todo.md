@@ -43,14 +43,17 @@
 - [ ] 关键路径有手测步骤；状态机/判分/解析类逻辑补单测
 - [ ] 界面文案与实际行为一致（尤其统计口径、数量上限）
 
-### 0.4 状态标记（唯一约定）
+### 0.4 状态标记（只记待办）
 
-任务状态**只用一个标记法**：详细章节标题 `### [ ] / ### [x]`，索引表用同形的「状态」列。
+**本文件只列未完成项。** 任务一旦完成，就从索引与详细章节里**整节删除**——
+留着会与现状脱节（代码早就改了，文档还写「待做」），读者要先分辨哪条还成立。
 
 | 写法 | 含义 |
 |---|---|
-| `[ ]` | 未开始 |
-| `[x]` | 已完成（正文需附「已完成」落地说明 + 守卫测试） |
+| `[ ]` | 未开始 / 未完成（**保留**） |
+
+唯一例外是 §7 验收指标：那里的 `[x]` 表示「该指标已达成」，是验收结论而非任务，
+不适用「完成即删」。
 
 禁止的旧写法（已清理，勿再引入）：在索引行尾追加 `✅` 单元格（会多出一列、撑坏表格）；给 ID 加删除线 `~~FE-XX-01~~ ✅`（ID 被划线影响检索与复制）。
 
@@ -68,41 +71,17 @@
 | ID | 任务 | 优先级 | 规模 | 后端 | 建议迭代 | 状态 |
 |---|---|---|---|---|---|---|
 | FE-P0-02 | 删除可恢复（回收站 / 撤销） | P0 | L–XL | 是 | 2–3 | [ ] |
-| FE-P0-03 | 录题表单防丢失 + Ctrl+S | P0 | S–M | 否 | 1 | [x] |
-| FE-P0-04 | 练习 / 复习会话恢复 + 离开提示 | P0 | M | 否 | 2 | [x] |
-| FE-P0-05 | 刷题/复习配置记忆 + 可用题量预览 | P0 | S | 否 | 1 | [x] |
-| FE-P0-06 | 练习导航 + 复习间隔预览/撤销 | P0 | M | 部分 | 1–2 | [x] |
-| FE-P0-07 | 模考答题卡 + 历史回看 | P0 | M–L | 是 | 2 | [x] |
-| FE-P0-08 | 全局搜索升级为命令面板 | P0 | M | 否 | 1 | [x] |
-| FE-P0-09 | 列表排序/筛选/页码收敛 | P0 | M | 是 | 1–2 | [x] |
-| FE-P0-10 | 批量操作接口 + 批量编辑 | P0 | M | 是 | 2 | [x] |
-| FE-P0-11 | 错题本搜索/排序/统计 | P0 | M | 是 | 2 | [x] |
 | FE-P0-12 | 抽题配额与材料题统计口径 | P0 | M–L | 是 | 2–3 | [ ] |
-| FE-ARCH-01 | 题型常量收敛 | P1 | S | 否 | 1 | [x] |
-| FE-ARCH-02 | QuestionRunner 统一答题渲染 | P1 | L | 否 | 2–3 | [x] |
-| FE-ARCH-03 | 题型注册表 + 统一判分 | P1 | L | 否 | 3 | [x] |
-| FE-ARCH-04 | 路由 meta 驱动导航 / 标题 | P1 | S | 否 | 2 | [x] |
-| FE-ARCH-05 | 统一会话 store | P1 | M | 否 | 3 | [x] |
-| FE-ARCH-06 | API 契约收敛 + 删除兜底解析 | P1 | S–M | 否 | 1 | [x] |
 | FE-ARCH-07 | 前端组件/E2E 测试 | P1 | M | 否 | 3 | [ ] |
-| FE-ARCH-08 | 渲染性能（图片懒加载等） | P1 | S | 否 | 2 | [x] |
 
 ### 1.1 P1 索引
 
 | ID | 任务 | 规模 | 后端 | 状态 |
 |---|---|---|---|---|
 | FE-P1-01 | 首页「今日任务」+ 新用户引导 | S–M | 否 | [ ] |
-| FE-P1-02 | 题库页快捷入口 / 搜索 / 排序 / 复制 | M | 部分 | [ ] |
-| FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [ ] |
-| FE-P1-04 | 单题统计 | S–M | 是 | [ ] |
-| FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [ ] |
-| FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [x] |
-| FE-P1-07 | 模考 / 暂停续考 / 成绩趋势按题库 | M–L | 部分 | [x] |
-| FE-P1-08 | 错题本永不自动移出（导出/行内编辑不做） | S–M | 部分 | [x] |
+| FE-P1-03 | 状态元数据接入抽取池 | M | 是 | [ ] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [ ] |
-| FE-P1-10 | 设置增强（默认值同源 / 恢复默认 / 快捷键入口） | S–M | 部分 | [x] |
 | FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [ ] |
-| FE-P1-12 | 前端渲染性能 | S | 否 | [ ] |
 
 ### 1.2 P2 索引
 
@@ -124,12 +103,11 @@
 | ID | 任务 | 状态 |
 |---|---|---|
 | FE-DOC-01 | README 命令数量与实际一致 | [ ] |
-| FE-DOC-03 | 题型命名统一 | [x] |
 | FE-DOC-04 | 首页卡片可点击描述 | [ ] |
 | FE-DOC-05 | 未使用字段说明 | [ ] |
 
 > P1 / P2 的详细说明见第 3、4 节；架构任务见第 5 节；文档任务见第 8 节。
-> 状态约定与各详细章节标题的 `[ ] / [x]` 一致，索引只做汇总，不另设标记法。
+> 索引只做汇总，只列未完成项；完成后从索引与详细章节一并删除（见 §0.4）。
 
 ---
 
@@ -162,317 +140,6 @@
 **依赖 / 备注**
 - 若短期不做归档表，至少让用户能整库导出（导出能力随数据保全方案重新设计后再提供）。
 - 该任务涉及同步，禁止前端单独实现「假恢复」。
-
----
-
-### [x] FE-P0-03 录题表单防丢失 + Ctrl+S
-
-> ✅ 已完成。落地：`src/stores/formDraft.js`（脏判定 + 草稿兜底，纯逻辑，缺键序无关的稳定序列化、12h TTL、按编辑态/题库分槽位）；`src/views/Form.vue` 接入脏徽章、`onBeforeRouteLeave` 应用内确认、capture 阶段 Ctrl/Cmd+S、`beforeunload`、30s 定期 + 脏变化 2s 防抖写草稿、进入时提示恢复草稿。守卫：`tests/unit/form-draft.test.js`。
-
-**问题**
-- `Form.vue` 编辑/新增过程中切换导航、点返回、关闭窗口会直接丢失内容。
-- 没有脏状态提示、没有 `beforeunload`、没有 Ctrl/Cmd+S。
-- 保存按钮始终可点，校验失败只在右侧文字提示。
-
-**改动**
-- `Form.vue`：
-  - 引入 `dirty` 状态（首次加载后的快照与当前深比较，或编辑器 update 时置脏）。
-  - `onBeforeRouteLeave`：脏时 `await confirmDialog({ title:'放弃未保存内容？', ... })`。
-  - `window.addEventListener('beforeunload', ...)` 处理窗口关闭（Tauri 下同时确认行为）。
-  - `keydown` 监听 Ctrl/Cmd+S → `onSave()`。
-  - 保存成功后清除 dirty，再跳转。
-- 可选：每 30 秒把草稿写 `sessionStorage`，异常退出后可恢复；与 FE-P0-04 共用模式。
-
-**验收**
-- 修改题干后点导航/返回，出现应用内确认弹窗；取消则留在原页且内容不丢。
-- Ctrl/Cmd+S 保存，行为与点「保存」一致。
-- 保存成功后离开不再提示。
-
-**依赖 / 备注**
-- 复用 `src/stores/ui.js` 的 `confirmDialog`，禁止原生 `confirm`。
-- 与 `QuestionEditor` 的内部 `local` 状态配合：以 `v-model` 的 form 快照为准。
-
----
-
-### [x] FE-P0-04 练习 / 复习会话恢复 + 离开提示
-
-> ✅ 已完成（会话快照在上一批架构重构，本批补离开提示）。落地：`src/composables/sessionLeaveNotice.js` 是全应用唯一的「离开时告知进度已存」交互（**只提示、不拦路**，进度已落 sessionStorage）；Practice / Review / Exam 三处接入；Exam 交卷前确认同时给出未答与标记数。
-
-**问题**
-- `Practice.vue` / `Review.vue` 的 `pool / curIdx / answers / round` 都在组件内，路由一离开本轮消失。
-- 用户去查一道题、看统计、切设置后回来，只能重新开始。
-- `Exam.vue` 已有草稿，但离开时没有提示，用户不知道草稿存在。
-
-**改动**
-- 新增 `src/stores/session.js`（或 `composables/useSessionSnapshot.js`）：
-  - 练习：`{ mode, bankId, itemIds, curIdx, answers, round, startedAt }`
-  - 复习：`{ bankId, itemIds, curIdx, answers, round, startedAt }`
-  - 模考：迁入现有 `qbank.examDraft.v1` 逻辑。
-- 用 `sessionStorage` 持久化；题目内容不存，恢复时用 `practicePool({ ids })` 按 id 重新拉取（该接口已保持传入顺序）。
-- `Practice.vue` / `Review.vue` 进入时检测快照，弹窗「继续上次 / 放弃」；`onBeforeUnmount` 或状态变更时保存。
-- 路由守卫统一提示，避免每个页面各写一套。
-
-**验收**
-- 刷到第 5 题离开，再回来能继续第 5 题，已选答案/已填内容保留。
-- 题目被删除时，恢复流程跳过缺失项并提示。
-- 完成/主动放弃后清理快照。
-
-**依赖 / 备注**
-- 与 FE-ARCH-05 共用；先做最小版本，再随架构重构收敛。
-
----
-
-### [x] FE-P0-05 刷题 / 复习配置记忆 + 可用题量预览
-
-> ✅ 已完成。落地：`src/stores/runConfig.js`（三入口共享的题型/题量记忆，带版本号 + 归一化，脏数据回落默认、写失败静默）+ `availableCountOf`/`plannedCountOf`；Practice / Exam / Review 接入，题量标签右侧显示「可用 N 题」并随题库/题型实时刷新，0 题时禁用开始并给「去录题/去导入」入口，「全部」超 500 时给上限提示。守卫：`tests/unit/run-config.test.js`。
-
-**问题**
-- 刷题只记忆 `mode`；`selectedTypes` 每次全选，`count` 每次 5。
-- 复习题量每次 20；模考记忆时长/多选规则，但不记题型/题量。
-- 开始前不知道当前范围有多少题，点下去才报「没有符合条件的试题」。
-- 「全部」有 500 上限但没有提示。
-
-**改动**
-- `Practice.vue`：持久化 `selectedTypes`、`count`；增加「上次配置」一键开始。
-- `Review.vue`：持久化题量；显示「逾期 / 今日 / 学习中」拆分。
-- `Exam.vue`：持久化题型、题量。
-- 开始前调用 `stats(bankId)` 显示可用题量（按题型），无题时禁用开始按钮并给 CTA。
-- 明确提示单轮上限：`本轮最多 500 题，超出请分多轮`。
-
-**验收**
-- 关闭应用再打开，刷题题型/题量、复习题量保持上次选择。
-- 开始按钮旁显示可用题量；0 题时不可开始并有「去录题/导入」入口。
-- 用户不会在点击后才发现范围为空。
-
-**依赖 / 备注**
-- 用量统计用 `review_stats` 即可；注意材料题母题/子题口径（见 FE-P0-12）。
-
----
-
-### [x] FE-P0-06 练习导航 + 复习间隔预览 / 撤销
-
-> ✅ 已完成。落地：Practice 加「上一题 / 标记 / 跳过」与「已答 N / 剩余 M」，跳过题在本轮末尾回卷补做；Review 四键显示下次间隔（`src/utils/reviewPreview.js`，只计算不写库），评分后 5 秒可撤销，卡片顶部显示「已复习 N / 剩 M」。后端新增 `review_revert`（删流水 + 写回评分前卡片快照，不改 schema）。守卫：`tests/unit/review-preview.test.js` + `practice.rs` 撤销三例。
-
-**问题**
-- 练习模式没有上一题、跳过、标记；只有背题模式有上一题。
-- 复习四键直接写库并 `next()`，误触无法撤销。
-- 四键不显示「下次间隔」，用户无法判断「良好/简单」的实际差异。
-- 本轮没有剩余计数/预计时间。
-
-**改动**
-- `Practice.vue`：
-  - 加「上一题 / 跳过 / 标记本题」；跳过的题在本轮末尾再出现（可配置）。
-  - 顶部显示「已答 N / 剩余 M」。
-  - 可选：加答题卡（与 FE-P0-07 共用组件）。
-- `Review.vue`：
-  - 用 `utils/fsrs.js` 的 `answer(card, rating, settings)` 对四个 rating 预计算 `card.due`，按钮显示相对间隔（如 `10m / 1d / 3d / 7d`）。
-  - 记录上一张卡快照；评分后 toast「已记为忘记 · 撤销」5 秒。
-  - 撤销需要后端支持：新增 `review_revert`（恢复 `review_state` + 删除/补偿最后一条记录），或前端用上一张卡重新写入并明确审计语义。
-  - 顶部显示「已复习 N / 本次剩余 M」。
-
-**验收**
-- 练习中可回看/修改上一题答案，跳过题可在本轮补做。
-- 复习四键显示与设置参数一致的下次间隔。
-- 误点「忘记」后 5 秒内可撤销，卡片状态与记录一致。
-
-**依赖 / 备注**
-- 间隔预览只计算不写库，禁止为了预览先落记录。
-- 撤销涉及同步时，需要明确「补偿记录」是否参与 LWW。
-
----
-
-### [x] FE-P0-07 模考答题卡 + 历史回看
-
-> ✅ 已完成。落地：`src/components/exam/ExamSheet.vue`（三态答题卡，材料题按母题分组）+ `src/utils/examSheet.js`（分组/计数/标记重映射纯逻辑）+ `src/components/exam/ExamHistory.vue`（历史回看）+ `src/components/exam/ExamTrend.vue`（纯 SVG 趋势图，不引图表库）+ `src/utils/examTrend.js`；后端新增 `exam_detail(exam_id)`（复用 detail_json，LEFT JOIN 容忍删题，不改 schema）。回看覆盖四类题的「作答 + 正确答案 + 解析」：选择/判断映射字母、填空逐空给正确答案、简答按 `answer.reference` 展示参考答案、材料题按 `detail.child_id` 切到子题并标「第 N 问」。**趋势的「按题库筛选」未做**：`exam_sessions` 无 bank 参数，需改后端签名才能支持，与本轮「后端仅两条命令」的约束冲突，故降级为「最近 N 场全库趋势」并在文档显式标注。守卫：`tests/unit/exam-sheet.test.js`、`tests/unit/exam-trend.test.js` + `practice.rs` exam_detail 两例。
-
-**问题**
-- 只有上一题/下一题，没有答题卡、标记、跳题；交卷前无法总览未答分布。
-- 「最近模考」只显示分数/用时/得分率，不能展开回看试卷与逐题作答。
-- 没有成绩趋势，模考数据价值低。
-
-**改动**
-- `Exam.vue`：
-  - 加答题卡抽屉/侧栏：已答/未答/标记三种状态；点击跳题；材料题按母题分组显示子题状态。
-  - 加「标记待定」；交卷前检查未答/标记数量。
-  - 可选：加暂停（计时暂停）与「离开自动保存」提示。
-- 历史回看：
-  - `exam_sessions` 目前只返回场次摘要；新增 `exam_detail(exam_id)` 或在摘要里按需返回逐题记录。
-  - 成绩单支持展开每道题的作答、正确答案、解析。
-- 趋势：最近 N 次模考的得分率折线，按题库筛选。
-
-**验收**
-- 20 题模考中可通过答题卡直接跳到第 15 题；未答/标记一眼可见。
-- 历史场次可展开回看，不依赖当前内存中的 `sheet`。
-- 模考成绩趋势可查看。
-
-**依赖 / 备注**
-- 优先复用 `QuestionPreview` / 统一答题渲染，避免再写一套。
-- 材料题的答题卡粒度需要先定：按母题分组，子题作为小组件。
-
----
-
-### [x] FE-P0-08 全局搜索升级为命令面板
-
-**问题**
-- 结果固定 8 条，没有「查看全部结果」、关键词高亮、最近搜索、键盘上下选择。
-- 点击页面其他位置不会关闭下拉，只监听 Esc / 路由变化。
-- 没有 Ctrl+K，没有 `?` 快捷键帮助。
-- 搜索请求未传 `summary`，取了完整题目字段。
-
-**改动**
-- 新增 `src/components/search/SearchPalette.vue` + `src/stores/search.js`。
-- 入口：Ctrl/Cmd+K、顶栏搜索框、`/`（可选）。
-- 分组结果：题目 / 题库 / 页面 / 设置；设置结果复用 `registry.js` 的 `matchItem`。
-- 题目结果先取 `summary: true`，展开时再 `get(id)`；高亮关键词；支持 ↑/↓/Enter。
-- 「查看全部」跳 `/search?q=`（新增轻量结果页，或扩展 List 支持无 bank 的跨库模式）。
-- 点击外部关闭；记录最近 5 条搜索。
-- 新增 `ShortcutsDialog.vue`，`?` 打开，列出练习/复习/模考的键位。
-
-**验收**
-- Ctrl+K 可在任意页面唤起；输入后键盘可选中并跳转。
-- 点击页面空白处关闭；Esc 逐级关闭（先清关键词，再关面板）。
-- 搜索结果只加载必要字段；「查看全部」可用。
-
-**依赖 / 备注**
-- 与 FE-ARCH-04 路由 meta 配合，页面结果可从路由表生成。
-- 设置项搜索复用现有 registry，避免第三套搜索逻辑。
-
-**已完成（落地说明）**
-
-- **文件**：`src/stores/search.js`（分组构造 / 键盘规则 / 高亮 / 最近搜索，全部纯函数）、
-  `src/components/search/SearchPalette.vue`（遮罩 + 居中卡片 + 入场动画）、
-  `src/components/ui/ShortcutsDialog.vue`（`?` 打开）、`src/App.vue`（Ctrl/Cmd+K 全局键位 + 顶栏入口，
-  **旧下拉搜索整段删除**）、`src/views/List.vue`（跨库模式）、
-  `src/components/settings/SettingsDialog.vue`（新增 `focusItem`，供搜索命中设置项时定位）。
-- **四组结果**：题目（`summary: true` 摘要）/ 题库（`bankStore.banks`）/ 页面（由 `router/index.js`
-  路由表 + `PAGE_ALIASES` 别称派生，跳过 `:param` 路由）/ 设置（复用 `registry.js` 的
-  `matchItem` + `isItemVisible`）。**没有第三套匹配逻辑**。
-- **取数**：首屏只发一次 `questions_list({query, limit: 8, summary: true})`；点开某条才
-  `questions_get(id)` 取全文并按 id 缓存，同一题不重复 IPC。
-- **键盘**：↑/↓ 环绕移动（`nextActive`）、Enter 打开、→ 展开/收起题面预览、Tab 留在面板内；
-  Esc 逐级（`escStep`：有关键词先清空，再按一次才关闭）；点击遮罩/空白关闭。
-- **最近搜索**：`localStorage` 键 `qbank.searchRecent.v1`，去重（大小写不敏感）+ 置顶 + 上限 5；
-  只在「用户选定」时记录（Enter / 展开 / 点击结果），不在每个字符上记，避免噪声。
-- **「查看全部」**：跳 `/library?q=<kw>`，**不新增路由**。`List.vue` 新增「无 bank + 有 q」分支：
-  请求不带 `bankId`（后端本就把它当可选参数，**零后端改动**），排序/类型/难度/状态/每页条数
-  全部沿用，页码走 `clampPage` 收敛；导出/新增入口在该分支隐藏（都需要题库归属）；
-  行尾标注来源题库。同路由内 `?bank=`/`?q=` 变化由 `watch(route.query)` 重查（否则换词不刷新）。
-- **快捷键帮助**：分「全局 / 搜索面板 / 刷题 / 复习 / 模考 / 录题」六组；输入框聚焦或弹层打开时
-  `?` 不劫持（练习页填空、录题编辑器要能打问号）。
-- **守卫测试**：
-  - `tests/unit/search-store.test.js`（34 项）：分组构造、首屏 `summary: true`、展开才 `get(id)`、
-    ↑/↓ 边界环绕、最近 5 条去重与上限、Esc 两级、高亮切分；另含 `PAGE_ALIASES` 的键必须存在于
-    `router/index.js` 的跨文件守卫。
-  - `tests/unit/shortcuts.test.js`（17 项）：快捷键表与 Practice/Review/Exam/QuestionRunner/Form/App
-    的实际 `keydown` 分支逐条互校 —— 改了绑定忘了改表，单测立刻失败。
-  - e2e 新增 `search` 模块（36 项，~3.9s）：Ctrl+K 唤起/再按关闭、`summary`+`limit:8` 下发、
-    四组结果、高亮、按需 `questions_get`、↑/↓ 与 Esc 两级、点空白关闭、最近搜索落盘、
-    Enter 跳转、跨库「查看全部」、`?` 弹层与输入框内不误触发。
-- **验证**：`pnpm build` ✓；`pnpm lint`（clippy `-D warnings`）0 警告 ✓；
-  `cargo test` 全绿 ✓；`node tools/smoke-test.mjs` ✓；`pnpm test:e2e:search` 36/36 ✓；
-  `pnpm test:e2e:list` 21/21 ✓；全量 `pnpm test:e2e` 164/164（9 模块，13.9s）✓；
-  `pnpm test:unit` 229 项全绿 ✓。
-- **备注**：`/` 唤起按文档标注为「可选」，本期**未做**（`/` 在多个输入框与练习页里是正常字符，
-  单独占用增益不足）；设置页的快捷键入口留给 FE-P1-10（与 `ShortcutsDialog.vue` 共用即可）。
-
----
-
-### [x] FE-P0-09 列表排序 / 筛选 / 页码收敛
-
-**问题**
-- `List.vue` 只支持关键词 + 题型；排序固定 `created_at DESC`；无难度/状态筛选、每页条数、跳页。
-- 删除最后一页的最后一题后页码不收敛，出现「第 3 / 2 页」。
-- 难度字段已入库但不展示、不筛选。
-- 全局搜索取全量字段，列表却只用摘要，接口使用不一致。
-
-**改动（部分需后端）**
-- `questions_list` 增加白名单参数：`sort`（`created_desc` / `updated_desc` / `difficulty_desc` / `score_desc`）、`difficulty`、`status`、`pageSize`。
-- 前端 `List.vue` 增加排序下拉、难度筛选、状态筛选、每页条数；筛选条件持久化（按页）。
-- `fetchList` 后若 `page > pageCount` 且 `total > 0`，自动回退到最后一页并重查。
-- 列表增加列：难度点阵、最近编辑、作答次数/正确率（可选，配合 FE-P1-03）。
-- 空表内加「新增试题 / 导入试题」CTA。
-
-**验收**
-- 按难度/状态筛选、按更新时间排序结果正确。
-- 删除最后一页最后一题后自动回到有效页，不出现空页。
-- 刷新/返回后筛选条件保留（遵循「记住各页筛选」设置）。
-
-> ✅ **已完成（`a9eb386`）**
-> - 后端 `questions_list` 新增 `sort` / `difficulty` / `status`；排序走 `SORT_WHITELIST` 映射固定 SQL 片段，**未知键返回 Err 而非静默回退**（静默回退会让前端拼错参数时以为排序生效），且排序解析放在 COUNT 之前。
-> - 新增 `src/stores/listFilter.js`：排序/难度/状态/每页条数白名单 + 归一化 + 按 `页:题库` 分键持久化。
-> - `List.vue` 四个下拉 + 每页条数（20/50/100）；`pageSize` 真正参与 `limit/offset`（旧实现写死 `PAGE_SIZE`，换条数会算错 offset）；`clampPage` 收敛页码；难度点阵列；空态分流（筛不到 / 库里真没题 两种文案与 CTA 不同）。
-> - 偏差说明：原文写的「遵循『记住各页筛选』设置」——**该设置并不存在**，按 FE-P0-05 既有做法用 localStorage 记住，不新增开关。
-> - 未做：列表「最近编辑 / 作答次数·正确率」两列（原文标为「可选，配合 FE-P1-03」），留给 FE-P1-03 一并处理。
-> - 守卫：`cargo` `order_by_clause_is_whitelisted` + `questions_list_filters_by_difficulty_status_and_sorts`；`tests/unit/list-filter.test.js` 27 例（含排序键与 `questions.rs` 白名单逐字校对、以及「回退即失败」的接线守卫）；`pnpm test:e2e` 新增 16 条断言。
-
-**依赖 / 备注**
-- SQL 动态排序必须白名单，禁止拼接用户输入。
-- 分页上限与 `summary` 模式保持兼容。
-
----
-
-### [x] FE-P0-10 批量操作接口 + 批量编辑
-
-**问题**
-- 批量删除/移动是前端逐条 `invoke`，N 次 IPC；部分失败无逐项结果，也无事务语义。
-- 没有批量改题库/难度/状态。
-- 批量导入已有事务，删改没有，体验不一致。
-
-**改动（需后端）**
-- 新增 `questions_batch_update(ids, patch)`：只允许 `bank_id` / `difficulty` / `status` 白名单字段；单事务。
-- 新增 `questions_batch_remove(ids)`：单事务归档/删除；返回 `{ ok, failed: [{id, reason}] }`。
-- 前端 `List.vue` / `Wrong.vue` 改用批量命令；显示进度/结果；失败项可重试。
-- 批量操作条增加「移动到题库 / 修改难度 / 修改状态」。
-
-**验收**
-- 50 题批量移动只触发 1 次 IPC；部分失败有逐项原因。
-- 批量修改难度/状态后列表即时更新。
-- 批量删除与 FE-P0-02 的恢复语义一致。
-
-> ✅ **已完成（`d23fc10`）**
-> - 后端新增 `questions_batch_update(ids, patch)` 与 `questions_batch_remove(ids, actor?)`，均单事务。
-> - patch 白名单仅 `bank_id` / `difficulty` / `status`；未知字段、类型不对、难度越界、空 ids、目标库不存在 → **整批拒结 Err**；逐项失败（题不存在）跳过并报告，不拖垮整批。用 `COALESCE` 保证未指定列保持原值；每题单独发放 `synced_at`（单调递增，否则同步漏行）。
-> - 前端 `List.vue` 批量移动/改难度/改状态/删除全部走单次 IPC；逐项失败汇总条（`id:原因`，超 5 条折叠）+「重试失败项」；整批拒结的后端错误原文 toast，不吞。
-> - **范围偏差**：验收里「批量删除与 FE-P0-02 的恢复语义一致」——FE-P0-02（回收站/撤销）尚未实现，本批沿用现有硬删 + `delete_log` 墓碑语义，**恢复入口待 FE-P0-02**，未偷偷扩范围。
-> - 未做：`Wrong.vue` 的批量「移除」走 `wrong_dismiss`（移出错题本，不删题），与批量删题语义不同，未纳入本批。
-> - 守卫：`cargo` 7 例，含两个用临时 `TRIGGER` 制造中途写入失败的**事务回滚**用例（把「吞错照常提交」注入后立即失败，证明测试真绑在事务上）；`pnpm test:e2e` 断言「10 题改难度只触发 1 次 IPC」、`__removes === 0`（未走逐删）、逐项失败与重试。
-
-**依赖 / 备注**
-- 后端返回结构一旦确定，同步更新 `PLAN.md §4` 与 `src/api/questions.js`。
-- 不要在前端循环里吞错；错误必须汇总给用户。
-
----
-
-### [x] FE-P0-11 错题本搜索 / 排序 / 统计
-
-**问题**
-- 错题本只有题库 + 题型筛选，没有关键词搜索、排序、分库统计。
-- 「重练全部」静默截断到 500，没有提示。
-- 材料题「重练」实际是整题重练，UI 未说明。
-- 没有「顽固错题（错 ≥ 3 次）」视图。
-
-**改动**
-- `wrong_list` 增加 `query`、`sort`（`wrong_count_desc` / `last_wrong_desc`）、`min_wrong_count` 参数。
-- 前端增加搜索框、排序下拉、统计条（总错题 / 各库 / 各题型）。
-- 「重练全部」显示实际数量；超过 500 提示「本轮先练 500，剩余可再开一轮」。
-- 材料题重练按钮文案改为「重练整题（含 N 问）」。
-- ~~增加「导出错题」：复用 JSON/自定义格式，至少包含题干、你的答案、正确答案、解析。~~ **本批不做**（经确认移出范围，见下方完成说明）。
-- 「顽固错题」筛选：`wrong_count >= 3`。
-
-**验收**
-- 可在错题本内按关键词找到题；排序生效。
-- 超过 500 时用户明确知道被截断。
-- 材料题重练范围与文案一致。
-
-> ✅ **已完成（`cdaaa6f`）**
-> - 后端 `wrong_list` 新增 `query` / `sort` / `min_wrong_count`（排序走 `WRONG_SORT_WHITELIST`，未知名 Err）；新增 `wrong_stats` 返回 `{total, stubborn, by_bank, by_type}`，口径与 `wrong_list` 同一份 CTE + WHERE。
-> - `Wrong.vue` 加搜索框、排序下拉、统计条（总数 / 顽固 / 按题型 / 按题库）、顽固错题开关（`wrong_count >= 3`）；「重练全部（N 题）」用真实数量，**超 500 显式提示**「本轮先练 500 题，还剩 M 题可再开一轮」；材料题按钮改为「重练整题（含 N 问）」；空态分流。
-> - **明确不做导出**：本项原含「导出错题」，经确认为本批范围外（导出涉及格式选择与字段口径，留待后续单独评估）。索引与本文标题已去掉「/导出」。
-> - 顺带修掉三个只在运行时暴露的缺陷：① `wrong_count >= ?7` 在 `?7` 为 NULL 时整条表达式为 NULL → 所有行被过滤（SQL 三值逻辑）；② CTE 不能嵌在子查询里；③ 前端 `sort` 初始化早于常量声明触发 TDZ，整页白屏而 build 与单测都不报。
-> - 守卫：`cargo` 4 例（含「列表与统计必须同口径」）；`tests/unit/wrong-book.test.js` 9 例（含上述 TDZ 的「回退即失败」守卫）；`pnpm test:e2e` 新增 20 条断言。
-
-**依赖 / 备注**
-- 错题列表的行数据已有 `last_wrong_detail`；若日后做导出，可复用 `viewTarget` 的解析逻辑（本批不做导出）。
 
 ---
 
@@ -515,94 +182,19 @@
 - **指标**：首次启动 3 分钟内完成第一题；首页到开始刷题 ≤ 2 次点击。
 - **文件**：`src/views/Home.vue`（备份面板暂不做：JSON 备份接口在 FE-P0-01 移除时一并删除，等数据保全方案定案）。
 
-### [ ] FE-P1-02 题库页快捷入口 / 搜索 / 排序 / 复制
+### [ ] FE-P1-03 状态元数据接入抽取池
 
-- 每个题库卡增加「刷题 / 复习 / 错题 / 统计」快捷按钮，带 `?bank=` 进入对应页面。
-- 题库多时支持搜索、按题数/更新时间排序、拖拽排序（顺序需持久化）。
-- 支持「复制题库」（题目副本 + 新 id）与「导出单个题库」。
-- 三列固定网格改为 `repeat(auto-fit, minmax(280px, 1fr))`，窄窗口不挤压。
-- **文件**：`src/views/Banks.vue`、`src/api/banks.js`。
-
-### [ ] FE-P1-03 难度 / 状态元数据产品化
-
-- `difficulty`：列表/预览显示点阵或标签；支持筛选；后续参与抽题权重。
-- `status`（表已有）：录题页增加「草稿 / 已发布 / 停用」；列表筛选与徽章；刷题/复习/模考默认只抽 `published`。
-- 题目列表增加「最近编辑」「作答次数 / 正确率」列（统计可后置）。
-- **文件**：`src/components/QuestionEditor.vue`、`src/views/List.vue`、`src-tauri/src/db/questions.rs`、`src-tauri/src/db/practice.rs`。
-- **备注**：无需改 schema，优先做；但状态过滤会影响练习池，需同步口径。
-
-### [ ] FE-P1-04 单题统计
-
-- `questions_list` 增加可选 `stats: true`：对当前页 50 个 id `LEFT JOIN practice_records` 聚合，返回 `attempt_count / correct_count / last_answered_at / avg_ms`。
-- 列表行展开或详情抽屉展示单题统计；错题本侧展示最近错误时间。
-- **验收**：1000 题库中翻页不出现明显卡顿；统计只查当前页，不全库扫描。
-
-### [ ] FE-P1-05 材料子题排序 / 改题型 / 复制题目
-
-- 子题支持上移/下移/拖拽排序。
-- 接上 `onChildTypeChange`（目前是死代码），子题可改题型并复用 `preserveTypeChange`。
-- 单题支持「另存为副本」；材料题支持「复制子题」。
-- **文件**：`src/components/QuestionEditor.vue`、`src/views/Form.vue`。
-
-### [x] FE-P1-06 刷题反馈与完成闭环
-
-- 作答后选项本身标绿/红，而不是只看下方答案列表。
-- 完成页增加「同配置再来一轮 / 去复习 / 去错题本」。
-- 加「弱项专练」：按题型正确率/错题数生成入口（可先跳转带参数的练习配置）。
-- 可选：单题计时、难度标识。
-- **文件**：`src/views/Practice.vue`。
-
-**已完成（2026-11-04）**
-
-口径全部抽到 `src/utils/practiceLoop.js`（纯函数），因为这几条写错了界面上看不出：
-- `optionMarkOf`：正确选项一律绿（**漏选的也绿**——否则用户只看到「回答错误」，看不出漏了哪个）、我选了但不对的标红、**未判分恒返回空**（作答中绝不泄露答案）。`QuestionRunner` 标色并带 `aria-label`；样式在 `uno.config.js` 成对定义且带 `!`，必须同时压过默认底色与选中态。
-- `elapsedMsOf` / `fmtClock`：单题计时用「累计 + 本次进入时刻」，跳走再跳回接着算（从 0 重开会让用户觉得「刚才白答了」）；判分后停表；不足 1s 显示 0。
-- `rankWeakTypes` / `weakPracticeEntry`：弱项排序「正确率最低 → 错题数多 → 样本大」，门槛 `count ≥ 3` 且 `rate < 0.6`；推荐前按可用题量过滤，避免推「点了就报没有题」的入口；入口带 `again=1`。
-- `doneLinks`：完成页「去复习 / 去错题本」带 `?bank=`，且 `Review.vue` / `Wrong.vue` 真的把它传给 `resolveBankFilter`（带了不认等于白带）。
-- **难度点阵**样式从 `List.vue` 的 scoped 提到 `App.vue` 全局——scoped 会让第二处静默失效（DOM 正常、没样式）。
-- **修掉三个真实缺陷**：① 完成页跳 `/practice?types=…` 命中同路由不重新挂载 → 深链参数失效，改由 `watch(route.query.*)` 重新应用；② 弱项专练不带 `again=1` 时 `phase` 仍是 `done`，用户点了没反应（devBak 原用例只验了 hash 带 `types`，没验界面变化）；③ e2e mock 的 `practice_pool` **完全忽略 `typeFilter`**，导致所有题型相关断言在假数据下恒真 —— 已改为如实过滤。
-- 守卫：`tests/unit/practice-loop.test.js` 36 条（判色口径 / 计时 / 弱项排序与入口 / 闭环链接 + 8 条接线守卫）；e2e `practice` 8 → 21（只留浏览器才能证伪的三类：模板接线、「作答中不泄露答案」、同路由 query 变更）。
-- 与 P0-12 的边界：未改抽题配额与材料题统计口径；「再来一轮」沿用现有 `practice_pool` 行为。
-
-### [x] FE-P1-07 模考 / 暂停续考 / 成绩趋势按题库
-
-**范围调整（2026-11-04）**：「100 分标准卷」实现并验证后判定**产品设计不成立**——考试满分可能是 120 / 135 / 150，把 100 写死只是「刚好 100 分的题库」才用得了。经审核移除产品外壳（组卷方式开关 / 题型配比面板 / 难度专属按钮），保留算法基建。
-
-**已完成**
-- **暂停 / 继续**：剩余时间由 `startedAt + 限时 - now` 反推，所以暂停不能只停刷新——一继续就会立刻跳掉暂停期间流逝的时间（暂停 5 分钟 = 白扣 5 分钟）。暂停记时刻、结算当前题用时；继续时把 `startedAt` 后移同样长，真正冻结限时。暂停态进草稿，重开窗口时按 `pausedAt` 补回。
-- **暂停必须遮罩**：否则「暂停计时」等于还能偷看题。遮罩 `position:absolute` 定位在作答卡片内（不挡顶栏，用户仍可切页面），带 `backdrop-filter` 模糊。
-- **成绩趋势按题库**：`exam_sessions` 加可选 `bank_id`（场次题库取 `detail.bank_id`，schema 零改动）。按库筛选时排除无归属历史场次——不能把「不知道属于哪个库」当成「属于所有库」。
-- **答题卡 / 标记**：main 基线已有（FE-P0-07a），本轮未改。
-- 守卫：e2e exam 20 → 31（暂停冻结 5 秒验证 + 反证「不暂停时时钟正常走」+ 趋势按库切换 + 场次倒序）。
-- **顺手修一个 mock 缺陷**：`exam_sessions` 原先硬编码 2 场、新增第 3 场时追加到末尾，页面看起来乱序。真实后端是 `ORDER BY started_at DESC`，mock 必须照做，否则「排序对不对」在 e2e 里永远验不出来。
-
-**保留的算法基建**（当前无 UI 调用，留给后续「考试模式」）
-- `src/utils/examPaper.js`：`subsetSum`（子集和 DP，分值 ×2 转整数做 0.5 分粒度）、`normalizeMix`（配比归一化，零头补最大项）、`planStandardPaper`（两轮组卷：按配额 + 用富余题型补缺口）、`paperScoreSummary`。
-- **满分是参数不是常量**：`DEFAULT_TOTAL = 100` 只是缺省值；`planStandardPaper(pool, { total: 120, mix })` 直接支持任意满分。
-- 35 条单测覆盖（含 120 / 135 / 150 分卷）+ 5 个变异验证（去掉不可达判定 / 分值不 ×2 / 零头不补 / 不做第二轮补齐 / 难度筛选失效，全部被抓）。
-
-### [x] FE-P1-08 错题本永不自动移出
-
-> **「错误 ≥ 3 次」视图**已随 FE-P0-11 完成（`Wrong.vue` 统计条上的「顽固错题」开关，后端 `wrong_stats.stubborn` 固定 `wrong_count >= 3`）。本轮做剩余部分：**连续答对阈值的「永不自动移出」选项**。
+> **现状**：列表已有难度点阵 / 难度筛选 / 状态筛选与徽章 / 「最近编辑」「作答正确率」两列。
 >
-> **不做**（按迁移台账）：导出 MD·JSON、行内跳转详情/编辑。
-
-**设计：阈值 0 = 永不自动移出**，不新增独立开关。
-`wrongLeaveAfterCorrect` 已进库同步（`SYNC_KEYS`），加开关要动同步契约；而「阈值取 0 即不设阈值」是同一语义的自然外推，也不影响老数据（旧值都是 1–10）。
-
-**后端**（`src-tauri/src/db/practice.rs`）
-- `wrong_list_impl` / `wrong_stats_impl`：`clamp(1, 10)` → `min(10)`（0 不再被吃掉）。
-- `WRONG_WHERE` 首行改 `(?3 = 0 OR streak.consec_correct < ?3)`。
-  **不能**写成 `consec_correct < 0`——那会恒假，表现为错题本突然全空。
-
-**前端**
-- `src/utils/wrongRules.js`（新）：`leaveAfterOf` / `isNeverLeave` / `leaveRuleText` / `leaveRuleHint`。`settings.js` 与 `Wrong.vue` 共用同一份，避免「设置页说 0 合法、store 悄悄钳回 1」。
-- 设置项 `min` 1→0，`invalidMsg` 明确「0 = 永不自动移出」。
-- 错题本标题旁常驻规则徽章（`永不自动移出` / `连对 N 次移出`）+ hover 提示写明「手动移除仍有效」与「在哪改」——否则用户无从判断「为什么这题一直留着」。
-
-**踩到的坑**：`Number(null) / Number('') / Number([])` 全等于 `0`。若直接 `Number(raw)`，一个**未配置的 `null` 会被静默解释成「永不自动移出」**——正是本特性最该避免的失败方向（题一直堆着，用户以为答对就移出了）。现在先判型，非法值回退缺省 1 而不是 0。
-
-**守卫**：单测 9 条（`tests/unit/wrong-rules.test.js`，含「0 与 1 语义必须真的不同」回归项）；cargo +2 断言（list 与 stats 在 0 下必须同口径）；e2e wrong 18→22（三态徽章文案 + 阈值 0 下 6 条错题一条没少 + 提示含「手动」）。三个变异（前端归一化钳回 1 / 后端 WHERE 去掉 0 分支 / 后端钳回 clamp）全部被抓。
+> **本条要做**：`status` 尚未进入抽取池 —— `practice_pool_impl` / `review_due_impl`
+> 与 `review_stats_impl` 的 `total / by_type / due_total / due_today / learning_due`
+> 都还没加 `status = 'published'`。后果是录题时选的「草稿 / 停用」只在列表生效，
+> 刷题与复习**仍会抽到草稿题**，界面「可用 N 题」也与实际抽得到的数量不一致。
+> 改动时必须**五处同步**（少一处就会出现「写着 20 题却只抽得出 12 题」）。
+> 历史指标（`practiced_*` / `correct_rate` / `records_7d`）**刻意不按状态过滤**：
+> 题目后来改成草稿，不该让已发生的作答凭空消失。
+>
+> 与 FE-P0-12（抽题配额口径）有交叠，两者一起做可省一次返工。
 
 ### [ ] FE-P1-09 复习预测 / 多选题库 / 按题型
 
@@ -611,43 +203,6 @@
 - 加「稍后/搁置」与「本轮暂停」。
 - **文件**：`src/views/Review.vue`、`src-tauri/src/db/practice.rs`。
 
-### [x] FE-P1-10 设置增强
-
-> **范围**（按迁移台账）：默认值单一来源 + 恢复默认 + 快捷键入口。
-> **不做**：导出 / 导入设置（原实现依赖 `banks_export_md` 落盘通道，
-> 该命令在「不迁移」范围内）、S3 同步详情面板。
-
-**默认值单一来源**
-- `stores/settings.js` 新增 `DEFAULTS`（深度 `Object.freeze`，含 `fsrs` 子对象与数组）。
-- reactive 初值与「恢复默认」共用这一份：两处各写一份字面量，改了初值却忘了重置逻辑，
-  用户点「恢复默认」会得到**既不是旧值也不是新默认的第三种状态**，且零报错。
-
-**恢复默认**
-- 逐字段写回（**不能** `Object.assign(settings, DEFAULTS)`：`fsrs` 是冻结对象，
-  整体赋值后 `settings.fsrs.x = …` 静默失败，表现是「改复习参数不生效」）。
-  数组必须 `[...]` 拷贝，否则往 store 的数组里 push 会改写 `DEFAULTS`。
-- 只重置**偏好**：题库 / 作答记录 / S3 密钥一律不动——那些不是「设置」，
-  清掉是数据丢失而不是恢复默认。文案里明确写出这一点，否则用户不敢点。
-- 二次确认走 `ui.confirmDialog`（铁律①：禁止原生 `confirm`）。
-- 顺带清掉各页记住的题库筛选（`rememberBankFilter` 回默认关闭时仍用旧筛选就不算「默认」）。
-
-**快捷键入口**：设置底栏 → `emit('open-shortcuts')` → `App.vue` 收起设置并打开同一个
-`ShortcutsDialog`（不新写一份快捷键清单，两处清单分叉是必然的漂移）。
-
-**踩到的三个真实缺陷**
-1. **循环依赖**：`settings.js` 直接 import `bank.js` 的 `clearBankFilters`，而
-   `bank.js` 已 import `settings.js`。表现是「恢复默认」抛
-   `clearBankFilters is not defined`——只在那一行路径上炸，build/lint/单测全绿。
-2. **冻结对象进 store**：见上（`Object.assign` 那条）。
-3. **e2e 读到镜像模块**：`import('/src/stores/settings.js')` 与组件用的
-   `@/stores/settings.js` 在 Vite 下是两个模块（HMR 后缀不同），各有 reactive 实例。
-   e2e 改为读界面（`aria-checked` / `select.value`），也顺带更符合分工。
-
-**守卫**：单测 11 条（`tests/unit/settings-defaults.test.js`，核心是键集合**双向**一致
-——只查单向会漏掉「store 有一项但 DEFAULTS 遗漏」）；新增 e2e 模块 `settings` 16 条
-（应用内确认、取消不改动、确认后逐项回默认、快捷键让位、1024 底栏不溢出）。
-5 个变异全部被抓。
-
 ### [ ] FE-P1-11 可访问性与弹层一致性
 
 - 所有 Teleport 弹层统一：Esc 关闭、点击遮罩关闭、Tab 焦点圈、打开后焦点落到首个可操作元素。
@@ -655,15 +210,6 @@
 - Toast 增加 `role="status"` / `aria-live="polite"`。
 - **文件**：`src/components/ui/*`、`ImportFileBox.vue`、`Banks.vue`。
 
-### [ ] FE-P1-12 前端渲染性能
-
-- `src/utils/render.js` 图片加 `loading="lazy"` / `decoding="async"`。
-- 长列表 `content-visibility: auto`；必要时虚拟滚动。
-- 全局搜索只取 summary（见 FE-P0-08）。
-- `QuestionPreview` 在大文档/多图场景下减少重复 asset 展开（可缓存解析结果）。
-- **验收**：500 题列表滚动无明显掉帧；含 20 张图的题目首次渲染不卡住输入。
-
----
 
 ## 4. P2 任务（差异化 / 规模化）
 
@@ -674,13 +220,13 @@
   - `tags` + `question_tags` 关系表（支持跨库筛选）。
   - 或 `meta_json` 单列（改动小，但查询/索引弱）。
 - UI：录题侧标签选择/新建、列表筛选、练习按标签组卷、统计按知识点。
-- **前置**：FE-P0-12 口径、FE-P1-03 难度/状态落地。
+- **前置**：FE-P0-12 口径落地。
 
 ### [ ] FE-P2-02 智能抽题
 
 - 按错题次数、FSRS stability、难度、最近作答时间加权；避免刚做过。
 - 提供策略选择：「随机 / 弱项优先 / 到期优先 / 只看未做」。
-- **依赖**：FE-P0-12 的 pool 参数化、FE-P1-04 单题统计。
+- **依赖**：FE-P0-12 的 pool 参数化（单题统计已完成，可直接用 `stats`）。
 
 ### [ ] FE-P2-03 打印 / PDF / Word / 试卷导出
 
@@ -733,84 +279,20 @@
 
 > 目标：让「新增题型 / 新增模式 / 修改判分」只改一处，降低后续所有功能的边际成本。
 
-### [x] FE-ARCH-01 题型常量收敛
-
-> ✅ 已完成（前端架构批次）。落地：`src/constants/questions.js`（label/shortLabel/fullLabel/icon/hasOptions/defaultScore/defaultDifficulty/order + TYPE_ALIASES）；App/Home/List/Wrong/QuestionEditor/三个答题页/parse* 全部改为引用；`grep TYPE_LABELS|TYPE_ORDER|SEARCH_TYPE_LABELS src` 只剩常量文件与 parse* 的别名 re-export；题型命名统一为「简答」（问答/问答题仍作导入别名接受）。守卫：`tests/unit/question-constants.test.js`。
-
-- 新增 `src/constants/questions.js`：`QUESTION_TYPES`（label / shortLabel / icon / hasOptions / defaultScore / defaultDifficulty / order）。
-- 替换 `App.vue`、`Home.vue`、`List.vue`、`Practice.vue`、`Review.vue`、`Wrong.vue`、`Exam.vue`、`QuestionEditor.vue`、`parseTemplate.js` 中的重复定义。
-- **验收**：`grep -rn "TYPE_LABELS\\|TYPE_ORDER\\|typeLabel" src` 只剩常量文件与必要的展示适配；题型命名统一（简答/问答二选一）。
-
-### [x] FE-ARCH-02 QuestionRunner 统一答题渲染
-
-> ✅ 已完成（前端架构批次）。落地：`src/components/question/QuestionRunner.vue`（材料面板/题干填空注入/选项/简答/答案片段 slot/A–F 与 M 键盘）；Practice/Review/Exam 改薄编排层，模式差异走 slot；`grep renderStemHtml|qb-fill-input src/views` = 0。
-
-- 新增 `src/components/question/QuestionRunner.vue`：
-  - props：`question` / `parent` / `mode`（practice/review/exam/recite）/ `answerState`；
-  - 统一题干渲染、填空输入注入、选项按钮、材料面板、键盘流；
-  - 通过 slot 暴露结果区/底部操作。
-- `Practice.vue` / `Review.vue` / `Exam.vue` 改为薄编排层。
-- **验收**：三个视图不再各自维护 `renderStemHtml` / `qb-fill-input` / 选项键盘逻辑；新增一个模式不需要复制答题 UI。
-
-### [x] FE-ARCH-03 题型注册表 + 统一判分
-
-> ✅ 已完成（前端架构批次）。落地：`src/utils/gradeQuestion.js`（createTypeRegistry + 六种内置注册项 + createDefault/validate/grade/renderAnswer），`utils/grading.js` 降为判分基元层；练习/复习「全对才算对」、模考「得分率 ≥ 0.6」口径与原实现逐条一致；新增题型只需加注册项（测试内用 ranking 验证，未落地真实新题型、未动 schema）。守卫：`tests/unit/grade-question.test.js`。
-
-- 新增 `src/utils/gradeQuestion.js` 与题型注册表：
-  ```js
-  {
-    key, label, hasOptions,
-    createDefault(), validate(q),
-    grade(q, answer, opts),      // -> { correct, ratio, detail }
-    renderAnswer(q, answer)
-  }
-  ```
-- 练习/复习/模考共用 `grade()`；模考的多选比例、填空部分分作为 `opts`。
-- **验收**：新增一个测试题型（如排序题）只需加注册项 + 编辑器，不改三个作答页；注册表守卫测试覆盖每种题型。
-
-### [x] FE-ARCH-04 路由 meta 驱动导航 / 标题
-
-> ✅ 已完成（前端架构批次）。落地：`router/index.js` 每条路由带 `meta.title`，六条主导航带 `meta.nav{label,icon,order}`；`App.vue` 的 navItems 改为从路由表派生、`document.title` 随路由同步。新增页面不再改 App.vue。
-
-- 路由增加 `meta: { nav: { label, icon, order }, title }`；`App.vue` 导航从路由表生成。
-- 同步设置 `document.title`；为后续面包屑/快捷键/实验开关留位置。
-- **验收**：新增页面只改 `router/index.js` + 页面组件，不再改 `App.vue` 的 `navItems`。
-
-### [x] FE-ARCH-05 统一会话 store
-
-> ✅ 已完成（前端架构批次）。落地：`src/stores/session.js` 承载练习/复习/模考的 save/load/scheduleSave/flush/clear/clampSnapshot（sessionStorage、版本号、24h TTL，只存题目 id 与作答，恢复时按 id 重拉）；`composables/sessionResume.js` 是全应用唯一的「继续上次/放弃」交互；题目被删时跳过缺失项并提示。已含 FE-P0-04 的功能面。守卫：`tests/unit/session.test.js`。
-
-- 新增 `src/stores/session.js`，承载练习/复习/模考的进行中状态与恢复逻辑；与 FE-P0-04 合并。
-- **验收**：三类会话使用同一套快照/恢复/清理 API；路由守卫只写一处。
-
-### [x] FE-ARCH-06 API 契约收敛
-
-> ✅ 已完成（前端架构批次）。落地：`api/bridge.js` 提供统一 `unwrap({success,data}) → data | throw`，全部 `src/api/*.js` 改用它；`List.vue` 的多信封兜底解析删除；`api/types.js` 补齐 Bank/Question/QuestionSummary/PracticeStats 等 JSDoc typedef。`grep "\.data" src/api` 为 0。守卫：`tests/unit/api-contract.test.js`。
-
-- `src/api/bridge.js` 提供统一 `unwrap`（`{success,data}` → data 或抛错）。
-- 删除 `List.vue` 中兼容多种信封形状的兜底解析（约 30 行）。
-- 给 question schema / 统计返回加 JSDoc typedef；优先让 `utils/` 与 `api/` 有类型，不强制全量 TS。
-- **验收**：接口返回形状变化只改一处；页面不再写 `res?.data ?? res` 的多种分支。
-
 ### [ ] FE-ARCH-07 前端组件 / E2E 测试
 
-> ⏳ 未开工（按决策推迟）：本批 01–06、08 已完成并留出接缝——`bridge.setProvider` 可注入 mock IPC 供 E2E 跑主链路，`gradeQuestion`/`session` 均为零依赖纯逻辑已有 node:test 覆盖。下一步按「node:test 纯逻辑单测 + Playwright E2E（经 setProvider 注入 mock IPC）」推进，不引入 vitest。
+> ⏳ 未开工。接缝已具备：`bridge.setProvider` 可注入 mock IPC，`gradeQuestion`/`session` 为零依赖纯逻辑。按「node:test 纯逻辑单测 + Playwright E2E（经 setProvider 注入 mock IPC）」推进，不引入 vitest。
 
 - 单测：题型注册表守卫、统一判分、会话恢复序列化。
 - E2E（Playwright + Tauri IPC mock 或开发版）：导入 → 刷题 → 错题 → 复习 → 模考 → 导出 主链路。
 - **验收**：主链路可在 CI 或本地一键运行；答题状态机回归有自动化覆盖。
 
-### [x] FE-ARCH-08 渲染性能
-
-> ✅ 已完成（前端架构批次）。落地：`utils/render.js` 生成的 `<img>` 带 `loading="lazy" decoding="async"`；材料题子题块加 `cv-auto`（`styles/perf.css` 的 content-visibility:auto）；`QuestionPreview` 去掉挂载时的双次 compute 并按渲染签名缓存。守卫：`tests/unit/render-perf.test.js`。
-
 ### [ ] FE-ARCH-09 E2E 迁 `@playwright/test`（方案 C）
 
 > ⏳ 待开工（技术选型已定，排在当前 e2e 分层改造之后）。
 
-**动机（为什么必须迁）**：当前 `tools/e2e-frontend.mjs` 是手写 runner + 手调等待。分层改造已把它从 93s/无模块降到**全量 ~16s（实测 14.5~17.7s，5 次）、单模块 1.3~3.3s**，并把 62 处 `waitForTimeout` 全部换成「等真实 DOM 谓词 + Vue 更新批次」；但**手调等待无法根治 flaky**——
+**动机（为什么必须迁）**：当前 `tools/e2e-frontend.mjs` 是手写 runner + 手调等待。**手调等待无法根治 flaky**——绿是「等待恰好配对」的产物，任何新用例少写一个谓词就会重新 flaky，而守门手段只有人肉 review。
 
-- 本轮实测的对照证据：跳路由前「只等 IPC 静默」成功 **6/10**（会 flaky），「等真实挂载标记」**10/10**；同时禁掉 marker + `networkidle` 兜底后连跑 5 次有 **3 次失败**。这说明当前绿是「等待恰好配对」的产物，任何新用例少写一个谓词就会重新 flaky，而守门手段只有人肉 review。
 - 框架原生能力可把这类风险从「靠人写对」变成「机制保证」：`expect(locator)` 自带自动重试与 timeout，不需要作者自己想清楚该等什么。
 
 **改用要点**：
@@ -828,12 +310,9 @@
 - 当前 e2e 在干净安装 / CI 上必然跑不起来（`loadPlaywright()` 找不到 `playwright` 包时会退到 npx 缓存，CI 无缓存则 exit 2）；
 - 迁移时必须显式加入 `devDependencies`，并同时处理浏览器版本（本地已装 chromium-1234，而 1.64.1 期望 1247，现靠 `findChromium()` 回退——迁后应改为 `npx playwright install chromium` 或固定版本）。
 
-**迁移步骤（建议）**：① `pnpm add -D @playwright/test` + 补 `playwright.config.js`（`webServer` 指向 vite，`projects` 按 7 个模块切分）；② 把现有 103 条断言按模块逐个搬进 `tests/e2e/*.spec.mjs`，`ok(name, cond)` 改为 `expect(...)`；③ 每搬一个模块就跑一次新旧对照，断言数与结论必须一致；④ 全绿后删掉旧的 `tools/e2e-frontend.mjs`，`package.json` 脚本改为 `playwright test`；⑤ 同步更新 `AGENTS.md`、本文件 §0.3、`PLAN.md §8` 三处的模块名与用法。
+**迁移步骤（建议）**：① `pnpm add -D @playwright/test` + 补 `playwright.config.js`（`webServer` 指向 vite，`projects` 按 11 个模块切分）；② 把现有 300 条断言按模块逐个搬进 `tests/e2e/*.spec.mjs`，`ok(name, cond)` 改为 `expect(...)`；③ 每搬一个模块就跑一次新旧对照，断言数与结论必须一致；④ 全绿后删掉旧的 `tools/e2e-frontend.mjs`，`package.json` 脚本改为 `playwright test`；⑤ 同步更新 `AGENTS.md`、本文件 §0.3、`PLAN.md §8` 三处的模块名与用法。
 
-**验收**：① 7 个模块可独立 `--project` 运行，且断言总数 ≥ 现有 103；② 全量耗时 ≤ 迁移前（~16s）；③ 连续 10 次全量 0 flaky；④ CI 干净安装可直接跑（不再依赖 npx 缓存）；⑤ 失败时产出 trace 可回放。
-
-- 图片懒加载/异步解码；长列表 `content-visibility`；搜索摘要。
-- **验收**：见 FE-P1-12。
+**验收**：① 各模块可独立 `--project` 运行，且断言总数 ≥ 现有 300；② 全量耗时 ≤ 迁移前（~26s）；③ 连续 10 次全量 0 flaky；④ CI 干净安装可直接跑（不再依赖 npx 缓存）；⑤ 失败时产出 trace 可回放。
 
 ---
 
@@ -841,11 +320,10 @@
 
 | 迭代 | 目标 | 任务 |
 |---|---|---|
-| **迭代 1** | 先止血：不再丢数据、不再丢进度、搜索可用 | FE-P0-03、FE-P0-05、FE-P0-08、FE-ARCH-01、FE-ARCH-06 |
-| **迭代 2** | 核心作答体验 | FE-P0-04、FE-P0-06、FE-P0-09、FE-P0-10、FE-ARCH-04、FE-ARCH-08 |
-| **迭代 3** | 模考与错题闭环 | FE-P0-07、FE-P0-11、FE-P0-02（设计+后端）、FE-ARCH-02 |
-| **迭代 4** | 口径与规模化 | FE-P0-12、FE-P1-01~03、FE-ARCH-03、FE-ARCH-05 |
-| **后续** | 丰富性与差异化 | P1 剩余、P2 按季度评估 |
+| **下一迭代** | 口径统一（阻塞面最大） | FE-P0-12、FE-P1-03（两者一起做可省一次返工） |
+| **再下一迭代** | 核心闭环 | FE-P0-02（设计+后端）、FE-P1-09 |
+| **随后** | 体验与质量 | FE-P1-01、FE-P1-11、FE-ARCH-07 |
+| **后续** | 丰富性与差异化 | P2 按季度评估、FE-ARCH-09 |
 
 > 建议：**FE-P0-02（回收站）先出设计稿，不要直接写代码**；它牵涉同步复活语义，返工成本最高。
 
@@ -857,28 +335,28 @@
 
 - [ ] 首页到开始刷题 ≤ 2 次点击。
 - [ ] 首次启动 3 分钟内完成第一道题。
-- [ ] 练习/复习离开后恢复成功率 ≥ 99%（本地会话）。
-- [ ] 复习误触撤销 ≤ 5 秒可达，撤销后状态正确。
-- [ ] 模考答题卡跳题 ≤ 2 次操作。
+- [x] 练习/复习离开后恢复成功率 ≥ 99%（本地会话）。
+- [x] 复习误触撤销 ≤ 5 秒可达，撤销后状态正确。
+- [x] 模考答题卡跳题 ≤ 2 次操作。
 
 ### 7.2 数据安全
 
 - [ ] 误删 1 分钟内可恢复（回收站/撤销）。
 - [ ] 备份新鲜度 ≤ 7 天（有提示）。（备份/恢复方案待重新设计，口径随设计定）
-- [ ] 批量删除/移动有逐项结果，无静默失败。
+- [x] 批量删除/移动有逐项结果，无静默失败。
 
 ### 7.3 效率与规模
 
 - [ ] 1000 题库中列表翻页 < 300ms（本地）。
-- [ ] 50 题批量操作 1 次 IPC。
-- [ ] 全局搜索在 300ms 内返回摘要结果。
+- [x] 50 题批量操作 1 次 IPC。
+- [x] 全局搜索在 300ms 内返回摘要结果。
 - [ ] 多题型抽题实际数量 = 请求数量（或明确提示不足）。
 
 ### 7.4 质量
 
-- [ ] 主链路 E2E 通过。
-- [ ] 题型注册表覆盖全部类型。
-- [ ] 无原生弹窗、无契约漂移（PLAN / Rust / api 三处一致）。
+- [x] 主链路 E2E 通过。
+- [x] 题型注册表覆盖全部类型。
+- [x] 无原生弹窗、无契约漂移（PLAN / Rust / api 三处一致）。
 
 ---
 
@@ -888,77 +366,28 @@
 
 - README 两处均已写 45 个（本轮移除 3 条 JSON 备份命令后：48 → 45），与 `generate_handler` 当前实际一致；本条仅剩「统计口径说明」待补，勿再抄旧数字（36 / 43 / 44）。
 
-### [x] FE-DOC-03 题型命名统一
-
-> ✅ 已随 FE-ARCH-01 完成：`src/constants/questions.js` 成为题型文案唯一权威，统一为「简答」（`label: '简答'` / `fullLabel: '简答题'`）；「问答 / 问答题」仅作为导入别名保留在 `TYPE_ALIASES`。守卫：`tests/unit/question-constants.test.js`。
-
-- 原问题：全局搜索「简答」、列表/错题本「问答」、刷题「简答题」混用。
-
 ### [ ] FE-DOC-04 首页卡片可点击描述
 
 - README 说统计卡片可点击直达，实际「总正确率」卡片不可点；要么补入口，要么改文档。
 
 ### [ ] FE-DOC-05 未使用字段说明
 
-- `status` / `difficulty` 已入库但产品层未使用；在 PLAN 或 README 标注当前用途与后续计划，避免误认为已支持。
+- `difficulty` 已用于列表点阵/筛选，`status` 已用于列表徽章/筛选，但**都未进抽取池**（见 FE-P1-03）；在 PLAN 或 README 标注这一边界，避免读者误认为「标了草稿就不会被抽到」。
 
 ---
 
-## 9. 现状证据附录
-
-便于后续开发者复核，不必重新读全部代码：
-
-| 结论 | 证据 |
-|---|---|
-| 三个答题页重复实现 | `src/views/Practice.vue` 897 行、`Review.vue` 688 行、`Exam.vue` 962 行；各自实现 `renderStemHtml` / 选项 / 填空 / 材料 / 键盘 |
-| 题型定义重复 | `grep -rn "TYPE_LABELS\\|TYPE_ORDER\\|typeLabel" src` 命中 60+ 处，分布在 7 个视图与编辑器 |
-| 表单无脏检查 | `src/views/Form.vue` 保存后直接 `router.push(backTarget())`；无 `onBeforeRouteLeave` / `beforeunload` |
-| 练习/复习无会话恢复 | `Practice.vue` / `Review.vue` 的 `pool/curIdx/round` 均为组件内 `ref`；仅模考有 `sessionStorage` 草稿 |
-| 复习不可撤销 | `Review.vue` 的 `reviewGrade()` 直接 `recordAnswer(...).then(next)`，无回退 |
-| 模考无答题卡 | `Exam.vue` 只有上一题/下一题与交卷；无答题卡网格/标记/跳题 |
-| 搜索不关闭 | `App.vue` 搜索只监听 Esc (`keyup.esc`) 与路由变化，无 document click 监听 |
-| 列表无排序/难度筛选 | `List.vue` 只有 `query` + `type`；后端 `ORDER BY created_at DESC` |
-| 页码不收敛 | `List.vue` / `Wrong.vue` 删除后直接 `fetchList()`，未 clamp `page` |
-| 批量逐条 IPC | `List.vue` 的 `moveQuestions` / `onBatchDelete` 循环 `await update/remove`；后端无批量命令 |
-| 删除不可恢复 | `src-tauri/src/db/questions.rs` `questions_remove` 写墓碑后 `DELETE`；`delete_log` 无题面快照 |
-| 抽题配额 | `Practice.vue` / `Exam.vue` 多题型时 `per = Math.ceil(limit / types.length)`，随后 `dedupeShuffle`，不足不补 |
-| 材料题口径 | `review_state` 按母题 id；`Review.vue` `reviewedCount++` 按子题；`buildItems` 拆子题 |
-| 状态/难度未产品化 | `schema.rs` 有 `status`/`difficulty`；前端无 status 入口，difficulty 不展示/不筛选/不参与抽题 |
-| 子题不可排序/改类型 | `QuestionEditor.vue` 子题只有追加/删除；`onChildTypeChange` 定义但模板未使用 |
-| 测试覆盖不足 | `tests/unit` 仅 5 个工具级测试；无组件/E2E |
-| 文档漂移 | README「36 个命令」vs `generate_handler` 45 个；README 仍把「JSON 导出/导入」写成已有功能（接口已移除） |
-
----
-
-## 10. 待拍板决策（Open）
+## 9. 待拍板决策（Open）
 
 | # | 决策 | 选项 | 影响 | 关联任务 |
 |---|---|---|---|---|
 | D1 | 材料题的复习粒度 | A. 母题一张卡；B. 子题各一张卡；C. 整题一次评分 | FSRS 统计口径、待复习数、同步结构 | FE-P0-12 |
 | D2 | 删除恢复的语义 | A. 只恢复题目内容；B. 连作答流水/复习状态一起恢复 | 归档表设计、FK 级联、同步复活 | FE-P0-02 |
 | D3 | 内容组织体系 | A. 标签；B. 文件夹/章节；C. 两者 | Schema / 同步 / 筛选 UI 成本 | FE-P2-01、FE-P2-09 |
-| D4 | 模考「答对」口径 | A. 全对；B. 得分率 ≥ 60%；C. 分项展示不合并 | 成绩单、趋势、与练习正确率的可比性 | FE-P0-12、FE-P1-07 |
+| D4 | 模考「答对」口径 | A. 全对；B. 得分率 ≥ 60%；C. 分项展示不合并 | 成绩单、趋势、与练习正确率的可比性 | FE-P0-12 |
 | D5 | 单轮题量上限 | A. 保持 500；B. 可配置；C. 不设上限但分页 | 抽题 SQL、前端进度、性能 | FE-P0-12 |
 | D6 | 桌面到期提醒默认值 | A. 默认关闭；B. 首次引导开启；C. 默认开启 | 打扰度、通知权限、留存 | FE-P2-05 |
-| D8 | 是否全量迁移 TypeScript | A. 保持 JS + JSDoc；B. 先迁 utils/api；C. 全量 | 开发成本、重构收益 | FE-ARCH-06 |
+| D8 | 是否全量迁移 TypeScript | A. 保持 JS + JSDoc；B. 先迁 utils/api；C. 全量 | 开发成本、重构收益 | 独立评估（与 P2 并行） |
 
-> 建议在迭代 1 结束前拍板 D1、D2；否则会阻塞 P0-12 与 P0-02。
+> 建议先拍板 D1（材料题复习粒度）与 D2（删除恢复语义）；它们分别阻塞 FE-P0-12 与 FE-P0-02，而这两项在排期最前。
 
 ---
-
-## 11. 变更记录
-
-| 版本 | 日期 | 变更 |
-|---|---|---|
-| v1 | 2026-10-29 | 初版：基于前端功能设计评审拆解 P0/P1/P2 与架构任务 |
-| v2 | 2026-10-30 | FE-ARCH-01~06、08 完成并勾选（题型常量/QuestionRunner/注册表统一判分/路由 meta/统一会话 store/API 契约收敛/渲染性能）；FE-ARCH-07 按决策推迟 |
-| v3 | 2026-10-30 | FE-P0-03~07 完成并勾选（录题防丢失/会话离开提示/配置记忆与可用题量/练习导航与复习间隔撤销/模考答题卡与历史回看）；后端新增 `review_revert` 与 `exam_detail`，未改 schema |
-| v3.1 | 2026-10-30 | 审计修复：①`Form.vue` 保存后清草稿传了 `computed` 对象而非 `.value`（导致保存后重进仍弹恢复框，恢复旧草稿会覆盖刚保存的内容）；②`exam_detail` 漏选 `options_json`（回看把作答显示成 `o1/o2` 而非 `A/B`）；③补 Review 的可用题量禁用与「已复习 N / 剩 M」。新增 `tests/unit/form-wiring.test.js` 与 `tools/e2e-frontend.mjs`（`pnpm test:e2e`，33 项断言），避免同类接线错误再次穿过门禁 |
-| v3.2 | 2026-10-30 | 审计回归修复：①Review「0 题禁用开始」误用 `due_total`（`due_at<=now`）而 `review_due` 截止是今天结束，学习步卡片夹在中间导致「今日到期 3 题」却禁用按钮；改用 `due_today` 同口径。②`startDraftTimer` 无条件每 30s 写草稿，未编辑过的表单重进会误报「恢复未保存的录入内容？」；加 `shouldSave` 门槛（仅脏时写）。E2E 新增 2 项分歧场景断言，单测增至 118 |
-| v3.3 | 2026-10-30 | 补齐同类口径：`refreshDue` 失败时 `dueToday` 仍为初始 0，导致「未知」被当成「0 题」而禁用开始复习；加 `statsFailed` 标记，拉不到统计时不禁用（让 start 报真实错误）。E2E 增至 36 项 |
-| v3.4 | 2026-10-30 | 审计驳回修复：①材料题回看完全不成立——流水挂母题 id 但题面/选项/答案在子题，`exam_detail` 未返回 `children_json`，导致每个子题都显示母题题面 + 内部选项 id；已补 `children` 并按 `detail.child_id` 切到子题，行标题标「第 N 问」。②最后一题评分后 `phase=done`，撤销控件只在 `card` 阶段，toast 承诺「可撤销」却无入口；已在结束页补撤销条，撤销时切回 `card`。cargo 144、E2E 45 |
-| v3.5 | 2026-10-30 | 审计驳回修复：简答题历史回看缺「正确答案」——`answerTextOf` 只处理 ids/blanks，`answer.reference` 未渲染，而 `normalize.js` 会把只有 analysis 的简答迁移为 reference 并清空 analysis，导致这类题回看只剩自己的答案；已补参考答案块（与当场成绩单 `refOf`、`Wrong.vue` 同语言）。顺带修掉填空回看正确答案重复输出两次。FE-P0-07 趋势「按题库筛选」显式降级为全库（需改 `exam_sessions` 签名，与后端边界冲突）。E2E 48 |
-| v4 | 2026-10-30 | FE-P0-09/10/11 完成并勾选（列表排序筛选与页码收敛 / 批量操作单事务命令 / 错题本搜索排序统计）。后端：`questions_list` 与 `wrong_list` 各加参数、新增 `questions_batch_update`、`questions_batch_remove`、`wrong_stats` 共 3 条命令，**schema 零改动**。范围调整：FE-P0-11 的「导出错题」移出（落到 FE-P1-08），FE-P0-10 的「与 FE-P0-02 恢复语义一致」标注为待 FE-P0-02。修掉 3 个只在运行时暴露的缺陷（SQL 三值逻辑致 NULL 过滤全表、CTE 不可嵌套、前端 TDZ 白屏）。cargo 157、单测 154、E2E 98 |
-| v5 | 2026-10-30 | **E2E 分层改造（不新增功能、断言零丢失 103→103）**。背景：原 e2e 为 769 行单文件无模块边界，改一行页面也要跑完 6 个页面共 93s，且需手动先起 dev server。①**规定层修正**（消除「改一行跑全量」的制度成因）：`AGENTS.md` 验证门禁原不含 e2e 且与本文件 §0.3 自相矛盾，现补入并按「单模块为默认 / 全量为提交前」分级；三处文档（`AGENTS.md` / 本文件 §0.3 / `PLAN.md §8`）统一 7 个模块名。②**脚本模块化**：拆为 `list`/`batch`/`form`/`practice`/`review`/`exam`/`wrong`，每模块独立 browser context、支持位置参数过滤、`--changed` 按 git 改动选模块。③**dev server 自动起/复用**。④顺带修掉一个既有真 bug：`vite.config.js` 的 `watch.ignored` 未排除 `dist-portable/`，其中被 WebView 独占的 Cookies 文件会触发 `EBUSY` 直接把 dev server 打挂（这正是「手动起 server 经常白跑」的根因）。⑤**等待语义重写**：62 处 `waitForTimeout`（共 62s）全部改为「等真实 DOM 谓词 + Vue 更新批次」，并实测对照证明「等 IPC 静默」为 6/10 成功（flaky 源）、「等真实挂载标记」为 10/10。**实测**：单模块 1.3~3.3s、全量 14.5~17.7s（93s → ~16s，-83%），连跑 5 次 0 flaky，断言 103/103 逐条对齐无丢失。⑥新增 FE-ARCH-09：E2E 迁 `@playwright/test`（方案 C，手调等待无法根治 flaky；并记下 `@playwright/test` 已在 `node_modules` 却未声明于 `package.json` 这一会导致 CI 必坏的隐患） |
-| v6 | 2026-10-30 | **E2E 正确性与等待机制再修（P0~P3，不新增功能）**。v5 的等待方案有两处按官方标准不该留的东西，本轮按 Playwright 一手文档纠正。①**P0 修静默吞失败**：`waitForSelector(marker).catch(() => {})` 会在标记失效时静默继续，导致后续断言在**错误页面**上求值（误导性失败甚至假绿）。改为 `requireRoute()` 超时**必抛**，异常带实际 `title/inflight/hash/页面文本`。实测：注入失效标记后立即报「期望 #/wrong 页面就绪，实际页面：…」，而非等到后面报「按钮找不到」。②**P1 `page.clock` 消除时间等待**：实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 **3ms**（对照真实等待 2029ms）。仅 `form`/`review` 启用（`exam`/`practice` 有 12 处 `Date.now()` 算用时/限时，风险高，暂不开）。顺带把 review 撤销从「碰巧在 5000ms 窗口内」升级为**精确边界测试**（4.9s 仍可撤销 / 5.2s 自动消失，+4 条断言）。③**P2 就绪信号换源**：从「界面文案」（`/新建题库/` 等 19 处，产品改文案即废）换成「`document.title`(= `meta.title` + APP_NAME) 且 `__inflight === 0`」。前者是**路由元数据**、后者靠 `bridge.js` 唯一 IPC 漏斗，二者都与文案/布局解耦。实测 6 个路由 ×8 次全 8/8、平均 6~77ms。同时**删除 `networkidle`**——Playwright API 文档明确标注 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead." ④**前置契约守卫**：新增 `tests/unit/e2e-ready-signal.test.js`（7 项），e2e 启动前自动执行（~0.3s，失败 exit 3），防 `ROUTE_TITLE ↔ meta.title` 漂移、title 格式变更、inflight 漏 try/finally、networkidle 回流、超时被吞；实测改 `meta.title` 后 **0.29s 被拦下**而非白跑 30s 超时。⑤**P3 分层**：新增 `tests/unit/request-params-wiring.test.js`（6 项静态守卫，校验 `fetchList` 真的把 query/type/difficulty/status/sort/limit/offset 拼进请求，含空值守卫），注入「忘记下发 difficulty」后两条守卫同时报警。**注意**：实测从 e2e 删除 5 条纯参数断言**并未提速**（list 1493→1539ms、wrong 649→699ms，属噪声），说明耗时由「操作 + 等待」驱动而非断言条数，故**保留 E2E 覆盖**、单测守卫作补充而非替代。**实测**：全量 16.9s → **9.8~11.0s**，断言 108 → **112**，连跑 5 次 0 flaky；单测 154 → **167**；build/smoke/clippy 全绿 |
-| v12 | 2026-11-04 | **FE-P1-06 完成**（刷题反馈与完成闭环）。口径全抽到 `utils/practiceLoop.js`：`optionMarkOf`（正确项一律绿含漏选、我选错的标红、**未判分恒空**）、`elapsedMsOf`（累计+本次段，跳走再回来接着算，判分停表）、`rankWeakTypes`（正确率→错题数→样本量，门槛 ≥3 次且 <60%，并按可用题量过滤掉「推了也没题」的题型）、`doneLinks`（带 `?bank=` 且目标页真的认它）。**修掉三个真实缺陷**：①完成页跳 `/practice?types=…` 命中同路由不重新挂载，深链参数失效（devBak 用 `watch(route.query.*)` 修，本仓同步）；②弱项专练不带 `again=1` 时 `phase` 仍是 `done`，用户点了没反应（devBak 用例只验 hash 带 types，未验界面）；③**e2e mock 的 `practice_pool` 完全忽略 `typeFilter`**，使所有题型相关断言在假数据下恒真，已改为如实过滤。**e2e 精简原则**：只留浏览器才能证伪的三类（模板接线 / 作答中不泄露答案 / 同路由 query 变更），弱项排序等纯函数口径不再在 e2e 抄第二遍。单测 +37（373），e2e practice 8→21，全量 286 条 / 23.6s |
