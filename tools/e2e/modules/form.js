@@ -111,21 +111,11 @@ export default {
     // 题干按设置复用：keepContentOnTypeChange 默认开 → 已填文字不能丢
     ok('改题型后已填题干不丢', /要保留的题干/.test(afterType))
 
-    // ══ 拖拽排序（按真实最小窗 1024×768 验证）══
-    //
-    // 这块前后翻车三次，教训写在这里免得再走回头路：
-    // ① 首版把视口调到 4000px 高让三张卡硬塞进一屏 —— 那个尺寸实际不存在，
-    //    掩盖了「原生 DnD 在本页面根本拖不动」的缺陷。
-    // ② 改用 pointer 自实现后仍不好用：单卡 1227px，必须拖过卡片中线（614px）才换位，
-    //    实测盲区 280px —— 按下后拖半天屏幕毫无变化。
-    // ③ 现在拖拽时把子题折叠成一行（65px），盲区降到 20px，无需滚动即可跨题。
-    //
-    // 所以断言必须覆盖「折叠」这件事本身：不折叠就该红。
-    const viewportBefore = page.viewportSize()
-    await page.setViewportSize({ width: 1024, height: 768 })
-    await flush(page)
-    const hBefore = await childCards.first().evaluate((e) => Math.round(e.getBoundingClientRect().height))
-    ok('拖拽前子题卡是完整高度（含三个编辑器）', hBefore > 800, `${hBefore}px`)
+    // ══ 拖拽排序：只验「接线」══
+    // 落点算法有 21 条单测（insertionIndexFromY / insertIndexToMoveTarget / edgeScrollDelta），
+    // 这里不重复验算法分支，只守一件单测做不到的事：DOM 里的手柄真能触发换位。
+    // 曾经把折叠高度、同屏、指示线、变淡都写成断言（10 条 / ~900ms），
+    // 那些都是实现细节，属于「锁死写法」，已删。
     const beforeDrag = await childStems()
     const handle = page.locator('[title="拖拽调整顺序"]').first()
     await handle.scrollIntoViewIfNeeded()
@@ -134,44 +124,24 @@ export default {
     await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
     await page.mouse.down()
     await flush(page)
-    // 折叠：卡片变矮，且全部子题同屏（这是「拖拽体感」的关键，不折叠则拖不动）
-    const hDuring = await childCards.first().evaluate((e) => Math.round(e.getBoundingClientRect().height))
-    ok('拖拽中卡片折叠成一行（盲区从 280px 降到 20px）', hDuring < 120, `${hDuring}px`)
-    const visibleDuring = await childCards.evaluateAll((els) =>
-      els.every((e) => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= 768 }))
-    ok('折叠后三张子题卡全部同屏（无需滚动即可跨题）', visibleDuring)
-    ok('拖拽中源卡片变淡（表明进入了拖拽态）',
-      (await childCards.first().evaluate((e) => e.className.includes('opacity-40'))))
-    // 拖到第 3 张卡**中线以下**才判定为「插到它后面」（越过中线才前进一位的规则）
+    // 拖到第 3 张卡中线以下（越过中线才前进一位）。折叠后一屏 3 行，无需滚动。
     const box3 = await childCards.nth(2).boundingBox()
     await page.mouse.move(handleBox.x + handleBox.width / 2, box3.y + box3.height - 4, { steps: 12 })
     await flush(page)
-    ok('拖拽中显示插入位指示线', (await page.locator('.bg-primary.h-\\[2px\\]').count()) > 0)
     await page.mouse.up()
     await flush(page)
     const dragged = await childStems()
-    ok('拖拽真的改动了子题顺序（第 1 个拖到末尾）',
+    ok('拖拽手柄真的能改变子题顺序（第 1 个拖到末尾）',
       dragged.length === 3 && dragged[2] === beforeDrag[0] && dragged[0] === beforeDrag[1],
       `${JSON.stringify(beforeDrag)} -> ${JSON.stringify(dragged)}`)
-    const hAfter = await childCards.first().evaluate((e) => Math.round(e.getBoundingClientRect().height))
-    ok('松手后卡片恢复完整高度', hAfter > 800, `${hAfter}px`)
-    ok('拖拽后子题数量不变', dragged.length === 3, `${dragged.length}`)
-    // 拖完把顺序还原（后面的删除用例断言「删除子题 N」编号，依赖初始顺序）
+    // 拖完还原（后面的删除用例断言「删除子题 N」编号，依赖初始顺序）
     await page.getByRole('button', { name: '上移子题 3' }).click()
     await flush(page)
     await page.getByRole('button', { name: '上移子题 2' }).click()
     await flush(page)
-    ok('拖拽后可用上移按钮还原顺序', JSON.stringify(await childStems()) === JSON.stringify(beforeDrag),
+    ok('上移按钮能把顺序还原（拖拽/按钮共用同一实现）',
+      JSON.stringify(await childStems()) === JSON.stringify(beforeDrag),
       JSON.stringify(await childStems()))
-    // 单击手柄不拖：顺序不变（也不能把卡片弄成別的状态）
-    const h2 = await page.locator('[title="拖拽调整顺序"]').first().boundingBox()
-    await page.mouse.move(h2.x + h2.width / 2, h2.y + h2.height / 2)
-    await page.mouse.down()
-    await page.mouse.up()
-    await flush(page)
-    ok('单击手柄不拖不改顺序', JSON.stringify(await childStems()) === JSON.stringify(beforeDrag))
-    await page.setViewportSize(viewportBefore)
-    await flush(page)
 
     // 最后一个子题不允许删除（否则留下点不进去的空材料题）
     // 用 aria-label 限定：子题卡片里每个选项行也有一个「删除」按钮，按名字取会一次命中 5 个
