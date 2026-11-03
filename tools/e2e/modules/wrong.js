@@ -62,6 +62,29 @@ export default {
     const matRetryText = (await matRetry.count()) ? await matRetry.innerText() : ''
     ok('材料题重练文案标注含 N 问', /重练整题（含 2 问）/.test(matRetryText), matRetryText || '(未找到材料题重练按钮)')
 
+    // ── FE-P1-08：移出规则必须常驻写明（否则「为什么这题一直留着」无从判断）──
+    const ruleBadge = page.locator('.card-head .badge').nth(1)
+    ok('移出规则徽章默认显示「连对 1 次移出」',
+      /连对 1 次移出/.test(await ruleBadge.innerText()), await ruleBadge.innerText())
+
+    // 阈值 0 = 永不自动移出：走真实加载路径（localStorage 写透缓存 → store 归一化 → 徽章）
+    // 这里不点设置弹层：SettingRow 的 0～10 校验由单测锁（tests/unit/wrong-rules.test.js），
+    // e2e 只证明「这个值真的能一路传到界面且语义正确」。
+    await page.evaluate(() => {
+      const K = 'qbank.settings.v1'
+      const cur = JSON.parse(localStorage.getItem(K) || '{}')
+      localStorage.setItem(K, JSON.stringify({ ...cur, wrongLeaveAfterCorrect: 0 }))
+    })
+    await page.reload()
+    await goto(page, '#/wrong')
+    ok('阈值 0 归一化后徽章显示「永不自动移出」',
+      /永不自动移出/.test(await page.locator('.card-head .badge').nth(1).innerText()),
+      await page.locator('.card-head .badge').nth(1).innerText())
+    ok('阈值 0 时错题一条都没少（不是把 0 当成「连对 0 次即移出」）',
+      (await page.locator('tbody tr').count()) === 6, `${await page.locator('tbody tr').count()} 行`)
+    const neverHint = await page.locator('.card-head .badge').nth(1).getAttribute('title')
+    ok('永不自动移出的提示写明「手动移除仍有效」', /手动/.test(neverHint || ''), neverHint || '(无 title)')
+
     // 统计拉取失败不能让列表也挂（挡不住看错题）
     await page.evaluate(() => { window.__wrongStatsFail = true })
     await goto(page, '#/banks')

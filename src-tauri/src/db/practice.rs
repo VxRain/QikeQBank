@@ -478,7 +478,12 @@ streak AS (
          MAX(CASE WHEN correct = 0 THEN answered_at END) AS last_wrong_at
   FROM ranked GROUP BY question_id
 )";
-pub(crate) const WRONG_WHERE: &str = "streak.consec_correct < ?3
+/// 错题本行筛选（`wrong_list` 与 `wrong_stats` 共用同一份，保证列表与统计同口径）。
+///
+/// `?3` = leave_after_correct：连续答对多少**次**后自动移出（FE-P1-08）。
+/// **`0` 表示「永不自动移出」**，此时不施加 `consec_correct` 约束——
+/// 若写成 `consec_correct < 0` 会恒为假，表现为错题本突然全空。
+pub(crate) const WRONG_WHERE: &str = "(?3 = 0 OR streak.consec_correct < ?3)
   AND streak.wrong_count > 0
   AND NOT EXISTS (SELECT 1 FROM wrong_dismiss d WHERE d.question_id = q.id AND d.is_dismissed = 1)
   AND (?1 IS NULL OR q.bank_id = ?1) AND (?2 IS NULL OR q.type = ?2)
@@ -552,14 +557,16 @@ pub fn wrong_list(
     ok(wrong_list_impl(&conn, &q)?)
 }
 
-/// 错题本：连续答对次数 < leave_after_correct（默认1，即现状：最近一次对就移出）且错过，且未被手动移出
+/// 错题本：连续答对次数 < leave_after_correct 且错过、且未被手动移出。
+/// **leave_after_correct = 0 表示永不自动移出**（FE-P1-08），见 [`WRONG_WHERE`]。
 pub(crate) fn wrong_list_impl(conn: &Connection, q: &WrongListQuery) -> Result<Value, String> {
     let bank_id = q.bank_id.clone().filter(|s| !s.is_empty());
     let type_filter = q.type_filter.clone().filter(|s| !s.is_empty());
     let query = q.query.clone().filter(|s| !s.trim().is_empty());
     let limit = q.limit.unwrap_or(50).min(500) as i64;
     let offset = q.offset.unwrap_or(0) as i64;
-    let leave_after = q.leave_after_correct.unwrap_or(1).clamp(1, 10) as i64;
+    // 0 = 永不自动移出（FE-P1-08）；上限 10 与设置页钳制一致
+    let leave_after = q.leave_after_correct.unwrap_or(1).min(10) as i64;
     // 顽固错题下限：<=1 视为不过滤（1 就是「所有错过」）
     let min_wrong = q.min_wrong_count.filter(|n| *n > 1);
     let order_by = wrong_order_by(q.sort.as_deref())?;
@@ -612,7 +619,8 @@ pub(crate) fn wrong_stats_impl(
     conn: &Connection,
     leave_after_correct: Option<u64>,
 ) -> Result<Value, String> {
-    let leave_after = leave_after_correct.unwrap_or(1).clamp(1, 10) as i64;
+    // 与 wrong_list_impl 同一口径：0 = 永不自动移出
+    let leave_after = leave_after_correct.unwrap_or(1).min(10) as i64;
     let p = params![
         Option::<String>::None,
         Option::<String>::None,
@@ -1578,9 +1586,11 @@ mod tests {
         rec(1, "2026-09-11T10:00:00.000Z"); // 对（连对 1）
         assert_eq!(total_with(None), 0); // 默认 N=1：已移出
         assert_eq!(total_with(Some(2)), 1); // N=2：连对 1 < 2，仍在
-        assert_eq!(total_with(Some(0)), 0); // 非法值钳制为 1
+        // FE-P1-08：0 = 永不自动移出（连对再多也留在错题本）
+        assert_eq!(total_with(Some(0)), 1, "leave_after_correct=0 应表示「不自动移出」");
         rec(1, "2026-09-12T10:00:00.000Z"); // 对（连对 2）
         assert_eq!(total_with(Some(2)), 0);
+        assert_eq!(total_with(Some(0)), 1, "连对 2 次后仍不应自动移出");
         rec(0, "2026-09-13T10:00:00.000Z"); // 又错（连对清零）
         assert_eq!(total_with(Some(3)), 1);
         let w = wrong_list_impl(&conn, &WrongListQuery { leave_after_correct: Some(3), ..Default::default() }).unwrap();
@@ -2096,6 +2106,16 @@ mod tests {
         let st2 = wrong_stats_impl(&conn, Some(2)).unwrap();
         assert_eq!(list2["total"], 1);
         assert_eq!(st2["total"], 1, "列表与统计必须同口径");
+
+        // FE-P1-08：0 = 永不自动移出，列表与统计同样要一致
+        let list0 = wrong_list_impl(
+            &conn,
+            &WrongListQuery { leave_after_correct: Some(0), ..Default::default() },
+        )
+        .unwrap();
+        let st0 = wrong_stats_impl(&conn, Some(0)).unwrap();
+        assert_eq!(list0["total"], 1, "leave_after_correct=0：答对也不移出");
+        assert_eq!(st0["total"], 1, "列表与统计必须同口径（0 = 永不自动移出）");
     }
 
 }

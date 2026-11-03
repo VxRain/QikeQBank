@@ -1,5 +1,6 @@
 import { reactive, watch, nextTick } from 'vue'
 import { settingsGet, settingsSet } from '../api/settings.js'
+import { leaveAfterOf } from '../utils/wrongRules.js'
 
 // 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。
 // localStorage 仅作写透缓存，DB 为准（同步地基 §6）。
@@ -24,12 +25,6 @@ function load() {
   }
 }
 
-// 错题移出阈值归一化：整数，钳制 1–10，非法回退 1
-function normalizeLeaveCount(v) {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return 1
-  return Math.min(10, Math.max(1, Math.round(n)))
-}
 // 自动下一题停留时长归一化：非法回退 1200ms，钳制在 300–5000ms
 function normalizeDelay(v) {
   const n = Number(v)
@@ -96,7 +91,7 @@ export const settings = reactive({
   // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
   rememberBankFilter: saved.rememberBankFilter ?? false,
   // 错题本：连续答对多少次后自动移出，默认 1（进库同步）
-  wrongLeaveAfterCorrect: normalizeLeaveCount(saved.wrongLeaveAfterCorrect),
+  wrongLeaveAfterCorrect: leaveAfterOf(saved.wrongLeaveAfterCorrect),
   // 自动同步：定时在后台与云端合并（设备本机行为，不进 SYNC_KEYS）
   autoSyncEnabled: saved.autoSyncEnabled ?? false,
   // 自动同步间隔（分钟），默认 30
@@ -139,7 +134,7 @@ function applySyncValues(raw) {
   if (raw['fsrs.practiceScope'] !== undefined)
     settings.fsrs.practiceScope = normalizePracticeScope(raw['fsrs.practiceScope'])
   if (raw.wrongLeaveAfterCorrect !== undefined)
-    settings.wrongLeaveAfterCorrect = normalizeLeaveCount(raw.wrongLeaveAfterCorrect)
+    settings.wrongLeaveAfterCorrect = leaveAfterOf(raw.wrongLeaveAfterCorrect)
 }
 
 // 注水守卫：DB 覆盖期间禁止 watch 回写（防脏时间戳竞争）。

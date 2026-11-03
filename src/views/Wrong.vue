@@ -10,8 +10,10 @@
         <h2 class="section-title flex items-center gap-2">
           <i class="i-lucide-circle-x text-primary" />错题本
         </h2>
-        <div class="flex gap-2 items-center">
+        <div class="flex gap-2 items-center flex-wrap">
           <span class="badge">{{ total }} 题</span>
+          <!-- FE-P1-08：当前移出规则必须写明，否则「为什么这题一直留着」无从判断 -->
+          <span class="badge" :title="leaveRuleHint">{{ leaveRuleBadge }}</span>
           <button
             type="button"
             class="btn btn-primary btn-small"
@@ -192,6 +194,7 @@ import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/st
 import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.js'
 import { truncate } from '@/utils/listFormat.js'
 import { settings } from '@/stores/settings.js'
+import { leaveRuleText, leaveRuleHint as leaveRuleHintOf } from '@/utils/wrongRules.js'
 import { renderDoc } from '@/utils/render.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
@@ -234,6 +237,11 @@ const isFiltered = computed(
 )
 // 重练全部的真实数量：不能拿 total 直接用（total 是当前筛选结果，且后端上限 500）
 const retryCount = computed(() => Math.min(total.value, MAX_RETRY))
+
+// ── FE-P1-08 移出规则徽章（口径见 utils/wrongRules.js）──
+const leaveRuleBadge = computed(() => leaveRuleText(settings.wrongLeaveAfterCorrect))
+const leaveRuleHint = computed(() => leaveRuleHintOf(settings.wrongLeaveAfterCorrect))
+
 const typeBreakdown = computed(() => {
   const byType = stats.value?.by_type || {}
   return Object.entries(byType)

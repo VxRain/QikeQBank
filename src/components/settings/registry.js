@@ -214,15 +214,15 @@ export const SETTINGS_SECTIONS = [
       {
         key: 'wrongLeaveAfterCorrect',
         title: '连续答对自动移出',
-        desc: '错题连续答对该次数后自动移出错题本，中途答错重计；默认 1 次（答对即移出）。',
-        keywords: '错题 移出 答对 次数 掌握 阈值',
+        desc: '错题连续答对该次数后自动移出错题本，中途答错重计；默认 1 次（答对即移出）。填 0 表示永不自动移出（只在你手动「移除」时离开错题本）。',
+        keywords: '错题 移出 答对 次数 掌握 阈值 不自动 保留',
         type: 'number',
         unit: '次',
-        min: 1,
+        min: 0,
         max: 10,
         integer: true,
         width: 'w-[64px]',
-        invalidMsg: '请输入 1～10 的整数（次）',
+        invalidMsg: '请输入 0～10 的整数（0 = 永不自动移出）',
         value: () => settings.wrongLeaveAfterCorrect,
         set: (v) => {
           settings.wrongLeaveAfterCorrect = Math.round(v)

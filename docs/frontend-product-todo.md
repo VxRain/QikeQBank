@@ -98,7 +98,7 @@
 | FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [ ] |
 | FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [x] |
 | FE-P1-07 | 模考 / 暂停续考 / 成绩趋势按题库 | M–L | 部分 | [x] |
-| FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [ ] |
+| FE-P1-08 | 错题本永不自动移出（导出/行内编辑不做） | S–M | 部分 | [x] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [ ] |
 | FE-P1-10 | 设置增强 | S–M | 部分 | [ ] |
 | FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [ ] |
@@ -581,14 +581,28 @@
 - **满分是参数不是常量**：`DEFAULT_TOTAL = 100` 只是缺省值；`planStandardPaper(pool, { total: 120, mix })` 直接支持任意满分。
 - 35 条单测覆盖（含 120 / 135 / 150 分卷）+ 5 个变异验证（去掉不可达判定 / 分值不 ×2 / 零头不补 / 不做第二轮补齐 / 难度筛选失效，全部被抓）。
 
-### [ ] FE-P1-08 错题顽固题与导出
+### [x] FE-P1-08 错题本永不自动移出
 
-> 部分已落地：**「错误 ≥ 3 次」视图已随 FE-P0-11 完成**（`Wrong.vue` 统计条上的「顽固错题」开关，后端 `wrong_stats.stubborn` 固定 `wrong_count >= 3`）。本项剩余：阈值「不自动移出」选项、导出、行内跳转详情/编辑。
+> **「错误 ≥ 3 次」视图**已随 FE-P0-11 完成（`Wrong.vue` 统计条上的「顽固错题」开关，后端 `wrong_stats.stubborn` 固定 `wrong_count >= 3`）。本轮做剩余部分：**连续答对阈值的「永不自动移出」选项**。
+>
+> **不做**（按迁移台账）：导出 MD·JSON、行内跳转详情/编辑。
 
-- ~~「错误 ≥ 3 次」视图~~；连续答对阈值支持「不自动移出」选项。
-- 导出错题为 Markdown/JSON（后续可 PDF）。**注意**：导出已从 FE-P0-11 移出，落到本项处理。
-- 错题本行支持直接跳转题目详情/编辑。
-- **文件**：`src/views/Wrong.vue`、`src/stores/settings.js`、`src/components/settings/registry.js`。
+**设计：阈值 0 = 永不自动移出**，不新增独立开关。
+`wrongLeaveAfterCorrect` 已进库同步（`SYNC_KEYS`），加开关要动同步契约；而「阈值取 0 即不设阈值」是同一语义的自然外推，也不影响老数据（旧值都是 1–10）。
+
+**后端**（`src-tauri/src/db/practice.rs`）
+- `wrong_list_impl` / `wrong_stats_impl`：`clamp(1, 10)` → `min(10)`（0 不再被吃掉）。
+- `WRONG_WHERE` 首行改 `(?3 = 0 OR streak.consec_correct < ?3)`。
+  **不能**写成 `consec_correct < 0`——那会恒假，表现为错题本突然全空。
+
+**前端**
+- `src/utils/wrongRules.js`（新）：`leaveAfterOf` / `isNeverLeave` / `leaveRuleText` / `leaveRuleHint`。`settings.js` 与 `Wrong.vue` 共用同一份，避免「设置页说 0 合法、store 悄悄钳回 1」。
+- 设置项 `min` 1→0，`invalidMsg` 明确「0 = 永不自动移出」。
+- 错题本标题旁常驻规则徽章（`永不自动移出` / `连对 N 次移出`）+ hover 提示写明「手动移除仍有效」与「在哪改」——否则用户无从判断「为什么这题一直留着」。
+
+**踩到的坑**：`Number(null) / Number('') / Number([])` 全等于 `0`。若直接 `Number(raw)`，一个**未配置的 `null` 会被静默解释成「永不自动移出」**——正是本特性最该避免的失败方向（题一直堆着，用户以为答对就移出了）。现在先判型，非法值回退缺省 1 而不是 0。
+
+**守卫**：单测 9 条（`tests/unit/wrong-rules.test.js`，含「0 与 1 语义必须真的不同」回归项）；cargo +2 断言（list 与 stats 在 0 下必须同口径）；e2e wrong 18→22（三态徽章文案 + 阈值 0 下 6 条错题一条没少 + 提示含「手动」）。三个变异（前端归一化钳回 1 / 后端 WHERE 去掉 0 分支 / 后端钳回 clamp）全部被抓。
 
 ### [ ] FE-P1-09 复习预测 / 多选题库 / 按题型
 
