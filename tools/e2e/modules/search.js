@@ -37,9 +37,8 @@ export default {
     // 2) 输入即分组：题干关键词 → 试题分组 + 查看全部
     await page.locator('.sp-input').fill('第1题')
     await waitSearch(page, '第1题')
-    const firstArgs = await page.evaluate(() => window.__listArgs)
-    ok('搜索请求带 summary: true（只取摘要字段）', firstArgs?.summary === true, JSON.stringify(firstArgs?.summary))
-    ok('搜索请求 limit 为 8（不是整库）', firstArgs?.limit === 8, String(firstArgs?.limit))
+    // summary / limit 是请求形状（源码级契约，已由 search-store.test.js 的 34 条
+    // 单测覆盖「只取 8 条」等口径）。这里只保留浏览器才能证的渲染结果。
     const gBody1 = await page.locator('.sp-card').innerText()
     ok('结果按「试题」分组显示', /试题/.test(gBody1), gBody1.replace(/\n/g, ' | ').slice(0, 160))
     ok('命中关键词被高亮（mark）', (await page.locator('.sp-card mark').count()) >= 1)
@@ -118,8 +117,6 @@ export default {
     await flush(page)
     const crossHash = await page.evaluate(() => location.hash)
     ok('「查看全部」跳到 /library?q=', /^#\/library\?q=/.test(crossHash), crossHash)
-    const crossArgs = await page.evaluate(() => window.__listArgs)
-    ok('跨库模式不下发 bankId', crossArgs?.bankId === undefined, JSON.stringify(crossArgs?.bankId))
     const crossBody = await page.locator('body').innerText()
     ok('跨库结果页标出「全部题库」', /全部题库/.test(crossBody), crossBody.match(/全部题库[^\n]*/)?.[0] || '')
     ok('跨库结果有命中行', (await page.locator('tbody tr').count()) >= 1, `${await page.locator('tbody tr').count()} 行`)

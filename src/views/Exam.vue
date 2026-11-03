@@ -243,7 +243,7 @@
           <div class="text-[12px] text-muted mt-1">答对题数（得分率 ≥ 60%）</div>
         </div>
         <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
-          <div class="text-[24px] font-800 text-text">{{ fmtMs(sheet.endedAt - sheet.startedAt) }}</div>
+          <div class="text-[24px] font-800 text-text">{{ fmtDurationCn(sheet.endedAt - sheet.startedAt) }}</div>
           <div class="text-[12px] text-muted mt-1">用时</div>
         </div>
         <div v-if="sheet.unansweredCount" class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
@@ -345,6 +345,7 @@ import { examSessions } from '@/api/exam.js'
 import { expandQuestions } from '@/api/assets.js'
 import { renderDoc } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { lettersOf, fmtDurationCn, dedupeShuffle } from '@/utils/questionDisplay.js'
 import { ui, confirmDialog, toast } from '@/stores/ui.js'
 import { randomUUID } from '@/utils/device.js'
 import { save as saveSession, scheduleSave, flush as flushSession, load as loadSession, clear as clearSession, parentIdsOf } from '@/stores/session.js'
@@ -530,21 +531,6 @@ function initAnswers() {
   for (const k of Object.keys(flagged)) delete flagged[k]
 }
 
-function dedupeShuffle(list) {
-  const seen = new Set()
-  const out = []
-  for (const q of list || []) {
-    if (!q || !q.id || seen.has(q.id)) continue
-    seen.add(q.id)
-    out.push(q)
-  }
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[out[i], out[j]] = [out[j], out[i]]
-  }
-  return out
-}
-
 async function start() {
   const types = selectedTypes.value
   if (!types.length) { error.value = '请至少选择一种题型'; return }
@@ -576,7 +562,7 @@ async function start() {
         const part = await practicePool({ limit: per, type: t, bankId: bankId.value })
         merged.push(...(part || []))
       }
-      questions = dedupeShuffle(merged)
+      questions = dedupeShuffle(merged, (q) => q?.id)
     }
     if (!questions || !questions.length) {
       error.value = '题库中没有符合条件的试题，请先到「新增试题」添加题目。'
@@ -855,9 +841,6 @@ function letterOf(q, id) {
   const i = (q.options || []).findIndex((o) => o.id === id)
   return i >= 0 ? String.fromCharCode(65 + i) : ''
 }
-function lettersOf(q, ids) {
-  return (ids || []).map((x) => letterOf(q, x)).filter(Boolean).join('、')
-}
 function isBlankOk(row, b) {
   return !!(row.res.blanks || []).find((r) => r.id === b.id && r.correct)
 }
@@ -875,22 +858,13 @@ function fmtScore(n) {
   const v = Number(n) || 0
   return Number.isInteger(v) ? String(v) : String(Math.round(v * 10) / 10)
 }
-function fmtMs(ms) {
-  const s = Math.max(0, Math.round((ms || 0) / 1000))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  if (h) return `${h}时${m}分${sec}秒`
-  if (m) return `${m}分${sec}秒`
-  return `${sec}秒`
-}
 function fmtDate(iso) {
   const dt = new Date(iso)
   const p = (n) => String(n).padStart(2, '0')
   return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())} ${p(dt.getHours())}:${p(dt.getMinutes())}`
 }
 function fmtDur(s) {
-  return fmtMs(Math.max(0, new Date(s.ended_at) - new Date(s.started_at)))
+  return fmtDurationCn(Math.max(0, new Date(s.ended_at) - new Date(s.started_at)))
 }
 
 async function loadHistory() {

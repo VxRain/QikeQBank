@@ -116,7 +116,7 @@
                 <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, $event.target.checked)" />
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
-              <td class="px-3.5 py-3 border-b border-line max-w-[360px] truncate text-text-secondary font-500" :title="getPlainText(q)">{{ truncate(getPlainText(q), 80) }}</td>
+              <td class="px-3.5 py-3 border-b border-line max-w-[360px] truncate text-text-secondary font-500" :title="plainTextOf(q, extractFromDoc)">{{ truncate(plainTextOf(q, extractFromDoc), 80) }}</td>
               <td class="px-3.5 py-3 border-b border-line text-muted text-[13px]">{{ bankNameOf(q.bank_id) }}</td>
               <td class="px-3.5 py-3 border-b border-line"><span class="font-700 text-danger">{{ q.wrong_count ?? 1 }}</span></td>
               <td class="px-3.5 py-3 border-b border-line text-muted text-[13px] whitespace-nowrap">{{ fmtTime(q.last_wrong_at) }}</td>
@@ -189,6 +189,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.js'
+import { truncate } from '@/utils/listFormat.js'
 import { settings } from '@/stores/settings.js'
 import { renderDoc } from '@/utils/render.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'
@@ -259,18 +261,6 @@ function viewTarget(q) {
 }
 function keyOf(i) {
   return String.fromCharCode(65 + (i || 0))
-}
-function lettersOf(tq, ids) {
-  if (!Array.isArray(ids) || !ids.length) return '—'
-  const opts = tq?.options || []
-  return ids.map((id) => {
-    const i = opts.findIndex((o) => o.id === id)
-    return i >= 0 ? keyOf(i) : '?'
-  }).join('、')
-}
-function blankAnswersOf(tq, id) {
-  const b = (tq?.answer?.blanks || []).find((x) => x.id === id)
-  return Array.isArray(b?.answers) && b.answers.length ? b.answers.join(' / ') : '—'
 }
 // 复习记录带 grade/auto_correct，刷题记录没有——以此区分入库口径
 function isReviewDetail(d) {
@@ -366,11 +356,6 @@ function retryLabelOf(q) {
     : '重练这道题'
 }
 
-function truncate(s, n) {
-  if (!s) return '-'
-  return s.length > n ? s.slice(0, n) + '…' : s
-}
-
 function extractFromDoc(doc) {
   if (!doc || !doc.content) return ''
   const parts = []
@@ -391,18 +376,6 @@ function extractFromDoc(doc) {
     }
   }
   return parts.join(' ').replace(/\s+/g, ' ').trim()
-}
-
-function getPlainText(q) {
-  if (!q) return ''
-  if (typeof q.plain_text === 'string' && q.plain_text.trim()) return q.plain_text.trim()
-  if (q.stem) {
-    const t = extractFromDoc(q.stem)
-    if (t) return q.type === 'material' && Array.isArray(q.children) && q.children.length
-      ? t + ` （含 ${q.children.length} 子题）`
-      : t
-  }
-  return '-'
 }
 
 function fmtTime(iso) {

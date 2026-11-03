@@ -129,7 +129,7 @@
                 <span class="font-700 text-text">{{ r.id }}</span>
                 <span>你的答案：{{ r.value || '（未填写）' }}</span>
                 <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
-                <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
+                <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(cur.value?.q, r.id) }}</span>
               </div>
             </div>
 
@@ -170,7 +170,7 @@
           <div class="text-[12px] text-muted mt-1">复习题数</div>
         </div>
         <div class="min-w-[120px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
-          <div class="text-[24px] font-800 text-text">{{ fmtMs(roundMs) }}</div>
+          <div class="text-[24px] font-800 text-text">{{ fmtDurationCn(roundMs) }}</div>
           <div class="text-[12px] text-muted mt-1">用时</div>
         </div>
         <div class="min-w-[120px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
@@ -231,6 +231,7 @@ import { typeLabel } from '@/constants/questions.js'
 import { previewIntervals, revertPayloadOf, REVERT_WINDOW_MS } from '@/utils/reviewPreview.js'
 import { randomUUID } from '@/utils/device.js'
 import { loadRunConfig, saveRunConfig, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { blankAnswersOf, fmtDurationCn, buildRunItems } from '@/utils/questionDisplay.js'
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref('')
@@ -397,11 +398,6 @@ const canSubmit = computed(() => {
   return true
 })
 
-function blankAnswersOf(id) {
-  const blanks = cur.value?.q?.answer?.blanks || []
-  const b = blanks.find((x) => x.id === id)
-  return Array.isArray(b?.answers) ? b.answers.join(' / ') : ''
-}
 // 卡片级键盘流（状态机互斥，同一键不在两套状态同时有效）：
 // 未判分：A–F 选择类选题（单选设值/多选切换）、M 切材料、Enter 判分；
 // 判分后：1 忘记 / 2 困难 / 3 良好 / 4 简单（自评并自动下一题）；Enter 无动作。
@@ -446,20 +442,6 @@ function resetAnswer() {
   gradeResult.value = null
   recordError.value = ''
   submitting.value = false
-}
-
-function buildItems(questions) {
-  const items = []
-  for (const q of questions || []) {
-    if (q.type === 'material' && Array.isArray(q.children) && q.children.length) {
-      q.children.forEach((child, i) => {
-        items.push({ q: child, parent: q, isChild: true, childIdx: i, childCount: q.children.length })
-      })
-    } else {
-      items.push({ q, parent: null, isChild: false, childIdx: -1, childCount: 0 })
-    }
-  }
-  return items.map((it, idx) => ({ ...it, uid: `${it.q.id}_${idx}` }))
 }
 
 // ── 会话快照（FE-ARCH-05）：只存题目 id 与作答状态，离开后可继续 ──
@@ -545,7 +527,7 @@ async function resumeSession(snap) {
   dueLoading.value = true
   try {
     const questions = await practicePool({ ids: parentIdsOf(snap.keys) })
-    const items = buildItems(await expandQuestions(questions))
+    const items = buildRunItems(await expandQuestions(questions))
     const byKey = new Map(items.map((it) => [itemKeyOf(it), it]))
     const { snapshot, missing } = clampSnapshot(snap, snap.keys.filter((k) => byKey.has(k)))
     if (!snapshot) {
@@ -607,7 +589,7 @@ async function start() {
   try {
     // 全部 = 后端上限 500（一轮拉完到期题；真超 500 的极端情况分多轮消化）
     const questions = await reviewDue({ limit: reviewLimit.value, bankId: bankId.value })
-    pool.value = buildItems(await expandQuestions(questions))
+    pool.value = buildRunItems(await expandQuestions(questions))
     if (!pool.value.length) {
       phase.value = 'due'
       dueTotal.value = 0
@@ -784,16 +766,6 @@ async function backToDue() {
   remainingDue.value = null
   phase.value = 'due'
   await refreshDue()
-}
-
-function fmtMs(ms) {
-  const s = Math.max(0, Math.round((ms || 0) / 1000))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  if (h) return `${h}时${m}分${sec}秒`
-  if (m) return `${m}分${sec}秒`
-  return `${sec}秒`
 }
 
 onMounted(async () => {

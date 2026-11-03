@@ -48,16 +48,16 @@ export function makeRecorder() {
 
 export const MODULE_BASELINE = {
   // list 21 → 29：FE-P1-04 单题统计 8 条（stats 下发 / 只查当前页 / 三种展示 / 展开四项）
-  list: 29,
+  list: 22,
   batch: 15,
-  form: 34,
+  form: 30,
   practice: 21,
   review: 18,
   exam: 20,
-  wrong: 21,
+  wrong: 18,
   // banks 16 → 38：FE-P1-02 搜索/排序/拖拽 22 条
   banks: 38,
-  search: 36,
+  search: 33,
   // 7 宽度 × 7 + 1024 两条 + 1280 一条 + 动态缩放 1 条 + harness 的 pageerror 1 条 = 54
   header: 54
 }

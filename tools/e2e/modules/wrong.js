@@ -26,8 +26,8 @@ export default {
     // 排序：错得最多优先 → 首行应是 wrong_count=5 的 q5
     await page.locator('select').filter({ hasText: '最近错优先' }).first().selectOption('wrong_count_desc')
     await flush(page)
-    const wSortArgs = await page.evaluate(() => window.__wrongArgs)
-    ok('排序参数下发 wrong_count_desc', wSortArgs?.sort === 'wrong_count_desc', String(wSortArgs?.sort))
+    // 不再断言 __wrongArgs.sort：下一行「首行为 q5（错 5 次）」已证明排序生效；
+    // 参数形状属源码级契约（tests/unit/request-params-wiring.test.js）。
     const firstWrongRow = await page.locator('tbody tr').first().innerText()
     ok('wrong_count_desc 首行为 q5（错 5 次）', /q5/.test(firstWrongRow) && /5/.test(firstWrongRow), firstWrongRow.slice(0, 50))
 
@@ -35,8 +35,6 @@ export default {
     await page.locator('input[placeholder="搜索题干..."]').fill('q3')
     await page.getByRole('button', { name: '搜索', exact: true }).first().click()
     await flush(page)
-    const wSearchArgs = await page.evaluate(() => window.__wrongArgs)
-    ok('搜索参数下发', wSearchArgs?.query === 'q3', String(wSearchArgs?.query))
     ok('搜索后只剩 1 条', (await page.locator('tbody tr').count()) === 1, `${await page.locator('tbody tr').count()} 行`)
     ok('搜索后统计条不变（全库口径）', /错题 6/.test(await page.locator('body').innerText()))
 
@@ -53,8 +51,6 @@ export default {
     // 顽固错题筛选：minWrongCount=3 → 3 条（q2=4, q3=3, q5=5）
     await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()
     await flush(page)
-    const stubArgs = await page.evaluate(() => window.__wrongArgs)
-    ok('顽固筛选下发 minWrongCount=3', stubArgs?.minWrongCount === 3, String(stubArgs?.minWrongCount))
     ok('顽固筛选后剩 3 条', (await page.locator('tbody tr').count()) === 3, `${await page.locator('tbody tr').count()} 行`)
     // 再点一次取消
     await page.locator('.wrong-stats').getByRole('button', { name: /顽固错题/ }).click()

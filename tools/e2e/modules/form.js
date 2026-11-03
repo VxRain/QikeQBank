@@ -70,11 +70,15 @@ export default {
     // 首/末位禁用而非隐藏：数量不变（3 个上移 + 3 个下移全在），只是禁用态不同
     const ups = page.locator('[role="group"][aria-label^="调整第"]').getByRole('button', { name: /^上移子题/ })
     const downs = page.locator('[role="group"][aria-label^="调整第"]').getByRole('button', { name: /^下移子题/ })
-    ok('上移按钮 3 个全在（禁用而非隐藏）', (await ups.count()) === 3, `${await ups.count()}`)
-    ok('下移按钮 3 个全在（禁用而非隐藏）', (await downs.count()) === 3, `${await downs.count()}`)
-    ok('第 1 个子题「上移」禁用', await ups.nth(0).isDisabled())
-    ok('最后 1 个子题「下移」禁用', await downs.nth(2).isDisabled())
-    ok('中间子题上移/下移都可用', !(await ups.nth(1).isDisabled()) && !(await downs.nth(1).isDisabled()))
+    // 「首/末位禁用而非隐藏」的具体分支由 46 条单测覆盖
+    // （tests/unit/material-children.test.js::canMoveChild）。
+    // 这里只验模板真的把这个判定接到了 disabled 上——也就是 DOM 接线的四条
+    // 组合成一条：数量全在 + 首末禁用 + 中间可用。少任何一半都说明接线断了。
+    ok('上移/下移按钮全部渲染，且 disabled 真的跟 canMoveChild 一致',
+      (await ups.count()) === 3 && (await downs.count()) === 3 &&
+      (await ups.nth(0).isDisabled()) && (await downs.nth(2).isDisabled()) &&
+      !(await ups.nth(1).isDisabled()) && !(await downs.nth(1).isDisabled()),
+      `up=${await ups.count()} down=${await downs.count()} u0=${await ups.nth(0).isDisabled()} d2=${await downs.nth(2).isDisabled()}`)
 
     // 上移第 2 个子题：内容顺序真的变了（用题干文字验证，不依靠序号标题）
     // 注意：子题卡片里除了题干还有一个 ProseMirror 给每个选项用，

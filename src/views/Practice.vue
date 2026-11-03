@@ -242,7 +242,7 @@
                 <span class="font-700 text-text">{{ r.id }}</span>
                 <span>你的答案：{{ r.value || '（未填写）' }}</span>
                 <span class="font-700" :class="r.correct ? 'text-success' : 'text-danger'">{{ r.correct ? '✓' : '✗' }}</span>
-                <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(r.id) }}</span>
+                <span v-if="!r.correct" class="text-danger font-500">正确答案：{{ blankAnswersOf(cur.value?.q, r.id) }}</span>
               </div>
             </div>
 
@@ -282,7 +282,7 @@
         </div>
         </template>
         <div class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
-          <div class="text-[24px] font-800 text-text">{{ fmtMs(lastRound.ms) }}</div>
+          <div class="text-[24px] font-800 text-text">{{ fmtDurationCn(lastRound.ms) }}</div>
           <div class="text-[12px] text-muted mt-1">本轮用时</div>
         </div>
         <div v-if="!recite && lastRound.wrong.length" class="min-w-[150px] p-4.5 border border-line rounded-[12px] bg-bg-accent">
@@ -293,7 +293,7 @@
 
       <div v-if="!recite && rounds.length > 1" class="text-[13px] text-muted">
         累计：{{ sessionStats.total }} 题 · 答对 {{ sessionStats.correct }} ·
-        共 {{ fmtMs(sessionStats.ms) }}
+        共 {{ fmtDurationCn(sessionStats.ms) }}
       </div>
 
       <div class="flex gap-3 flex-wrap justify-center">
@@ -350,6 +350,7 @@ import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
 import { elapsedMsOf, fmtClock, weakPracticeEntry, doneLinks } from '@/utils/practiceLoop.js'
+import { blankAnswersOf, fmtDurationCn, dedupeShuffle, buildRunItems } from '@/utils/questionDisplay.js'
 
 // 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板用完整名（单选题）
 const ALL_TYPES = QUESTION_TYPE_KEYS
@@ -547,11 +548,6 @@ const sessionStats = computed(() => {
   return { total, correct, ms }
 })
 
-function blankAnswersOf(id) {
-  const blanks = cur.value?.q?.answer?.blanks || []
-  const b = blanks.find((x) => x.id === id)
-  return Array.isArray(b?.answers) ? b.answers.join(' / ') : ''
-}
 // 卡片级键盘流（状态机互斥，同一键不在两套状态同时有效）：
 // 未判分：简答看答案后 1/2 自评、Enter 提交；判分后：Enter 下一题；Esc 取消自动下一题。
 // A–F 选题 / M 切材料 / 填空跳空在 QuestionRunner 内处理；输入区/组词中/弹窗/带修饰键一律不劫持。
@@ -663,35 +659,6 @@ function resetAnswer() {
   graded.value = false
   gradeResult.value = null
   recordError.value = ''
-}
-
-function dedupeShuffle(list) {
-  const seen = new Set()
-  const out = []
-  for (const q of list || []) {
-    if (!q || !q.id || seen.has(q.id)) continue
-    seen.add(q.id)
-    out.push(q)
-  }
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[out[i], out[j]] = [out[j], out[i]]
-  }
-  return out
-}
-
-function buildItems(questions) {
-  const items = []
-  for (const q of questions || []) {
-    if (q.type === 'material' && Array.isArray(q.children) && q.children.length) {
-      q.children.forEach((child, i) => {
-        items.push({ q: child, parent: q, isChild: true, childIdx: i, childCount: q.children.length })
-      })
-    } else {
-      items.push({ q, parent: null, isChild: false, childIdx: -1, childCount: 0 })
-    }
-  }
-  return items.map((it, idx) => ({ ...it, uid: `${it.q.id}_${idx}` }))
 }
 
 // ── 会话快照（FE-ARCH-05）：只存题目 id 与作答状态，离开后可继续 ──
@@ -866,7 +833,7 @@ async function resumeSession(snap) {
   fetching.value = true
   try {
     const questions = await practicePool({ ids: parentIdsOf(snap.keys) })
-    const items = buildItems(await expandQuestions(questions))
+    const items = buildRunItems(await expandQuestions(questions))
     const byKey = new Map(items.map((it) => [itemKeyOf(it), it]))
     const { snapshot, missing } = clampSnapshot(snap, snap.keys.filter((k) => byKey.has(k)))
     if (!snapshot) {
@@ -943,9 +910,9 @@ async function start() {
         const part = await practicePool({ limit: per, type: t, bankId: bankId.value })
         merged.push(...(part || []))
       }
-      questions = dedupeShuffle(merged)
+      questions = dedupeShuffle(merged, (q) => q?.id)
     }
-    pool.value = buildItems(await expandQuestions(questions))
+    pool.value = buildRunItems(await expandQuestions(questions))
     if (!pool.value.length) {
       fetching.value = false
       error.value = '题库中没有符合条件的试题，请先到“新增试题”添加题目。'
@@ -1154,7 +1121,7 @@ async function startFromIds(ids) {
   fetching.value = true
   try {
     const questions = await practicePool({ ids })
-    pool.value = buildItems(await expandQuestions(questions))
+    pool.value = buildRunItems(await expandQuestions(questions))
     if (!pool.value.length) {
       error.value = '重练题目已不存在（可能被删除），请从错题本重新发起。'
       return
@@ -1284,15 +1251,6 @@ watch(
   }
 )
 
-function fmtMs(ms) {
-  const s = Math.max(0, Math.round((ms || 0) / 1000))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  if (h) return `${h}时${m}分${sec}秒`
-  if (m) return `${m}分${sec}秒`
-  return `${sec}秒`
-}
 </script>
 
 <style scoped>
