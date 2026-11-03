@@ -16,6 +16,8 @@ export function list(params = {}) {
   // 难度/状态为 0 或空串时视为不过滤，不正交下去
   if (params.difficulty != null && params.difficulty !== '') args.difficulty = Number(params.difficulty)
   if (params.status) args.status = params.status
+  // FE-P1-04：true 时后端为当前页每行附 stats（只对这批 id 走索引点查）
+  if (params.stats != null) args.stats = params.stats
   return cmd('questions_list', args).then(unwrap)
 }
 

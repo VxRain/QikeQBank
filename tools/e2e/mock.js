@@ -124,6 +124,15 @@ export function mockScript() {
           const slice = items.slice(offset, offset + limit)
           if (args?.summary) {
             const SUMMARY_FIELDS = ['id', 'bank_id', 'type', 'difficulty', 'score', 'status', 'plain_text', 'created_at', 'updated_at', 'fsrs', 'wrong_count']
+            // FE-P1-04：stats:true 时每行附统计，形状照 src-tauri 的 attach_question_stats ——
+            // 没做过的题也给零值（不是缺字段），否则前端两种空态分不开。
+            // q1/q3 有作答记录、其余没做过，让 e2e 能同时验「有数据」与「零值」两种展示。
+            window.__statsAsked = args?.stats ? (window.__statsAsked || 0) + 1 : window.__statsAsked
+            window.__statsIds = args?.stats ? slice.map((q) => q.id) : window.__statsIds
+            const STATS = {
+              q1: { attempt_count: 3, correct_count: 2, last_answered_at: '2026-01-05T10:00:00.000Z', avg_ms: 4200 },
+              q3: { attempt_count: 1, correct_count: 0, last_answered_at: '2026-01-06T10:00:00.000Z', avg_ms: 9000 }
+            }
             return {
               success: true,
               data: {
@@ -131,6 +140,9 @@ export function mockScript() {
                 items: slice.map((q) => {
                   const out = {}
                   for (const k of SUMMARY_FIELDS) if (q[k] !== undefined) out[k] = q[k]
+                  if (args?.stats) {
+                    out.stats = STATS[q.id] || { attempt_count: 0, correct_count: 0, last_answered_at: null, avg_ms: 0 }
+                  }
                   return out
                 })
               }

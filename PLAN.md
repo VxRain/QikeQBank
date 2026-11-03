@@ -253,7 +253,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 | command | 参数 | 变更 |
 |---|---|---|
-| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?, sort?, difficulty?, status?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}`。**FE-P0-09 新增**：`sort` 走白名单 `SORT_WHITELIST`（`created_desc`默认 / `created_asc` / `updated_desc` / `difficulty_desc` / `difficulty_asc` / `score_desc`），未知名 **Err**（不静默回退，否则前端拼错参数会以为排序生效）；`difficulty`（1–5）与 `status` 进 WHERE，`total` 跟随筛选；排序在 COUNT 之前解析，非法值不白跑查询 |
+| `questions_list` | `query?, type_filter?, bank_id?, limit?, offset?, summary?, sort?, difficulty?, status?, stats?` | `query` 仅匹配题干（`plain_text LIKE`，不匹配 id）；有 bank_id 时 `WHERE bank_id=?`；分页默认 limit 50、上限 500、offset 0；`summary=true` 时只返回摘要项 `{id,bank_id,type,version,difficulty,score,children_count,children_score,status,plain_text,created_at,updated_at}`（不含 stem/options/answer/analysis/children，`children_count` 无子题为 0，`children_score` 为子题分值合计、无子题为 null；详情走 `questions_get` 按需拉取），缺省为全量；返回 `{"total","items"}`。**FE-P0-09 新增**：`sort` 走白名单 `SORT_WHITELIST`（`created_desc`默认 / `created_asc` / `updated_desc` / `difficulty_desc` / `difficulty_asc` / `score_desc`），未知名 **Err**（不静默回退，否则前端拼错参数会以为排序生效）；`difficulty`（1–5）与 `status` 进 WHERE，`total` 跟随筛选；排序在 COUNT 之前解析，非法值不白跑查询。**FE-P1-04 新增 `stats`**：为 true 时当前页每行附 `stats:{attempt_count,correct_count,last_answered_at,avg_ms}`（没做过的题也给零值，前端不必区分「没有字段」与「0 次」）；实现为独立点查 `attach_question_stats`（`stats_sql(n)` → `WHERE mode != 'exam' AND question_id IN (?,…) GROUP BY question_id`），**不 JOIN 主查询** —— 主查询带 ORDER BY + LIMIT，JOIN 会先放大流水行再排序；口径只含练习/复习（模考是得分率语义，FE-P0-12 明确三者不可混算），cargo 单测断言 EXPLAIN QUERY PLAN 走 `idx_records_question` 且不全表扫 |
 | `questions_create` | `data: Value` | data.bank_id 缺失 → 用 'bank_default'（存在则用之，否则第一个 bank）；其余不变 |
 | `questions_update` | `id, data` | bank_id 允许随 body 变更（移库）；本地编辑刷新 `updated_at` **和** `synced_at`；其余不变（**apply 路径禁止复用此函数**，走原生 gated upsert，防来源戳被洗） |
 | `questions_get` / `questions_remove` | `questions_remove(id, actor?)`：单题墓碑 UPSERT + `DELETE` 同事务；不存在 Err("Not Found") | 不变 |
@@ -542,10 +542,10 @@ export function persistBankFilter(page, id)
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
-- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-11-02 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 218 条 / 10 模块）。改动后请实测刷新，不要按估算填写：
+- **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-11-03 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 226 条 / 10 模块）。改动后请实测刷新，不要按估算填写：
   | 模块 | 覆盖页面 | 断言 | 典型耗时 |
   |---|---|---|---|
-  | `list` | 试题列表：排序 / 筛选 / 页码收敛 | 21 | ~1.5s |
+  | `list` | 试题列表：排序 / 筛选 / 页码收敛 / 单题统计 | 29 | ~1.9s |
   | `batch` | 批量操作：单次 IPC / 逐项失败重试 | 15 | ~1.1s |
   | `banks` | 题库管理：新建 / 重命名 / 删除保护 | 16 | ~1.0s |
   | `form` | 录题：脏徽章 / 离开确认 / Ctrl+S / 草稿 | 9 | ~1.2s |
@@ -555,7 +555,7 @@ export function persistBankFilter(page, id)
   | `wrong` | 错题本：搜索 / 排序 / 统计 | 21 | ~0.7s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 36 | ~4.0s |
   | `header` | 顶栏：窄窗（含 1024 最小窗）不错乱 / 不裁切 | 54 | ~0.8s |
-  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 16.6s / 218 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
+  - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~2s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 15.6s / 226 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
   - **代码结构（2026-11 拆分，原 1818 行单体）**：`tools/e2e-frontend.mjs` 现在只是驱动器（装载 / dev server / 浏览器 / 汇总，约 280 行），其余按职责分开：
     `tools/e2e/mock.js`（mock IPC）、`tools/e2e/helpers.js`（flush / requireRoute / goto / waitGone 等等待与就绪）、`tools/e2e/runner.js`（断言记录器 + 基准数 + 单模块执行）、`tools/e2e/modules/<id>.js`（每页一个模块，`export default { id, label, owns, run }`）。
   - 新增页面行为时：把断言加到对应模块；新模块 = `modules/` 加文件 + `MODULE_IDS` 登记 + `runner.js` 记基准数，且必须同步本表、`AGENTS.md`、`todo §0.3` 三处。

@@ -120,12 +120,13 @@
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">难度</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 70px">分值</th>
+              <th class="text-right px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent whitespace-nowrap" style="width: 104px" title="作答次数 · 正确率（只统计练习/复习，不含模考）">作答/正确率</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 240px">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="questions.length === 0">
-              <td colspan="6" class="text-center py-6 text-muted">
+              <td colspan="7" class="text-center py-6 text-muted">
                 <div v-if="isFiltered" class="flex flex-col items-center gap-3 py-2">
                   <i class="i-lucide-search-x text-[24px]" />
                   <div>没有符合当前筛选条件的试题</div>
@@ -161,6 +162,17 @@
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="difficulty-dots" :title="'难度 ' + (q.difficulty ?? 2) + ' / 5'"><i v-for="n in 5" :key="n" :class="['dot', n <= (q.difficulty ?? 2) && 'on']" /></span></td>
               <td class="px-3.5 py-3 border-b border-line">{{ displayScore(q) }}</td>
+              <!-- FE-P1-04 单题统计：压缩版「次数 · 正确率」。未作答显示 0 · —（不是 0 · 0%） -->
+              <td class="px-3.5 py-3 border-b border-line text-[12px] whitespace-nowrap" style="width: 104px">
+                <div class="text-right">
+                  <template v-if="qStats(q)">
+                    <span class="text-text-secondary tabular-nums">{{ qStats(q).attempts }}</span>
+                    <span class="text-muted-light"> · </span>
+                    <span :class="rateClass(qStats(q).rate)">{{ qStats(q).rate == null ? '—' : Math.round(qStats(q).rate * 100) + '%' }}</span>
+                  </template>
+                  <span v-else class="text-muted-light">—</span>
+                </div>
+              </td>
               <td class="px-3.5 py-3 border-b border-line">
                 <div class="flex gap-1.5 flex-wrap">
                   <router-link :to="`/edit/${q.id}`" class="btn btn-small" title="编辑"><i class="i-lucide-pencil" />编辑</router-link>
@@ -171,11 +183,20 @@
               </td>
             </tr>
             <tr v-if="previewId === q.id" :key="q.id + '_preview'">
-              <td colspan="6" class="px-3.5 py-3 border-b border-line bg-bg-accent">
+              <td colspan="7" class="px-3.5 py-3 border-b border-line bg-bg-accent">
                 <div v-if="previewLoading && !previewCache[q.id]" class="text-muted py-4 flex items-center gap-2">
                   <i class="i-lucide-loader-circle animate-spin" />加载中...
                 </div>
                 <QuestionPreview v-else-if="previewCache[q.id]" :question="previewCache[q.id]" />
+                <!-- FE-P1-04 单题统计：展开行给完整四项（含平均用时与最近作答） -->
+                <div v-if="qStats(q)" class="mt-3 pt-3 border-t border-line flex flex-wrap items-center gap-x-6 gap-y-2 text-[12.5px]">
+                  <span class="text-muted font-600 flex items-center gap-1.5"><i class="i-lucide-sigma text-primary" />本题作答</span>
+                  <span class="text-text-secondary">作答 <b class="text-text tabular-nums">{{ qStats(q).attempts }}</b> 次</span>
+                  <span class="text-text-secondary">答对 <b class="tabular-nums" :class="qStats(q).correct > 0 ? 'text-success' : 'text-text'">{{ qStats(q).correct }}</b> 次</span>
+                  <span class="text-text-secondary">正确率 <b :class="rateClass(qStats(q).rate)">{{ qStats(q).rate == null ? '尚未作答' : Math.round(qStats(q).rate * 100) + '%' }}</b></span>
+                  <span class="text-text-secondary">平均用时 <b class="text-text tabular-nums">{{ fmtDuration(qStats(q).avgMs) }}</b></span>
+                  <span class="text-text-secondary">最近作答 <b class="text-text">{{ qStats(q).last ? fmtDate(qStats(q).last) : '—' }}</b></span>
+                </div>
               </td>
             </tr>
             </template>
@@ -445,6 +466,52 @@ async function onBatchMove() {
   await moveQuestions([...selected.value])
 }
 
+/**
+ * 行内统计（FE-P1-04）：后端 stats 字段 → 展示用对象。
+ *
+ * `rate` 为 null 表示**没做过**，与「做过但全错（0%）」是两种不同状态：
+ * 前者显示「—」，后者显示「0%」。混成 0% 会让用户误以为自己答错过。
+ */
+function qStats(q) {
+  const st = q?.stats
+  if (!st) return null
+  const attempts = Number(st.attempt_count) || 0
+  const correct = Number(st.correct_count) || 0
+  return {
+    attempts,
+    correct,
+    rate: attempts > 0 ? correct / attempts : null,
+    last: st.last_answered_at || null,
+    avgMs: Number(st.avg_ms) || 0
+  }
+}
+
+/** 正确率配色：未作答用浅灰，及格线 60% 以上绿、以下红（与错题本一致） */
+function rateClass(rate) {
+  if (rate == null) return 'text-muted-light'
+  return rate >= 0.6 ? 'text-success font-600' : 'text-danger font-700'
+}
+
+/** ISO 时间 → `YYYY-MM-DD HH:mm`（无效值给「—」，不显示 Invalid Date） */
+function fmtDate(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** 毫秒 → 人读时长（只用于「做题快慢」感知，不参与判分） */
+function fmtDuration(ms) {
+  const n = Number(ms) || 0
+  if (n <= 0) return '—'
+  const s = n / 1000
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} 秒`
+  const m = Math.floor(s / 60)
+  const rest = Math.round(s % 60)
+  return rest ? `${m} 分 ${rest} 秒` : `${m} 分`
+}
+
 function truncate(s, n) {
   if (!s) return '-'
   return s.length > n ? s.slice(0, n) + '…' : s
@@ -515,6 +582,8 @@ async function fetchList() {
     params.offset = (page.value - 1) * pageSize.value
     params.summary = true
     params.sort = sort.value
+    // FE-P1-04：当前页每行附加统计（后端只对这批 id 走索引点查）
+    params.stats = true
     // 契约：questions_list 经 bridge.unwrap 拆包后固定为 {total, items}
     const data = await list(params)
     total.value = Number(data?.total) || 0

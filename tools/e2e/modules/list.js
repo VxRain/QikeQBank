@@ -114,5 +114,43 @@ export default {
     ok('筛不到时提供清除筛选 CTA', (await page.getByRole('button', { name: '清除筛选' }).count()) === 1)
     await page.getByRole('button', { name: '清除筛选' }).click()
     await flush(page)
+
+    // ── FE-P1-04：单题统计 ──
+    // 断言三件事：① 请求带了 stats:true 且只针对当前页 id；② 有作答的题显示「次数 · 正确率」；
+    // ③ 没做过的题显示「0 · —」而不是「0 · 0%」（两者语义不同，混用会误导用户）。
+    await goto(page, '#/banks')
+    await goto(page, '#/library?bank=bank_default')
+    const statsAsked = await page.evaluate(() => window.__statsAsked || 0)
+    ok('列表请求下发 stats:true', statsAsked > 0, `实际 ${statsAsked} 次`)
+
+    // 「只查当前页」的正确判据：stats 覆盖的 id 数 == 本次实际渲染的行数
+    // （不是 == 页大小：页大小 50 但只有 10 题时，后端只该查这 10 个 id）
+    const statsIds = await page.evaluate(() => window.__statsIds || [])
+    const rowCount = await page.locator('tbody tr').count()
+    ok('stats 只查当前页这批 id', statsIds.length > 0 && statsIds.length === rowCount,
+      `stats 覆盖 ${statsIds.length} 个 id，当前渲染 ${rowCount} 行`)
+
+    const statCol = await page.evaluate(() => {
+      const ths = [...document.querySelectorAll('thead th')]
+      const idx = ths.findIndex((t) => /作答\s*\/\s*正确率/.test(t.textContent))
+      if (idx < 0) return null
+      const cells = [...document.querySelectorAll('tbody tr')].map((tr) => {
+        const td = tr.querySelectorAll('td')[idx]
+        return td ? td.textContent.replace(/\s+/g, ' ').trim() : ''
+      })
+      return { idx, head: ths[idx].textContent.trim(), cells }
+    })
+    ok('表格有「作答 / 正确率」列', statCol !== null && statCol.idx > 0, JSON.stringify(statCol?.head))
+    const cells = statCol?.cells || []
+    ok('有作答记录的题显示「次数 · 正确率」', cells.some((c) => /^3 · 67%$/.test(c)), cells.slice(0, 6).join(' / '))
+    ok('做过但全错的题显示 0%', cells.some((c) => /^1 · 0%$/.test(c)), cells.slice(0, 6).join(' / '))
+    ok('没做过的题显示「0 · —」而非「0 · 0%」', cells.some((c) => /^0 · —$/.test(c)), cells.slice(0, 6).join(' / '))
+
+    // 展开预览行：完整四项（含平均用时与最近作答）
+    await page.locator('tbody tr').first().getByRole('button', { name: '预览' }).click()
+    await flush(page)
+    const previewBody = await page.locator('tbody').innerText()
+    ok('展开行显示平均用时', /平均用时/.test(previewBody), previewBody.replace(/\n/g, ' | ').slice(0, 200))
+    ok('展开行显示最近作答', /最近作答/.test(previewBody), previewBody.replace(/\n/g, ' | ').slice(0, 200))
   }
 }
