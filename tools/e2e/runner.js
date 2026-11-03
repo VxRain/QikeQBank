@@ -50,7 +50,7 @@ export const MODULE_BASELINE = {
   // list 21 → 29：FE-P1-04 单题统计 8 条（stats 下发 / 只查当前页 / 三种展示 / 展开四项）
   list: 29,
   batch: 15,
-  form: 36,
+  form: 42,
   practice: 8,
   review: 18,
   exam: 20,

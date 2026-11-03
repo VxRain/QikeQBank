@@ -58,6 +58,87 @@ export function nextChildId(children, seed) {
 }
 
 /**
+ * 根据拖拽指针位置算出「应该插到第几位」。
+ *
+ * ── 为什么不依赖 HTML5 DnD 的 drop 目标 ──
+ * 原生 DnD 只能靠 `drop` 事件的 target 判定落点，这要求指针**恰好落在**某张卡片上。
+ * 子题卡片带题干/选项/解析三个编辑器，实测单卡 856~1227px > 1024 最小窗可视高 768px，
+ * 于是：拖一行距离仍在同一张卡内 → `from === to` → 看起来「拖了没反应」；
+ * 拖到卡片间隙/页面空白 → 没有任何元素接收 drop → 同样静默失败。
+ * 改为按坐标算落点，只要指针在子题区域内就一定能算出目标位。
+ *
+ * 算法：指针每越过一条**卡片中线**，插入位就前进一位（与逐行拖拽的直觉一致）。
+ *
+ * 约定：`pointerY` 与 `tops` 必须**同一坐标系**。调用方统一用视口坐标
+ * （`clientY` 配 `getBoundingClientRect`），因为自动滚动会同时改变两者、
+ * 保持可比；混用视口/文档坐标会让滚动方向与插入位方向相反。
+ *
+ * @param {number} pointerY 指针 y（与 tops 同坐标系）
+ * @param {number[]} tops 每张卡片的中线 y（同样取视口坐标）
+ * @returns {number} 插入位（0..tops.length，非整数输入返回 -1）
+ */
+export function insertionIndexFromY(pointerY, tops) {
+  if (!Number.isFinite(pointerY)) return -1
+  const mids = Array.isArray(tops) ? tops : []
+  let idx = 0
+  for (const m of mids) {
+    if (!Number.isFinite(m)) continue
+    if (pointerY > m) idx += 1
+  }
+  return idx
+}
+
+/**
+ * 把「插入位」换算成 `moveChild` 需要的 to 下标。
+ *
+ * 两者的差别是「移走源元素后，插入位会整体前移一位」：
+ *   从 0 插到末尾（插入位 3）→ 实际 to 应该是 length-1 = 2。
+ * 直接拿插入位当 to 会越界（moveItem 返回 null），表现为拖到末尾无效。
+ *
+ * @param {number} from 源下标
+ * @param {number} insertAt 插入位（来自 insertionIndexFromY）
+ * @param {number} total 元素总数
+ * @returns {number} moveChild 的 to；无需移动（插入位等于原位）返回 from
+ */
+export function insertIndexToMoveTarget(from, insertAt, total) {
+  if (!Number.isInteger(from) || !Number.isInteger(insertAt) || !Number.isInteger(total)) return from
+  if (total <= 0) return from
+  const clamped = Math.min(Math.max(insertAt, 0), total)
+  // 插入位在源自身之前或紧接自身之后 → 视为原地
+  if (clamped === from || clamped === from + 1) return from
+  return clamped > from ? clamped - 1 : clamped
+}
+
+/**
+ * 拖到子题区域上/下边缘时该不该滚动、滚多少。
+ *
+ * 卡片高于视口时，用户从第 1 题拖到第 3 题必然要滚动。原生 DnD 的自动滚动
+ * 在这个页面上会失控（实测从 scrollY 138 冲到 3288，目标区块被甩出视口），
+ * 所以自己算：靠近边缘才滚，且速度随靠近程度递增（0..1 线性）。
+ *
+ * @param {number} pointerY
+ * @param {number} top 可视区上沿
+ * @param {number} bottom 可视区下沿
+ * @param {number} maxSpeed 每帧最大滚动像素（16ms 一帧 → 60px/帧 ≈ 3750px/s，
+ *   足够在 1s 内跨过一张 1227px 的卡片；太慢会让用户以为拖不动）
+ * @returns {number} 正数向下、负数向上、0 不滚
+ */
+export function edgeScrollDelta(pointerY, top, bottom, maxSpeed = 60) {
+  if (![pointerY, top, bottom, maxSpeed].every(Number.isFinite)) return 0
+  if (bottom <= top) return 0
+  const zone = Math.min(120, Math.max(40, (bottom - top) * 0.18))
+  if (pointerY < top + zone) {
+    const k = Math.min(1, Math.max(0, (top + zone - pointerY) / zone))
+    return -Math.round(maxSpeed * k)
+  }
+  if (pointerY > bottom - zone) {
+    const k = Math.min(1, Math.max(0, (pointerY - (bottom - zone)) / zone))
+    return Math.round(maxSpeed * k)
+  }
+  return 0
+}
+
+/**
  * 新增子题时前端要不要自己发号？——只有题目**已持久化**（有 id）才发。
  *
  * 两种情形必须区别对待，否则两种错都会静默发生：

@@ -111,45 +111,67 @@ export default {
     // 题干按设置复用：keepContentOnTypeChange 默认开 → 已填文字不能丢
     ok('改题型后已填题干不丢', /要保留的题干/.test(afterType))
 
-    // 拖拽手柄必须真的能拖（不是只挂了 draggable 属性）。
-    // 原生 HTML5 DnD 要求**目标在视口内**：子题卡片带选项编辑器，三张卡总高 >3600px，
-    // 默认 1280×720 的视口里放不下，落点会被裁到视口外 → drop 不触发（实测失败）。
-    // 所以这条用例临时加高视口，拖完再改回来。
+    // ══ 拖拽排序（按真实最小窗 1024×768 验证）══
+    //
+    // 这块前后翻车三次，教训写在这里免得再走回头路：
+    // ① 首版把视口调到 4000px 高让三张卡硬塞进一屏 —— 那个尺寸实际不存在，
+    //    掩盖了「原生 DnD 在本页面根本拖不动」的缺陷。
+    // ② 改用 pointer 自实现后仍不好用：单卡 1227px，必须拖过卡片中线（614px）才换位，
+    //    实测盲区 280px —— 按下后拖半天屏幕毫无变化。
+    // ③ 现在拖拽时把子题折叠成一行（65px），盲区降到 20px，无需滚动即可跨题。
+    //
+    // 所以断言必须覆盖「折叠」这件事本身：不折叠就该红。
     const viewportBefore = page.viewportSize()
-    await page.setViewportSize({ width: 1200, height: 4000 })
+    await page.setViewportSize({ width: 1024, height: 768 })
     await flush(page)
-    const boxes = await childCards.evaluateAll((els) => els.map((e) => {
-      const r = e.getBoundingClientRect()
-      return { y: Math.round(r.y), h: Math.round(r.height) }
-    }))
-    const allVisible = boxes.every((b) => b.y >= 0 && b.y + b.h <= 4000)
-    ok('加高视口后三张子题卡均可见（拖拽前提）', allVisible, JSON.stringify(boxes))
-    // 基准必须在拖拽前一刻取：前面改过题干、也在上/下移之间来回，早先的快照已失效
+    const hBefore = await childCards.first().evaluate((e) => Math.round(e.getBoundingClientRect().height))
+    ok('拖拽前子题卡是完整高度（含三个编辑器）', hBefore > 800, `${hBefore}px`)
     const beforeDrag = await childStems()
-    const handleBox = await page.locator('[title="拖拽调整顺序"]').first().boundingBox()
-    const targetBox = await childCards.nth(2).boundingBox()
+    const handle = page.locator('[title="拖拽调整顺序"]').first()
+    await handle.scrollIntoViewIfNeeded()
+    await flush(page)
+    const handleBox = await handle.boundingBox()
     await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
     await page.mouse.down()
-    // 先小幅移动触发 dragstart（浏览器需要位移才认定开始拖）
-    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 15, { steps: 4 })
-    await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + 60, { steps: 20 })
     await flush(page)
+    // 折叠：卡片变矮，且全部子题同屏（这是「拖拽体感」的关键，不折叠则拖不动）
+    const hDuring = await childCards.first().evaluate((e) => Math.round(e.getBoundingClientRect().height))
+    ok('拖拽中卡片折叠成一行（盲区从 280px 降到 20px）', hDuring < 120, `${hDuring}px`)
+    const visibleDuring = await childCards.evaluateAll((els) =>
+      els.every((e) => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= 768 }))
+    ok('折叠后三张子题卡全部同屏（无需滚动即可跨题）', visibleDuring)
+    ok('拖拽中源卡片变淡（表明进入了拖拽态）',
+      (await childCards.first().evaluate((e) => e.className.includes('opacity-40'))))
+    // 拖到第 3 张卡**中线以下**才判定为「插到它后面」（越过中线才前进一位的规则）
+    const box3 = await childCards.nth(2).boundingBox()
+    await page.mouse.move(handleBox.x + handleBox.width / 2, box3.y + box3.height - 4, { steps: 12 })
+    await flush(page)
+    ok('拖拽中显示插入位指示线', (await page.locator('.bg-primary.h-\\[2px\\]').count()) > 0)
     await page.mouse.up()
     await flush(page)
     const dragged = await childStems()
-    ok('拖拽真的改动了子题顺序（第 1 个拖到第 3 位）',
-      dragged[2] === beforeDrag[0] && dragged[0] === beforeDrag[1] && dragged[1] === beforeDrag[2],
+    ok('拖拽真的改动了子题顺序（第 1 个拖到末尾）',
+      dragged.length === 3 && dragged[2] === beforeDrag[0] && dragged[0] === beforeDrag[1],
       `${JSON.stringify(beforeDrag)} -> ${JSON.stringify(dragged)}`)
+    const hAfter = await childCards.first().evaluate((e) => Math.round(e.getBoundingClientRect().height))
+    ok('松手后卡片恢复完整高度', hAfter > 800, `${hAfter}px`)
     ok('拖拽后子题数量不变', dragged.length === 3, `${dragged.length}`)
-    await page.setViewportSize(viewportBefore)
-    await flush(page)
     // 拖完把顺序还原（后面的删除用例断言「删除子题 N」编号，依赖初始顺序）
-    await ups.nth(2).click()
+    await page.getByRole('button', { name: '上移子题 3' }).click()
     await flush(page)
-    await ups.nth(1).click()
+    await page.getByRole('button', { name: '上移子题 2' }).click()
     await flush(page)
     ok('拖拽后可用上移按钮还原顺序', JSON.stringify(await childStems()) === JSON.stringify(beforeDrag),
       JSON.stringify(await childStems()))
+    // 单击手柄不拖：顺序不变（也不能把卡片弄成別的状态）
+    const h2 = await page.locator('[title="拖拽调整顺序"]').first().boundingBox()
+    await page.mouse.move(h2.x + h2.width / 2, h2.y + h2.height / 2)
+    await page.mouse.down()
+    await page.mouse.up()
+    await flush(page)
+    ok('单击手柄不拖不改顺序', JSON.stringify(await childStems()) === JSON.stringify(beforeDrag))
+    await page.setViewportSize(viewportBefore)
+    await flush(page)
 
     // 最后一个子题不允许删除（否则留下点不进去的空材料题）
     // 用 aria-label 限定：子题卡片里每个选项行也有一个「删除」按钮，按名字取会一次命中 5 个

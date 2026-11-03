@@ -15,7 +15,8 @@ import assert from 'node:assert/strict'
 const { moveItem } = await import('../../src/utils/arrayMove.js')
 const {
   childIdSeed, childIdForAppend, dedupeChildIds, nextChildId,
-  moveChild, moveChildUp, moveChildDown, canMoveChild, removeChildAt
+  moveChild, moveChildUp, moveChildDown, canMoveChild, removeChildAt,
+  insertionIndexFromY, insertIndexToMoveTarget, edgeScrollDelta
 } = await import('../../src/utils/materialChildren.js')
 const { moveId } = await import('../../src/stores/banksView.js')
 
@@ -234,5 +235,121 @@ describe('removeChildAt：拒绝删掉最后一个子题', () => {
     const src = [child(1), child(2)]
     removeChildAt(src, 0)
     assert.equal(src.length, 2)
+  })
+})
+
+describe('insertionIndexFromY：按坐标算落点（不依赖 drop 目标）', () => {
+  // 三张卡中线分别在 100 / 300 / 500
+  const tops = [100, 300, 500]
+
+  test('指针在最上方 → 插到第 0 位', () => {
+    assert.equal(insertionIndexFromY(0, tops), 0)
+    assert.equal(insertionIndexFromY(99, tops), 0)
+  })
+
+  test('越过前 n 条中线 → 插入位 = n', () => {
+    assert.equal(insertionIndexFromY(101, tops), 1)
+    assert.equal(insertionIndexFromY(300, tops), 1) // 恰在中线上算未越过
+    assert.equal(insertionIndexFromY(301, tops), 2)
+    assert.equal(insertionIndexFromY(999, tops), 3)
+  })
+
+  test('空列表 / 非法输入不崩', () => {
+    assert.equal(insertionIndexFromY(100, []), 0)
+    assert.equal(insertionIndexFromY(NaN, tops), -1)
+    assert.equal(insertionIndexFromY(100, null), 0)
+  })
+
+  test('中线里有脏值不会整体失效', () => {
+    assert.equal(insertionIndexFromY(400, [100, NaN, 300]), 2)
+  })
+
+  test('同一坐标系下，滚动让中线经过指针 → 插入位随之推进', () => {
+    // 模拟「指针固定在视口底部 740，靠自动滚动把后面的卡片中线带上来」
+    const pointer = 740
+    const scrollSteps = [
+      [1100, 2300, 3500], // 刚开始：三条中线都还在下方
+      [700, 1900, 3100],  // 滚过第一张的中线
+      [-500, 700, 1900],  // 滚过第二张
+      [-1700, -500, 700]  // 滚过第三张
+    ]
+    const got = scrollSteps.map((mids) => insertionIndexFromY(pointer, mids))
+    assert.deepEqual(got, [0, 1, 2, 3])
+    // 单调不减，且不越界：这是「拖拽能真的把元素一路带到末尾」的形式化表达
+    for (let i = 1; i < got.length; i++) assert.ok(got[i] >= got[i - 1])
+    assert.ok(got.every((g) => g >= 0 && g <= 3))
+  })
+})
+
+describe('insertIndexToMoveTarget：插入位 → moveChild 的 to', () => {
+  test('向后拖要减 1（移走源元素后插入位前移）', () => {
+    // 3 个元素，从 0 拖到最末：插入位 3 → to 2
+    assert.equal(insertIndexToMoveTarget(0, 3, 3), 2)
+    assert.equal(insertIndexToMoveTarget(0, 2, 3), 1)
+    assert.equal(insertIndexToMoveTarget(1, 3, 3), 2)
+  })
+
+  test('向前拖直接就是目标位', () => {
+    assert.equal(insertIndexToMoveTarget(2, 0, 3), 0)
+    assert.equal(insertIndexToMoveTarget(2, 1, 3), 1)
+  })
+
+  test('插入位等于原位/紧跟原位 → 视为原地（from === to 时 moveChild 返回 null）', () => {
+    assert.equal(insertIndexToMoveTarget(1, 1, 3), 1)
+    assert.equal(insertIndexToMoveTarget(1, 2, 3), 1)
+  })
+
+  test('越界插入位被夹紧，不产生非法下标', () => {
+    assert.equal(insertIndexToMoveTarget(0, 99, 3), 2)
+    assert.equal(insertIndexToMoveTarget(2, -5, 3), 0)
+  })
+
+  test('非法入参原样返回 from（调用方据此跳过 emitUpdate）', () => {
+    assert.equal(insertIndexToMoveTarget(NaN, 1, 3), NaN)
+    assert.equal(insertIndexToMoveTarget(0, 1, 0), 0)
+  })
+
+  test('与 moveChild 串起来：各位置组合都能得到预期顺序', () => {
+    const src = [child(1), child(2), child(3)]
+    // 把第 1 个拖到末尾（插入位 3）
+    const t1 = insertIndexToMoveTarget(0, 3, 3)
+    assert.deepEqual(moveChild(src, 0, t1).map(textOf), ['子题2', '子题3', '子题1'])
+    // 把第 3 个拖到开头（插入位 0）
+    const t2 = insertIndexToMoveTarget(2, 0, 3)
+    assert.deepEqual(moveChild(src, 2, t2).map(textOf), ['子题3', '子题1', '子题2'])
+    // 把第 1 个拖到中间（插入位 2 → to 1）
+    const t3 = insertIndexToMoveTarget(0, 2, 3)
+    assert.deepEqual(moveChild(src, 0, t3).map(textOf), ['子题2', '子题1', '子题3'])
+  })
+})
+
+describe('edgeScrollDelta：边缘自动滚动', () => {
+  test('指针在中间不滚', () => {
+    assert.equal(edgeScrollDelta(400, 0, 800), 0)
+  })
+
+  test('靠近上沿向上滚，靠近下沿向下滚', () => {
+    assert.ok(edgeScrollDelta(10, 0, 800) < 0)
+    assert.ok(edgeScrollDelta(790, 0, 800) > 0)
+  })
+
+  test('越靠近边缘滚得越快', () => {
+    const near = Math.abs(edgeScrollDelta(118, 0, 800))
+    const far = Math.abs(edgeScrollDelta(20, 0, 800))
+    assert.ok(far > near, `far=${far} near=${near}`)
+  })
+
+  test('不超过 maxSpeed', () => {
+    for (const y of [0, 5, 795, 800]) {
+      assert.ok(Math.abs(edgeScrollDelta(y, 0, 800, 22)) <= 22)
+    }
+    // 默认速度 60/帧：一张 1227px 的卡片约 0.33s 滚完（1s 内可跨一张卡）
+    assert.equal(Math.abs(edgeScrollDelta(0, 0, 800)), 60)
+  })
+
+  test('非法/退化输入返回 0', () => {
+    assert.equal(edgeScrollDelta(NaN, 0, 800), 0)
+    assert.equal(edgeScrollDelta(400, 800, 800), 0)
+    assert.equal(edgeScrollDelta(400, 800, 0), 0)
   })
 })
