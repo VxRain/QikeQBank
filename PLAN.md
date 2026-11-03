@@ -581,6 +581,7 @@ export function persistBankFilter(page, id)
   | `wrong` | 错题本：搜索 / 排序 / 统计 / 移出规则 | 22 | ~1.0s |
   | `search` | 全局搜索：命令面板 / 分组 / 键盘 / 跨库查看全部 | 33 | ~4.0s |
   | `header` | 顶栏：窄窗（含 1024 最小窗）不错乱 / 不裁切 | 54 | ~0.8s |
+  | `settings` | 设置：恢复默认（应用内确认）/ 快捷键入口让位 | 16 | ~2.7s |
   - **改了哪个页面跑哪个模块**（如 `pnpm test:e2e:wrong`，~1.6s）——这是默认动作；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e`（**实测 24.4s / 284 条**）只在提交前 / 发版前 / 真跨模块改动时跑。
   - **代码结构（2026-11 拆分，原 1818 行单体）**：`tools/e2e-frontend.mjs` 现在只是驱动器（装载 / dev server / 浏览器 / 汇总，约 280 行），其余按职责分开：
     `tools/e2e/mock.js`（mock IPC）、`tools/e2e/helpers.js`（flush / requireRoute / goto / waitGone 等等待与就绪）、`tools/e2e/runner.js`（断言记录器 + 基准数 + 单模块执行）、`tools/e2e/modules/<id>.js`（每页一个模块，`export default { id, label, owns, run }`）。

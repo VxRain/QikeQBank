@@ -27,7 +27,7 @@
 - 验证门禁（默认档，每改必跑）：`pnpm build`、`cargo test` 全绿、`pnpm lint`（cargo clippy `-D warnings`，0 警告，新增警告即失败）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server（Vite 的 UnoCSS 插件不热重载配置：新 shortcut 解析不到 CSS → 页面变浏览器默认样式，而 DOM 看着正常；e2e 会复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e）。
 - **E2E 分级（禁止「改一行跑全量」）**：`tools/e2e-frontend.mjs` 支持按模块跑（结构见 `PLAN.md §8`：入口只做装载/汇总，`tools/e2e/modules/<id>.js` 一页一个模块），模块名与 `docs/frontend-product-todo.md §0.3`、`PLAN.md §8` 三处必须逐字一致：
-  `list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本) / `search`(全局搜索) / `header`(顶栏布局)。
+  `list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本) / `search`(全局搜索) / `header`(顶栏布局) / `settings`(设置)。
   - **改了哪个页面就跑哪个模块**：`pnpm test:e2e:<模块>`，如 `pnpm test:e2e:wrong`（约 2s）——这是默认动作。
   - 不确定影响面：`pnpm test:e2e:changed`（按 git 改动自动选模块）。
   - **全量 `pnpm test:e2e`（约 16s）只在提交前 / 发版前 / 真跨模块改动时跑**，不作为每次改动的前置门禁。

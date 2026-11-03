@@ -171,7 +171,7 @@ e2e 284 条全绿 24.4s（wrong 18→22）。
 - 题库多选（全选或都不选等价于「全部题库」，不是「一个都不选」）
 - 按题型筛选、稍后搁置
 
-### [ ] FE-P1-10 设置增强
+### [x] FE-P1-10 设置增强
 
 - `stores/settings.js` 加 `DEFAULTS`（`Object.freeze`），
   reactive 初值与「恢复默认」**共用同一份**——两处各写一份字面量会让
@@ -181,6 +181,51 @@ e2e 284 条全绿 24.4s（wrong 18→22）。
 
 **不做**：导出 / 导入设置（原实现依赖 `banks_export_md` 落盘通道，
 该命令在「不迁移」范围内；为它单独加一条只为导出设置服务的落盘命令不值得）
+
+**完成记录（2026-11-04）**
+
+按上面两条落地，外加**快捷键入口**（复用现成的 `ShortcutsDialog`，几行代码，
+不新写一份快捷键清单——两处清单分叉是必然的漂移）。
+
+**三个真实缺陷（都不是测试写错，是功能在浏览器里就是坏的）**：
+
+① **循环依赖**：`settings.js` 要调 `clearBankFilters()`，我 import 了
+   `bank.js`，但 `bank.js` 本来就 import `settings.js`。表现是点「恢复默认」
+   直接抛 `clearBankFilters is not defined` —— **只在恢复默认这条路径上炸**，
+   build / lint / 单测全绿。现在 `settings.js` 自己持有一份实现，两处都写了
+   注释说明为什么不能反向 import。
+
+② **`Object.assign(settings, DEFAULTS)` 会把冻结对象塞进 store**：
+   `DEFAULTS.fsrs` 是 `Object.freeze` 的，整体赋值后 `settings.fsrs.x = …`
+   静默失败（严格模式抛错），表现是「改了复习参数但不生效」，同样零报错。
+   必须逐字段写，数组还要 `[...]` 拷贝。
+
+③ **e2e 用 `import('/src/stores/settings.js')` 读到的是另一份实例**：
+   Vite 给应用侧模块 URL 加了 `?t=` HMR 后缀，`/src/stores/...` 与
+   `@/stores/...` 被解析成两个模块，各有自己的 reactive。断言「点了恢复默认
+   值应该变」时读的是镜像那份，永远旧值。改成读界面（开关的 `aria-checked`、
+   下拉的 `value`）——既绕开这个坑，也更符合「e2e 只测用户能看见的东西」。
+
+另外记一笔：设置弹层**只渲染当前分类的行**，切分类是整批销毁+重建，
+`flush` 后立刻定位会撞空档（等满 30s 超时）。e2e 里用 `goSection()` 先切分类
+再读，并用 `waitGone` 等 Transition 离场。
+
+**新增 e2e 模块 `settings`**（16 条）：设置弹层此前没有任何模块覆盖
+（`header` 只管顶栏窄窗布局），而「恢复默认」是跨组件链路
+（弹层 → store → 各页面读数），单测证明不了。守卫内容：确认框是应用内的
+（监听原生 dialog 事件断言从未发生）、取消不改动、确认后逐项回默认、
+快捷键入口让位、1024 最小窗底栏不溢出。
+
+**变异验证**（5 个方向）：
+- `reset` 改用 `Object.assign` → 单测 4 红
+- `DEFAULTS` 少一个键 → 单测 2 红（**这个是第一轮漏过的**：初版只遍历
+  `DEFAULTS` 的键，「store 有一项但 DEFAULTS 遗漏」抓不到，补了反向键集合断言）
+- `reset` 不拷贝数组（共享冻结数组）→ 单测 1 红
+- 恢复默认改成原生 `confirm` → e2e 2 红
+- `reset` 漏掉 fsrs 字段 → 单测 2 红 + e2e 1 红
+
+门禁：build ✓ / 单测 476（+11）✓ / cargo 158 ✓ / clippy 0 警告 / smoke PASS /
+e2e 300 条全绿 25.9s（新增 settings 16 条）
 
 ### [ ] FE-P1-11 可访问性（`composables/useDialogA11y.js`）
 

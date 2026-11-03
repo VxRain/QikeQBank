@@ -58,7 +58,7 @@
     <SearchPalette v-model="searchOpen" @open-settings="onOpenSettingsFromSearch" />
     <ShortcutsDialog v-model="showShortcuts" @open-search="openSearch" />
 
-    <SettingsDialog ref="settingsRef" v-model="showSettings" />
+    <SettingsDialog ref="settingsRef" v-model="showSettings" @open-shortcuts="openShortcutsFromSettings" />
   </div>
 </template>
 
@@ -102,6 +102,16 @@ function openSearch() {
 function onOpenSettingsFromSearch(payload) {
   showSettings.value = true
   settingsRef.value?.focusItem?.(payload?.sectionId, payload?.query)
+}
+
+/**
+ * 从设置弹层打开快捷键帮助（FE-P1-10）。
+ * 复用同一个 ShortcutsDialog（与 `?` 入口共享组件），不新写一份快捷键清单——
+ * 两处清单分叉是必然的漂移。先收起设置，避免两层弹层叠加时焦点跳不出来。
+ */
+function openShortcutsFromSettings() {
+  showSettings.value = false
+  showShortcuts.value = true
 }
 
 /**

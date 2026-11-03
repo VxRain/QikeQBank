@@ -59,7 +59,9 @@ export const MODULE_BASELINE = {
   banks: 38,
   search: 33,
   // 7 宽度 × 7 + 1024 两条 + 1280 一条 + 动态缩放 1 条 + harness 的 pageerror 1 条 = 54
-  header: 54
+  header: 54,
+  // FE-P1-10：恢复默认（确认/取消/回默认 4 条）+ 快捷键入口让位 2 条 + 1024 溢出 2 条 + 前置 1 条 + 底栏 1 条
+  settings: 16
 }
 
 /**

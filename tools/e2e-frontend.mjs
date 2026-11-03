@@ -51,7 +51,7 @@ const BASE = process.env.BASE_URL || `http://127.0.0.1:${PORT}`
  * 「跑得慢、最容易受跨模块影响的排后面」：全量跑时若前面就红了能更早看到，
  * 单模块跑不受影响。
  */
-const MODULE_IDS = ['list', 'batch', 'form', 'practice', 'review', 'exam', 'wrong', 'search', 'banks', 'header']
+const MODULE_IDS = ['list', 'batch', 'form', 'practice', 'review', 'exam', 'wrong', 'search', 'banks', 'header', 'settings']
 
 const MODULES = []
 for (const id of MODULE_IDS) {

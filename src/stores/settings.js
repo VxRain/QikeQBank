@@ -5,6 +5,10 @@ import { leaveAfterOf } from '../utils/wrongRules.js'
 // 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。
 // localStorage 仅作写透缓存，DB 为准（同步地基 §6）。
 const KEY = 'qbank.settings.v1'
+// 与 stores/bank.js 的 FILTER_KEY_PREFIX 必须是同一个字符串。
+// 为什么不直接 import clearBankFilters：bank.js 已 import 本模块（读 rememberBankFilter），
+// 反向 import 会成环，表现为「恢复默认」时 clearBankFilters is not defined。
+const BANK_FILTER_KEY_PREFIX = 'qbank.bankFilter.'
 
 // 进库（同步）flat keys
 const SYNC_KEYS = [
@@ -26,7 +30,7 @@ function load() {
 }
 
 // 自动下一题停留时长归一化：非法回退 1200ms，钳制在 300–5000ms
-function normalizeDelay(v) {
+export function normalizeDelay(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 1200
   return Math.min(5000, Math.max(300, Math.round(n)))
@@ -81,28 +85,56 @@ export function normalizePracticeScope(v) {
 
 const saved = load()
 
+/**
+ * 设置默认值（FE-P1-10）：**唯一**的默认值定义。
+ *
+ * reactive 初值与「恢复默认」共用这一份，避免两处漂移：如果初值里写一份字面量、
+ * 重置函数里再写一份，改了初值却忘了改重置逻辑，用户点「恢复默认」后会得到
+ * 一个**既不是旧值也不是新默认的第三种状态**——而且没有任何报错。
+ * 冻结是因为它是「定义」而不是状态：任何地方改动它都会污染所有人。
+ */
+export const DEFAULTS = Object.freeze({
+  keepContentOnTypeChange: true,
+  autoNextOnCorrect: false,
+  autoNextDelayMs: 1200,
+  rememberBankFilter: false,
+  wrongLeaveAfterCorrect: 1,
+  autoSyncEnabled: false,
+  autoSyncIntervalMin: 30,
+
+  fsrs: Object.freeze({
+    requestRetention: 0.9,
+    maximumInterval: 36500,
+    learningSteps: Object.freeze(['1m', '10m']),
+    relearningSteps: Object.freeze(['10m']),
+    enableFuzz: false,
+    practiceScope: 'all'
+  })
+})
+
 export const settings = reactive({
+  // 初值统一走 DEFAULTS（与「恢复默认」同源，见上方注释）
   // 切换试题类型时尽量保持内容完整性（选项/答案/解析复用而非重置），默认启用
-  keepContentOnTypeChange: saved.keepContentOnTypeChange ?? true,
+  keepContentOnTypeChange: saved.keepContentOnTypeChange ?? DEFAULTS.keepContentOnTypeChange,
   // 刷题模式答对后自动下一题（短暂停留展示结果），默认关闭
-  autoNextOnCorrect: saved.autoNextOnCorrect ?? false,
-  // 自动下一题前的停留时长（毫秒），默认 1200
+  autoNextOnCorrect: saved.autoNextOnCorrect ?? DEFAULTS.autoNextOnCorrect,
+  // 自动下一题前的停留时长（毫秒）
   autoNextDelayMs: normalizeDelay(saved.autoNextDelayMs),
   // 各页题库下拉是否记住上次选择；关闭则每次默认全部题库
-  rememberBankFilter: saved.rememberBankFilter ?? false,
-  // 错题本：连续答对多少次后自动移出，默认 1（进库同步）
+  rememberBankFilter: saved.rememberBankFilter ?? DEFAULTS.rememberBankFilter,
+  // 错题本：连续答对多少次后自动移出（进库同步）
   wrongLeaveAfterCorrect: leaveAfterOf(saved.wrongLeaveAfterCorrect),
   // 自动同步：定时在后台与云端合并（设备本机行为，不进 SYNC_KEYS）
-  autoSyncEnabled: saved.autoSyncEnabled ?? false,
-  // 自动同步间隔（分钟），默认 30
+  autoSyncEnabled: saved.autoSyncEnabled ?? DEFAULTS.autoSyncEnabled,
+  // 自动同步间隔（分钟）
   autoSyncIntervalMin: normalizeSyncInterval(saved.autoSyncIntervalMin),
   // FSRS 间隔复习（缺键老设置自动走默认；数组缺省由 normalizeSteps 兜底）（进库同步）
   fsrs: {
     requestRetention: normalizeRetention(saved.fsrs?.requestRetention),
     maximumInterval: normalizeMaxInterval(saved.fsrs?.maximumInterval),
-    learningSteps: normalizeSteps(saved.fsrs?.learningSteps, ['1m', '10m']),
-    relearningSteps: normalizeSteps(saved.fsrs?.relearningSteps, ['10m']),
-    enableFuzz: saved.fsrs?.enableFuzz ?? false,
+    learningSteps: normalizeSteps(saved.fsrs?.learningSteps, [...DEFAULTS.fsrs.learningSteps]),
+    relearningSteps: normalizeSteps(saved.fsrs?.relearningSteps, [...DEFAULTS.fsrs.relearningSteps]),
+    enableFuzz: saved.fsrs?.enableFuzz ?? DEFAULTS.fsrs.enableFuzz,
     practiceScope: normalizePracticeScope(saved.fsrs?.practiceScope),
   },
 })
@@ -220,6 +252,54 @@ watch(
   },
   { deep: true }
 )
+
+// ── FE-P1-10 恢复默认 ──
+
+/** 清掉各页已记的题库筛选（口径与 stores/bank.js::clearBankFilters 一致） */
+export function clearBankFilterCache() {
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(BANK_FILTER_KEY_PREFIX))
+      .forEach((k) => localStorage.removeItem(k))
+  } catch {
+    /* 忽略持久化失败 */
+  }
+}
+
+/**
+ * 恢复默认设置。
+ *
+ * 「默认」必须是**这一份 DEFAULTS**，而不是「清 localStorage 后重载」：
+ * 后者会连带清掉自动同步等本机状态，而且依赖刷新（在设置弹层里体验很差）。
+ * 只重置偏好，**不动题库 / 作答记录 / S3 密钥**——那些不是「设置」，
+ * 清掉是数据丢失而不是恢复默认。
+ *
+ * 逐字段写而不是 `Object.assign(settings, DEFAULTS)`：
+ * 后者会把 `fsrs` 整体替换成冻结对象，之后 `settings.fsrs.x = …` 静默失败
+ * （严格模式下抛错），表现为「改了复习参数但不生效」。
+ *
+ * @returns {string[]} 被重置的键（供调用方做影响面提示）
+ */
+export function resetSettingsToDefault() {
+  const d = DEFAULTS
+  settings.keepContentOnTypeChange = d.keepContentOnTypeChange
+  settings.autoNextOnCorrect = d.autoNextOnCorrect
+  settings.autoNextDelayMs = d.autoNextDelayMs
+  settings.rememberBankFilter = d.rememberBankFilter
+  settings.wrongLeaveAfterCorrect = d.wrongLeaveAfterCorrect
+  settings.autoSyncEnabled = d.autoSyncEnabled
+  settings.autoSyncIntervalMin = d.autoSyncIntervalMin
+  settings.fsrs.requestRetention = d.fsrs.requestRetention
+  settings.fsrs.maximumInterval = d.fsrs.maximumInterval
+  // 数组必须拷贝：DEFAULTS 是冻结的，直接赋引用后 normalizeSteps 的写回会失败
+  settings.fsrs.learningSteps = [...d.fsrs.learningSteps]
+  settings.fsrs.relearningSteps = [...d.fsrs.relearningSteps]
+  settings.fsrs.enableFuzz = d.fsrs.enableFuzz
+  settings.fsrs.practiceScope = d.fsrs.practiceScope
+  // rememberBankFilter 恢复关闭时同样要清掉各页记忆，否则「默认」下仍在用旧筛选
+  clearBankFilterCache()
+  return Object.keys(d)
+}
 
 // 首屏先画本地缓存，后台以 DB 为准覆盖
 hydrateFromDb()

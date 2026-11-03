@@ -35,7 +35,7 @@
 - [ ] `node tools/smoke-test.mjs` 通过
 - [ ] 涉及页面行为：跑对应模块的 `pnpm test:e2e:<模块>`（**默认动作**）；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e` 只在提交前 / 发版前 / 真跨模块改动时跑。浏览器结论必须由脚本证伪，不接受口头「实测通过」
 - [ ] 改动 `uno.config.js` / `uno.config.ts` 后重启 dev server（UnoCSS 不热重载配置，e2e 复用旧 server 也不算验证）
-- 模块名（三处文档必须逐字一致）：`list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本) / `search`(全局搜索) / `header`(顶栏布局)
+- 模块名（三处文档必须逐字一致）：`list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本) / `search`(全局搜索) / `header`(顶栏布局) / `settings`(设置)
 - [ ] 涉及命令签名 / 数据结构：同步更新 `PLAN.md §4/§7` ↔ Rust command ↔ `src/api/*.js`
 - [ ] 涉及表结构：同步更新 `PLAN.md §3` ↔ `src-tauri/src/db/schema.rs` ↔ `tools/` 两脚本（逐字符一致）
 - [ ] 新增交互不出现 `alert/confirm/prompt`，统一走 `src/stores/ui.js`
@@ -100,7 +100,7 @@
 | FE-P1-07 | 模考 / 暂停续考 / 成绩趋势按题库 | M–L | 部分 | [x] |
 | FE-P1-08 | 错题本永不自动移出（导出/行内编辑不做） | S–M | 部分 | [x] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [ ] |
-| FE-P1-10 | 设置增强 | S–M | 部分 | [ ] |
+| FE-P1-10 | 设置增强（默认值同源 / 恢复默认 / 快捷键入口） | S–M | 部分 | [x] |
 | FE-P1-11 | 可访问性与弹层一致性 | S–M | 否 | [ ] |
 | FE-P1-12 | 前端渲染性能 | S | 否 | [ ] |
 
@@ -611,12 +611,42 @@
 - 加「稍后/搁置」与「本轮暂停」。
 - **文件**：`src/views/Review.vue`、`src-tauri/src/db/practice.rs`。
 
-### [ ] FE-P1-10 设置增强
+### [x] FE-P1-10 设置增强
 
-- 「恢复默认设置」；设置导入/导出。
-- 快捷键帮助弹窗（与 FE-P0-08 共用）。
-- S3 同步显示上次同步时间、进度、未同步变更数；冲突计数可展开查看摘要。
-- **文件**：`src/components/settings/*`、`src/components/S3SyncPanel.vue`。
+> **范围**（按迁移台账）：默认值单一来源 + 恢复默认 + 快捷键入口。
+> **不做**：导出 / 导入设置（原实现依赖 `banks_export_md` 落盘通道，
+> 该命令在「不迁移」范围内）、S3 同步详情面板。
+
+**默认值单一来源**
+- `stores/settings.js` 新增 `DEFAULTS`（深度 `Object.freeze`，含 `fsrs` 子对象与数组）。
+- reactive 初值与「恢复默认」共用这一份：两处各写一份字面量，改了初值却忘了重置逻辑，
+  用户点「恢复默认」会得到**既不是旧值也不是新默认的第三种状态**，且零报错。
+
+**恢复默认**
+- 逐字段写回（**不能** `Object.assign(settings, DEFAULTS)`：`fsrs` 是冻结对象，
+  整体赋值后 `settings.fsrs.x = …` 静默失败，表现是「改复习参数不生效」）。
+  数组必须 `[...]` 拷贝，否则往 store 的数组里 push 会改写 `DEFAULTS`。
+- 只重置**偏好**：题库 / 作答记录 / S3 密钥一律不动——那些不是「设置」，
+  清掉是数据丢失而不是恢复默认。文案里明确写出这一点，否则用户不敢点。
+- 二次确认走 `ui.confirmDialog`（铁律①：禁止原生 `confirm`）。
+- 顺带清掉各页记住的题库筛选（`rememberBankFilter` 回默认关闭时仍用旧筛选就不算「默认」）。
+
+**快捷键入口**：设置底栏 → `emit('open-shortcuts')` → `App.vue` 收起设置并打开同一个
+`ShortcutsDialog`（不新写一份快捷键清单，两处清单分叉是必然的漂移）。
+
+**踩到的三个真实缺陷**
+1. **循环依赖**：`settings.js` 直接 import `bank.js` 的 `clearBankFilters`，而
+   `bank.js` 已 import `settings.js`。表现是「恢复默认」抛
+   `clearBankFilters is not defined`——只在那一行路径上炸，build/lint/单测全绿。
+2. **冻结对象进 store**：见上（`Object.assign` 那条）。
+3. **e2e 读到镜像模块**：`import('/src/stores/settings.js')` 与组件用的
+   `@/stores/settings.js` 在 Vite 下是两个模块（HMR 后缀不同），各有 reactive 实例。
+   e2e 改为读界面（`aria-checked` / `select.value`），也顺带更符合分工。
+
+**守卫**：单测 11 条（`tests/unit/settings-defaults.test.js`，核心是键集合**双向**一致
+——只查单向会漏掉「store 有一项但 DEFAULTS 遗漏」）；新增 e2e 模块 `settings` 16 条
+（应用内确认、取消不改动、确认后逐项回默认、快捷键让位、1024 底栏不溢出）。
+5 个变异全部被抓。
 
 ### [ ] FE-P1-11 可访问性与弹层一致性
 

@@ -92,10 +92,24 @@
             </div>
           </div>
 
-          <!-- 底栏 -->
-          <footer class="sd-foot">
+          <!-- 底栏（FE-P1-10）：快捷键帮助 / 恢复默认 -->
+          <footer class="sd-foot flex-wrap">
             <span class="sd-foot-note">修改即时生效 · 自动保存</span>
-            <button type="button" class="btn btn-primary" @click="close">完成</button>
+            <span class="flex items-center gap-1.5 flex-wrap ml-auto">
+              <button type="button" class="btn btn-small" title="快捷键帮助（?）" @click="emit('open-shortcuts')">
+                <i class="i-lucide-keyboard" />快捷键
+              </button>
+              <button
+                type="button"
+                class="btn btn-small btn-danger"
+                title="把所有设置恢复为默认值（不影响题库与作答记录）"
+                :disabled="resetting"
+                @click="onReset"
+              >
+                <i class="i-lucide-rotate-ccw" />{{ resetting ? '恢复中…' : '恢复默认' }}
+              </button>
+              <button type="button" class="btn btn-primary" @click="close">完成</button>
+            </span>
           </footer>
         </div>
       </div>
@@ -107,12 +121,13 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import SettingRow from './SettingRow.vue'
 import { SETTINGS_SECTIONS, isItemVisible, matchItem } from './registry.js'
-import { ui } from '@/stores/ui.js'
+import { ui, confirmDialog, toast } from '@/stores/ui.js'
+import { resetSettingsToDefault } from '@/stores/settings.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'open-shortcuts'])
 
 const sections = SETTINGS_SECTIONS
 
@@ -171,6 +186,38 @@ function onInput() {
 
 function close() {
   emit('update:modelValue', false)
+}
+
+// ── FE-P1-10 恢复默认 ──
+/** 字符串 ref 用作 :disabled 时必须显式转布尔（见 vue-boolean-attr 守卫） */
+const resetting = ref(false)
+
+/**
+ * 恢复默认：危险操作，必须二次确认并写明影响面。
+ *
+ * 文案里「题库、作答记录与云端配置都不受影响」不是客套：用户看到「恢复默认」
+ * 第一反应是「会不会把我的题删了」，不说清就不敢点——而这个功能的价值恰恰
+ * 在「参数调乱了想一键回退」，不敢用等于没有。
+ */
+async function onReset() {
+  if (resetting.value) return
+  const ok = await confirmDialog({
+    title: '恢复默认设置',
+    message:
+      '将把所有设置恢复为默认值（含间隔复习参数、错题移出规则、自动同步开关）。\n' +
+      '题库、作答记录与云端配置都不受影响。此操作不可撤销。',
+    okText: '恢复默认',
+    cancelText: '取消',
+    danger: true
+  })
+  if (!ok) return
+  resetting.value = true
+  try {
+    resetSettingsToDefault()
+    toast('已恢复默认设置', 'success')
+  } finally {
+    resetting.value = false
+  }
 }
 
 function onKeydown(e) {
