@@ -23,7 +23,8 @@
     "test:e2e:wrong": "node tools/e2e-frontend.mjs wrong",
     "test:e2e:search": "node tools/e2e-frontend.mjs search",
     "test:e2e:header": "node tools/e2e-frontend.mjs header",
-    "test:e2e:changed": "node tools/e2e-frontend.mjs --changed"
+    "test:e2e:changed": "node tools/e2e-frontend.mjs --changed",
+    "perf:render": "node tools/perf-render.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

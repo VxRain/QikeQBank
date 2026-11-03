@@ -540,6 +540,8 @@ export function persistBankFilter(page, id)
 - **跨语言常量校对**：前后端各有一份「排序白名单」时（`SORT_WHITELIST` / `WRONG_SORT_WHITELIST` ↔ `SORT_KEYS` / `WRONG_SORT_OPTIONS`），单测必须逐字比对两侧键集合，否则会出现「前端写入、后端 Err」的死角。
 - **事务回滚守卫**：批量写命令的测试用临时 `TRIGGER` 制造「写到第 N 条才报错」，断言前 N-1 条的修改被回滚。只测参数校验不改库是不够的——那只验证了预检，没真的开过写事务。
 - **前端 TDZ 守卫**：`const A = ref(B[0].value)` 写在 `const B = [...]` 之前会整页白屏，而 `pnpm build` 与单测都不报。凡有「常量初始化引用另一常量」，补一条声明顺序断言。
+- **前端渲染性能（FE-P1-12）**：`QuestionPreview` 按「渲染输入签名 + asset 代次」记忆已算好的 HTML（上限 100 条 FIFO）；asset 已全解析时走快路，零深拷贝零 IPC。缓存键**必须**含 `assetCacheGen()` —— `assets_gc` 后路径失效，只按签名记忆会一直吐出带死链的旧 HTML。另有 3 条守卫在 `tests/unit/render-perf-guard.test.js`（TDZ 声明顺序 / 键含代次 / 快路条件）。
+  **虚拟滚动：结论是不做**。列表是服务端分页（每页 20 / 50 / 100，后端上限 500），同时在 DOM 的只有一页；实测（2026-11-03，`node tools/perf-render.mjs`）100 行滚动 20 屏 327ms、长任务 0 个；合成 500 行单页布局+首帧 90ms、长任务 0 个；20 图题目 renderDoc 首帧 <0.2ms；10 个 mathBlock 10.4ms。引入虚拟滚动的成本（行高测量、焦点/Tab 顺序重做、与 `content-visibility` 叠加行为不确定）远大于收益。若将来出现「单页 >500 行」或「行内渲染富文本预览」，先用 `tools/perf-render.mjs --json` 复测，出现长任务再上。
 - **前端端到端**：`pnpm test:e2e`（`tools/e2e-frontend.mjs`，Playwright + 注入 `window.__TAURI_INTERNALS__.invoke` mock）。dev server 由脚本自动起或复用已在跑实例（`BASE_URL` 可覆盖）。**浏览器行为必须由这个脚本证伪，不接受口头「实测通过」**。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server：Vite 的 UnoCSS 插件不热重载配置，新 shortcut 解析不到 CSS → 页面变浏览器默认样式而 DOM 看着正常；e2e 复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e。
 - **E2E 分级（禁止「改一行跑全量」）**：单文件按模块过滤，模块名与 `AGENTS.md`、`docs/frontend-product-todo.md §0.3` 三处必须逐字一致。下表的断言数与「耗时」为 **2026-11-03 实测值**（模块自身耗时，不含 node 启动 ~0.6s；全量 226 条 / 10 模块）。改动后请实测刷新，不要按估算填写：

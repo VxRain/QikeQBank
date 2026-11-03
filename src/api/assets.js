@@ -7,8 +7,40 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 const SHA_RE = /^[0-9a-f]{64}$/
 const pathCache = new Map() // sha -> path|null（GC 后由调用方 clearAssetCache）
 
+/**
+ * 缓存代次（FE-P1-12）：每次 clearAssetCache 就 +1。
+ *
+ * 为什么需要它：`QuestionPreview` 会按「渲染输入签名」记忆已算好的 HTML
+ * （多图/大文档重算一次要跑 KaTeX + 字符串拼接，很贵）。但 asset 解析结果并非常量——
+ * `assets_gc` 后路径可能失效，此时**必须**让所有记忆条目一起失效。
+ * 用代次做键前缀是最省事的做法：不用遍历清理，也不会漏掉某个条目。
+ */
+let cacheGen = 0
+
 export function clearAssetCache() {
   pathCache.clear()
+  cacheGen += 1
+}
+
+/** 当前缓存代次（渲染层记忆键的一部分） */
+export function assetCacheGen() {
+  return cacheGen
+}
+
+/** 批量判断 path 是否全部已知（不发 IPC） */
+export function allAssetsResolved(list) {
+  const shas = new Set()
+  collectShas(list, shas)
+  if (!shas.size) return true
+  for (const s of shas) if (!pathCache.has(s)) return false
+  return true
+}
+
+/** 是否含 asset: 引用（不深拷贝、不发 IPC） */
+export function hasAssetRefs(list) {
+  const shas = new Set()
+  collectShas(list, shas)
+  return shas.size > 0
 }
 
 export function isAssetRef(src) {

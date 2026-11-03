@@ -5,7 +5,7 @@
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { renderDoc, renderMaterial, renderOptions } from '@/utils/render.js'
-import { expandQuestions } from '@/api/assets.js'
+import { expandQuestions, hasAssetRefs, allAssetsResolved, assetCacheGen } from '@/api/assets.js'
 
 const props = defineProps({
   question: { type: Object, default: null },
@@ -26,10 +26,56 @@ function compute(q){
 const html = ref('')
 // asset: 引用是异步解析的：解析完再一次性渲染（避免挂载时先算一遍、展开后又算一遍）
 let refreshSeq = 0
-let lastSig = ''
+let lastKey = ''
+
+/**
+ * 渲染结果记忆（FE-P1-12）。
+ *
+ * ── 为什么要缓存 ──
+ * 列表页一页 50 行，每行点「预览」都会挂一个 QuestionPreview；材料题 20 张图时
+ * `renderDoc` 要做 20 次字符串拼接 + KaTeX 排版。用户来回预览同一题、
+ * 或「预览 A → 预览 B → 又预览 A」时，重复计算完全没必要。
+ *
+ * ── 缓存键为什么必须包含 asset 代次 ──
+ * 渲染结果依赖 asset 解析后的 URL。`assets_gc` 后路径可能失效（见 api/assets.js
+ * 的 cacheGen），只按 `signature` 记忆就会一直吐出带死链的旧 HTML。
+ * 把代次拼进键里，清理缓存时自然全量失效，不需要遍历删除。
+ *
+ * ── 为什么有上限 ──
+ * 大文档的 HTML 字符串不小，无界 Map 会随「翻页预览过的题数」一直涨。
+ * 超过 100 条按插入顺序淘汰最旧的（FIFO 而非 LRU：这里没有命中率要求，
+ * FIFO 实现简单，且不会因为「刚看过又刷新」把热点条目踢掉）。
+ *
+ * ── 声明顺序有讲究 ──
+ * `memo` / `lastKey` 必须在下面第一次 `refresh()` **之前**声明。
+ * 曾经把它写在 refresh() 之后，模块初始化时 refresh 访问未初始化的 const
+ * 直接 TDZ 报错 → 整页白屏（且 build 与单测都不报）。
+ */
+const CACHE_LIMIT = 100
+const memo = new Map() // key -> html
+
+function memoKey(sig) {
+  return `${assetCacheGen()}::${sig}`
+}
+
+function memoSet(key, value) {
+  if (memo.size >= CACHE_LIMIT) {
+    // FIFO：Map 保持插入顺序，删第一个即最旧
+    const oldest = memo.keys().next().value
+    if (oldest !== undefined) memo.delete(oldest)
+  }
+  memo.set(key, value)
+}
+
+// 测试与排障用：暴露缓存规模（不在 UI 上展示）
+defineExpose({ cacheSize: () => memo.size })
+
 refresh()
 
-// 渲染输入签名：只取真正影响 HTML 的字段。改分值/难度/标签等不触发整块重渲染（KaTeX 排版不便宜）
+/**
+ * 渲染输入签名：只取真正影响 HTML 的字段。
+ * 改分值/难度/标签等不触发整块重渲染（KaTeX 排版不便宜）。
+ */
 function signature(q) {
   if (!q) return ''
   return JSON.stringify([q.type, q.stem, q.options, q.answer, q.analysis, q.children])
@@ -41,20 +87,33 @@ async function refresh() {
   let src = q
   if (q && q.type) {
     try {
-      // 深拷贝后展开：不碰父组件对象，避免 watch 比对抖动
-      const clone = JSON.parse(JSON.stringify(q))
-      await expandQuestions([clone])
-      if (my !== refreshSeq) return // 后来的刷新已接管，丢弃过期结果
-      src = clone
+      // 快路：asset 全部已解析（最常见）→ 直接用原对象，不深拷贝也不发 IPC。
+      // 深拷贝 + expandQuestions 只在「确有未解析的 asset: 引用」时才需要。
+      if (hasAssetRefs(q) && !allAssetsResolved([q])) {
+        // 深拷贝后展开：不碰父组件对象，避免 watch 比对抖动
+        const clone = JSON.parse(JSON.stringify(q))
+        await expandQuestions([clone])
+        if (my !== refreshSeq) return // 后来的刷新已接管，丢弃过期结果
+        src = clone
+      }
     } catch (e) {
       console.error(e)
     }
   }
   if (my !== refreshSeq) return
   const sig = signature(src)
-  if (sig === lastSig && html.value) return // 渲染输入没变：跳过重算
-  lastSig = sig
-  html.value = compute(src)
+  const key = memoKey(sig)
+  if (key === lastKey && html.value) return // 渲染输入（含 asset 代次）没变：跳过重算
+  const hit = memo.get(key)
+  if (hit !== undefined) {
+    lastKey = key
+    html.value = hit
+    return
+  }
+  lastKey = key
+  const out = compute(src)
+  memoSet(key, out)
+  html.value = out
 }
 let timer = null
 let lastType = props.question?.type
