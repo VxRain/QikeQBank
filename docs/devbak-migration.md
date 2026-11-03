@@ -35,13 +35,20 @@
 
 ## 待迁移（7 项）
 
-### [ ] FE-P1-05 材料子题排序 / 改题型
+### [x] FE-P1-05 材料子题排序 / 改题型 — `bd81056`
 
 - 子题上移/下移（**首末位禁用而非隐藏**，位置不跳动）+ 拖拽手柄，
-  共用 `utils/arrayMove.js::moveItem`
+  共用 `utils/arrayMove.js::moveItem`（`banksView.js::moveId` 同步改为委托）
 - 接通原本是**死代码**的 `onChildTypeChange`，子题可改题型且不丢已填内容
   （`keepContentOnTypeChange` 开启时复用 `preserveTypeChange`，
   关闭时退化为只保留题干）
+- 拖拽放置区扩到整张卡片（原实现要精准丢在 11px 手柄上，实测拖不动）
+
+**与 devBak 的偏离（重要）**：devBak 排序后**重编**子题 id，本次**不重编**。
+理由：`detail.child_id` 靠 id 定位子题，重编会让旧记录的 `_c3` 改指另一道题，
+历史回看张冠李戴。id 随内容一起走才对。
+另修一处 devBak 未暴露的真 bug：新建题原也会自造 `q_c1`，而后端
+`ensure_child_ids` 见 id 已存在就不动 → 所有新建材料题子题跨题撞号。
 
 **不做**：子题复制、单题「另存为副本」（`asNewCopy`）
 
@@ -128,6 +135,15 @@
 asset 已全解析时走快路（零深拷贝零 IPC）。
 新增 `tools/perf-render.mjs`（`pnpm perf:render`），带硬门槛（滚动 >100ms 长任务即 exit 1）。
 **虚拟滚动结论：不做**——服务端分页每页 ≤500，实测 500 行单页 90ms、长任务 0 个。
+
+### [x] FE-P1-05 子题排序 / 改题型 — `bd81056`
+
+子题上移/下移（首末位禁用）+ 拖拽手柄，三路共用 `utils/arrayMove.js::moveItem`；
+接通死代码 `onChildTypeChange`。单测 30 条 + 5 个变异验证，e2e form 9 → 36。
+
+**两处偏离 devBak**（都是「界面上看不出来」的正确性问题，详见提交信息）：
+排序后**不重编**子题 id（重编会让 `detail.child_id` 指向另一道题）；
+新建题**不自造**子题 id（自造会让所有新建材料题子题跨题撞号）。
 
 ### [x] FE-P1-02（部分）搜索 / 6 档排序 / 拖拽持久化 — `d69cf0c`
 
