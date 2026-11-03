@@ -768,29 +768,47 @@ pub(crate) fn records_overview_impl(conn: &Connection, limit_days: Option<u64>) 
 /// 模考场次列表：mode='exam' 按 detail.exam_id 聚合（供 /exam 准备页「最近模考」）。
 /// 流水天然进同步链（records 段）；题被删则级联清除，场次随之收敛，无需额外表。
 #[tauri::command]
-pub fn exam_sessions(limit: Option<u64>, state: State<'_, AppState>) -> Result<Value, String> {
+pub fn exam_sessions(
+    limit: Option<u64>,
+    bank_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
     let conn = state.0.lock().map_err(to_str)?;
-    ok(exam_sessions_impl(&conn, limit)?)
+    ok(exam_sessions_impl(&conn, limit, bank_id)?)
 }
 
-pub(crate) fn exam_sessions_impl(conn: &Connection, limit: Option<u64>) -> Result<Value, String> {
+/// 场次题库来自 `detail.bank_id`（组卷时写入，见 `src/utils/grading.js`）。
+///
+/// 为什么放 detail 而不是加列：模考流水本身没有题库归属字段，而 detail_json
+/// 已在同步链里；加列会改 schema 并波及同步契约，与「schema 零改动」的边界冲突。
+/// 历史场次（该字段上线前落库的）没有 `detail.bank_id`：按库筛选时被排除——
+/// 这是刻意的（不能把「不知道属于哪个库」当成「属于所有库」），UI 上有说明。
+pub(crate) fn exam_sessions_impl(
+    conn: &Connection,
+    limit: Option<u64>,
+    bank_id: Option<String>,
+) -> Result<Value, String> {
     let limit = limit.unwrap_or(10).clamp(1, 50) as i64;
+    // 空白串等价于「不筛选」，避免前端传空串时把全部场次筛没
+    let bank_id = bank_id.filter(|s| !s.trim().is_empty());
     let mut stmt = conn
         .prepare(
             "SELECT json_extract(detail_json, '$.exam_id') AS exam_id,
                     MIN(answered_at) AS started_at, MAX(answered_at) AS ended_at,
                     COUNT(*) AS item_count, COALESCE(SUM(correct), 0) AS correct_count,
                     COALESCE(SUM(CAST(json_extract(detail_json, '$.score_earned') AS REAL)), 0) AS score,
-                    COALESCE(SUM(CAST(json_extract(detail_json, '$.full_score') AS REAL)), 0) AS full_score
+                    COALESCE(SUM(CAST(json_extract(detail_json, '$.full_score') AS REAL)), 0) AS full_score,
+                    json_extract(detail_json, '$.bank_id') AS bank_id
              FROM practice_records
              WHERE mode = 'exam' AND detail_json IS NOT NULL
                AND json_extract(detail_json, '$.exam_id') IS NOT NULL
+               AND (?2 IS NULL OR json_extract(detail_json, '$.bank_id') = ?2)
              GROUP BY exam_id
              ORDER BY started_at DESC
              LIMIT ?1",
         )
         .map_err(to_str)?;
-    let mut rows = stmt.query(params![limit]).map_err(to_str)?;
+    let mut rows = stmt.query(params![limit, bank_id]).map_err(to_str)?;
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(to_str)? {
         items.push(json!({
@@ -801,6 +819,7 @@ pub(crate) fn exam_sessions_impl(conn: &Connection, limit: Option<u64>) -> Resul
             "correct_count": row.get::<_, i64>(4).map_err(to_str)?,
             "score": row.get::<_, f64>(5).map_err(to_str)?,
             "full_score": row.get::<_, f64>(6).map_err(to_str)?,
+            "bank_id": row.get::<_, Option<String>>(7).map_err(to_str)?,
         }));
     }
     Ok(json!({ "items": items }))
@@ -1224,7 +1243,7 @@ mod tests {
             params![generate_id()],
         )
         .unwrap();
-        let v = exam_sessions_impl(&conn, None).unwrap();
+        let v = exam_sessions_impl(&conn, None, None).unwrap();
         let items = v["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["exam_id"], "e2");
@@ -1234,8 +1253,72 @@ mod tests {
         assert_eq!(items[1]["score"], 5.0);
         assert_eq!(items[1]["full_score"], 10.0);
         assert_eq!(items[1]["started_at"], "2026-09-15T10:00:00.000Z");
-        let limited = exam_sessions_impl(&conn, Some(1)).unwrap();
+        let limited = exam_sessions_impl(&conn, Some(1), None).unwrap();
         assert_eq!(limited["items"].as_array().unwrap().len(), 1);
+    }
+
+    /// FE-P1-07：场次按题库筛选（题库来自 detail.bank_id，schema 零改动）。
+    ///
+    /// 同时锁住两条容易做错的点：
+    /// ① 不传 bank_id 时不受影响（没有 bank_id 的历史场次也要能列出来）；
+    /// ② 传了 bank_id 时，没有 bank_id 的历史场次被**排除**
+    ///    —— 不能把「不知道属于哪个库」当成「属于所有库」，否则用户选了 A 库
+    ///    却看到 B 库的成绩，会以为数据串了。
+    #[test]
+    fn exam_sessions_filters_by_bank_and_keeps_legacy_rows() {
+        let conn = test_conn();
+        // practice_records.question_id 有外键，先插一道题（否则 FK 约束直接失败）
+        let mut q = sample_question();
+        q["id"] = json!("q_x");
+        q["bank_id"] = json!("bank_default");
+        insert_question(&conn, &q).unwrap();
+        let rec = |exam_id: &str, bank: Option<&str>, at: &str| {
+            let bank_field = bank
+                .map(|b| format!(",\"bank_id\":\"{b}\""))
+                .unwrap_or_default();
+            let detail = format!(
+                "{{\"exam_id\":\"{exam_id}\",\"score_earned\":5,\"full_score\":5{bank_field}}}"
+            );
+            // 每题分值 5 分，score_earned 也是 5 → 满分场次
+            conn.execute(
+                "INSERT INTO practice_records (id, question_id, mode, grade, correct, answered_at, detail_json, synced_at)
+                 VALUES (?1, 'q_x', 'exam', 'good', 1, ?2, ?3, ?2)",
+                params![generate_id(), at, detail],
+            )
+            .unwrap();
+        };
+        // e1/e2 属于 bank_a；e3 属于 bank_b；e4 是「历史场次」（该字段上线前落库，无 bank_id）
+        rec("e1", Some("bank_a"), "2026-09-01T10:00:00.000Z");
+        rec("e2", Some("bank_a"), "2026-09-02T10:00:00.000Z");
+        rec("e3", Some("bank_b"), "2026-09-03T10:00:00.000Z");
+        rec("e4", None, "2026-09-04T10:00:00.000Z");
+
+        // 不筛选：四场都在（历史场次不能因为缺字段就消失）
+        let all = exam_sessions_impl(&conn, None, None).unwrap();
+        assert_eq!(all["items"].as_array().unwrap().len(), 4);
+        // 空白串等价于不筛选
+        let blank = exam_sessions_impl(&conn, None, Some("  ".to_string())).unwrap();
+        assert_eq!(blank["items"].as_array().unwrap().len(), 4);
+
+        // 按 bank_a 筛选：只有 e1/e2，且返回各自 bank_id
+        let a = exam_sessions_impl(&conn, None, Some("bank_a".to_string())).unwrap();
+        let ids: Vec<&str> = a["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["exam_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["e2", "e1"]);
+        assert_eq!(a["items"][0]["bank_id"], "bank_a");
+
+        // 按 bank_b 筛选：只有 e3
+        let b = exam_sessions_impl(&conn, None, Some("bank_b".to_string())).unwrap();
+        assert_eq!(b["items"].as_array().unwrap().len(), 1);
+        assert_eq!(b["items"][0]["exam_id"], "e3");
+
+        // 不存在的库：空列表而不是报错
+        let none = exam_sessions_impl(&conn, None, Some("bank_zzz".to_string())).unwrap();
+        assert_eq!(none["items"].as_array().unwrap().len(), 0);
     }
 
     #[test]

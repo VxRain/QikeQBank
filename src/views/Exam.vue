@@ -121,9 +121,16 @@
     </section>
 
     <!-- 最近模考 -->
-    <section v-if="phase === 'setup' && history.length" class="card max-w-[640px]">
+    <section v-if="phase === 'setup' && (history.length || historyLoading)" class="card max-w-[640px]">
       <div class="card-head">
         <h2 class="section-title flex items-center gap-2"><i class="i-lucide-history text-primary" />最近模考</h2>
+        <!-- 趋势按题库展示（FE-P1-07）：范围必须写出来，否则切换题库后数字变了用户不知道为什么 -->
+        <span class="badge" :title="historyScope ? '只统计当前所选题库的场次' : '统计全部题库的场次'">
+          {{ historyScope ? '当前题库' : '全部题库' }}
+        </span>
+      </div>
+      <div v-if="!historyScope" class="text-[12px] text-muted-light mb-3 flex items-center gap-1.5">
+        <i class="i-lucide-info" />「全部题库」视角含早期场次（那时还没记录题库归属）；选具体题库后只显示该库成绩。
       </div>
 
       <!-- FE-P0-07b：成绩趋势（纯 SVG） -->
@@ -149,7 +156,7 @@
     </section>
 
     <!-- 作答卡片 -->
-    <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card flex flex-col gap-3.5" @keydown="onCardKeydown">
+    <section v-else-if="phase === 'card'" ref="cardRef" tabindex="-1" class="card relative flex flex-col gap-3.5" @keydown="onCardKeydown">
       <div class="flex items-center justify-between gap-3">
         <div class="flex items-center gap-2 min-w-0">
           <span class="badge badge-type">{{ curBadge }}</span>
@@ -169,12 +176,37 @@
           >
             <i class="i-lucide-flag" />{{ flagged[cur?.uid] ? '取消标记' : '标记' }}
           </button>
+          <button
+            v-if="durationMin > 0"
+            type="button"
+            class="btn"
+            :class="paused && 'seg-on'"
+            :title="paused ? '继续作答（计时恢复）' : '暂停计时，休息一下再继续'"
+            @click="togglePause"
+          >
+            <i :class="paused ? 'i-lucide-play' : 'i-lucide-pause'" />{{ paused ? '继续' : '暂停' }}
+          </button>
           <button type="button" class="btn" title="答题卡" @click="sheetOpen = true">
             <i class="i-lucide-layout-grid" />答题卡<span v-if="flaggedCount" class="ml-1 text-danger">{{ flaggedCount }}</span>
           </button>
         </div>
       </div>
       <div class="progress-track"><div class="progress-inner" :style="{ width: progressPct + '%' }"></div></div>
+
+      <!-- 暂停遮罩（FE-P1-07）：暂停期间必须盖住题面。
+           否则「暂停计时」等于还能继续看题，限时的公平性就没了。 -->
+      <div v-if="paused" class="paused-mask" role="status" aria-live="polite">
+        <div class="text-center flex flex-col items-center gap-3 px-6">
+          <i class="i-lucide-pause-circle text-primary text-[42px]" />
+          <div class="text-[17px] font-700 text-text font-[var(--serif)]">已暂停</div>
+          <div class="text-[13px] text-muted max-w-[320px] leading-[1.7]">
+            计时已停，题目暂时隐藏。点击「继续」后从原来的剩余时间接着考。
+          </div>
+          <button type="button" class="btn btn-primary" @click="togglePause">
+            <i class="i-lucide-play" />继续作答
+          </button>
+        </div>
+      </div>
 
       <QuestionRunner
         :item="cur"
@@ -419,6 +451,7 @@ watch(
   { deep: true }
 )
 watch([pickedTypes, bankId], refreshAvailable, { deep: true })
+
 const multiRule = ref(localStorage.getItem(MULTI_RULE_KEY) === 'strict' ? 'strict' : 'partial')
 const durationMin = ref(Number(localStorage.getItem(DURATION_KEY)) || 60)
 function setMultiRule(r) {
@@ -598,6 +631,8 @@ async function beginExam(rawQuestions, id, startTs) {
   rowOpen.clear()
   sheet.value = null
   remainingMs.value = durationMin.value > 0 ? startedAt.value + durationMin.value * 60000 - Date.now() : 0
+  paused.value = false
+  pausedAtMs = 0
   phase.value = 'card'
   startTimer()
   saveDraft()
@@ -621,6 +656,47 @@ function startTimer() {
 }
 function stopTimer() {
   if (timerId) { clearInterval(timerId); timerId = null }
+}
+
+/**
+ * 暂停 / 继续（FE-P1-07）。
+ *
+ * ── 为什么必须挪 startedAt，而不是「停掉刷新 remainingMs」──
+ * 剩余时间是从 `startedAt + 限时 - now` 反推的。单纯停掉 interval 只让画面不动，
+ * **一继续就会立刻跳到真实流逝后的剩余时间**（暂停 5 分钟 = 白扣 5 分钟）。
+ * 所以暂停时记下时刻，继续时把 `startedAt` 往后推同样长，把限时真正冻结住。
+ *
+ * ── 为什么还要结算 itemStartTs ──
+ * 单题用时也算 `Date.now() - itemStartTs`。不结算的话暂停时长会进「本题用时」，
+ * 复盘时看到这题花了 30 分钟，其实是去吃饭了。
+ */
+const paused = ref(false)
+let pausedAtMs = 0
+function togglePause() {
+  // 只有限时模式才有「暂停」的意义：不限时时时钟本来就不走
+  if (!(durationMin.value > 0)) return
+  if (phase.value !== 'card' || submitting.value) return
+  if (!paused.value) {
+    pausedAtMs = Date.now()
+    if (cur.value) {
+      itemElapsed[cur.value.uid] += pausedAtMs - itemStartTs
+      itemStartTs = pausedAtMs
+    }
+    stopTimer()
+    paused.value = true
+    saveDraft()
+    return
+  }
+  // 继续：把暂停时长从截止时间里补回来
+  const frozen = Math.max(0, Date.now() - pausedAtMs)
+  startedAt.value += frozen
+  itemStartTs = Date.now()
+  paused.value = false
+  pausedAtMs = 0
+  remainingMs.value = startedAt.value + durationMin.value * 60000 - Date.now()
+  startTimer()
+  saveDraft()
+  focusCard()
 }
 
 function go(idx) {
@@ -652,7 +728,11 @@ function draftSnapshot() {
       itemElapsed: { ...itemElapsed },
       questionIds: paperRaw.value.map((q) => q.id),
       // FE-P0-07a：标记状态也要恢复（只存 uid 列表，不存题面）
-      flaggedUids: Object.keys(flagged)
+      flaggedUids: Object.keys(flagged),
+      // FE-P1-07：暂停态也要进草稿。恢复时按「暂停起点」补回时长，
+      // 否则关掉窗口再回来，暂停期间的时间会被白扣掉。
+      paused: paused.value,
+      pausedAt: paused.value ? Date.now() : 0
     }
   }
 }
@@ -677,12 +757,24 @@ async function restoreDraft(d) {
   fetching.value = true
   try {
     durationMin.value = d.extra?.durationMin ?? 60
+    // FE-P1-07：恢复暂停态时要把「关窗口 → 再打开」这段时长补回截止时间
+    // （等价于「暂停期间不计时」）；否则用户回来发现少了好几十分钟。
+    const wasPaused = !!d.extra?.paused
+    const pausedAt = Number(d.extra?.pausedAt) || 0
     multiRule.value = d.extra?.multiRule || 'partial'
     // 按 id 重拉试卷（practice_pool 保持传入顺序）；题目被删则缺项按未作答处理
     const ids = d.extra?.questionIds || parentIdsOf(d.keys)
     const raw = await practicePool({ ids })
-    const ok = await beginExam(raw, d.extra?.examId || randomUUID(), d.startedAt || Date.now())
+    let startTs = d.startedAt || Date.now()
+    if (wasPaused && pausedAt > 0) startTs += Math.max(0, Date.now() - pausedAt)
+    const ok = await beginExam(raw, d.extra?.examId || randomUUID(), startTs)
     if (!ok) { clearDraft(); return }
+    if (wasPaused) {
+      // beginExam 已把 paused 清掉并起了定时器，这里重新进入暂停
+      paused.value = true
+      pausedAtMs = Date.now()
+      stopTimer()
+    }
     // 恢复作答：uid 形如 `<题目id>_<序号>`，序号会随被删题目前移，因此按题目 id 重映射
     const qidOf = (k) => String(k).replace(/_\d+$/, '')
     const oldAnswers = new Map()
@@ -771,6 +863,7 @@ useSessionLeaveNotice(
 // 交卷：全卷统一判分落库（mode='exam'，不建 FSRS 卡；材料拆子题，一子题一条流水）
 async function submitPaper(timeout = false) {
   if (phase.value !== 'card' || submitting.value) return
+  paused.value = false
   stopTimer()
   if (cur.value) itemElapsed[cur.value.uid] += Date.now() - itemStartTs
   const opts = { multiRule: multiRule.value }
@@ -791,7 +884,7 @@ async function submitPaper(timeout = false) {
           grade: ratioToGrade(res.ratio),
           elapsed_ms: Math.round(uid ? itemElapsed[uid] || 0 : 0),
           detail: buildExamDetail(c, e.ans.children?.[c.id] || {}, res, {
-            examId: examId.value, seq: e.pi + 1, childIndex: ci + 1, parentId: e.q.id, timeout
+            examId: examId.value, seq: e.pi + 1, childIndex: ci + 1, parentId: e.q.id, timeout, bankId: bankId.value
           })
         })
       })
@@ -803,7 +896,7 @@ async function submitPaper(timeout = false) {
         mode: 'exam',
         grade: ratioToGrade(e.res.ratio),
         elapsed_ms: Math.round(uid ? itemElapsed[uid] || 0 : 0),
-        detail: buildExamDetail(e.q, e.ans, e.res, { examId: examId.value, seq: e.pi + 1, timeout })
+        detail: buildExamDetail(e.q, e.ans, e.res, { examId: examId.value, seq: e.pi + 1, timeout, bankId: bankId.value })
       })
     }
   }
@@ -867,15 +960,29 @@ function fmtDur(s) {
   return fmtDurationCn(Math.max(0, new Date(s.ended_at) - new Date(s.started_at)))
 }
 
+/**
+ * 拉最近场次（FE-P1-07 起支持按题库）。
+ *
+ * 展示口径：跟随当前题库筛选（准备页选了某库，就该看那个库的成绩趋势），
+ * 「全部题库」时看全库。没有 bank_id 的历史场次只在全库视角出现 ——
+ * 这一点必须在 UI 上写明，否则用户切到具体题库后发现场次变少会以为数据丢了。
+ */
+const historyScope = computed(() => bankId.value || '')
+const historyLoading = ref(false)
 async function loadHistory() {
+  historyLoading.value = true
   try {
-    const d = await examSessions(10)
+    const d = await examSessions(10, historyScope.value || undefined)
     history.value = (d && d.items) || []
   } catch (e) {
     console.error(e)
     history.value = []
+  } finally {
+    historyLoading.value = false
   }
 }
+// 切换题库后重新拉该库的成绩趋势（「趋势按库」是 FE-P1-07 的验收项）
+watch(bankId, () => { if (phase.value === 'setup') loadHistory() })
 
 // 错题重练：复用错题本的 retryIds 通道（练习模式判分，计入复习/错题本口径）
 async function retryWrong() {
@@ -963,4 +1070,17 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 暂停遮罩：盖住整个作答区（题面 + 选项 + 底部导航），只留「继续」按钮可点。
+   绝对定位在卡片内而不是全屏：全屏会挡住顶栏，用户想切页面看资料时会被困住。 */
+.paused-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(3px);
+  border-radius: var(--radius);
+}
 </style>

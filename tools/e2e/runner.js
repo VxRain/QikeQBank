@@ -53,7 +53,7 @@ export const MODULE_BASELINE = {
   form: 30,
   practice: 21,
   review: 18,
-  exam: 20,
+  exam: 31,
   wrong: 18,
   // banks 16 → 38：FE-P1-02 搜索/排序/拖拽 22 条
   banks: 38,

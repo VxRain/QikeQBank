@@ -47,9 +47,16 @@ export function mockScript() {
   window.__restoreQs = () => { qs.length = 0; qs.push(...freshQs()) }
   // 可调题量：验「删掉末页最后一题后页码收敛」需要真的造出第 2 页
   window.__setCount = (n) => { qs.length = 0; qs.push(...freshQs(n)) }
+  // FE-P1-07：场次带 bank_id（真实实现取 detail.bank_id）。
+  // e1 属于 bank_default、e2 属于 bank_b、e3 没有 bank_id（历史场次，字段上线前落库）——
+  // 三种情况都要能验：不筛选全都在、按库筛选只留该库、历史场次不冒充任何库。
+  // 顺序与真实后端一致：exam_sessions_impl 是 `ORDER BY started_at DESC`。
+  // mock 若按「后加的排最后」硬编码，页面看起来就是乱序的（实测踩过：截图里
+  // 09-01 → 09-05 → 08-20），这种假数据会让「排序正确性」在 e2e 里永远验不出来。
   const sessions = [
-    { exam_id: 'e1', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 3, correct_count: 1, score: 5, full_score: 15 },
-    { exam_id: 'e2', started_at: '2026-09-05T10:00:00.000Z', ended_at: '2026-09-05T10:20:00.000Z', item_count: 3, correct_count: 2, score: 10, full_score: 15 }
+    { exam_id: 'e2', started_at: '2026-09-05T10:00:00.000Z', ended_at: '2026-09-05T10:20:00.000Z', item_count: 3, correct_count: 2, score: 10, full_score: 15, bank_id: 'bank_b' },
+    { exam_id: 'e1', started_at: '2026-09-01T10:00:00.000Z', ended_at: '2026-09-01T10:20:00.000Z', item_count: 3, correct_count: 1, score: 5, full_score: 15, bank_id: 'bank_default' },
+    { exam_id: 'e3', started_at: '2026-08-20T10:00:00.000Z', ended_at: '2026-08-20T10:10:00.000Z', item_count: 2, correct_count: 1, score: 5, full_score: 10, bank_id: null }
   ]
   const detail = {
     exam_id: 'e2', item_count: 2, score: 5, full_score: 10, items: [
@@ -220,7 +227,14 @@ export function mockScript() {
         case 'review_due': return { success: true, data: qs.slice(0, window.__reviewOnly ? 1 : 5) }
         case 'record_answer': window.__recorded.push(args); return { success: true, data: { inserted: 1, skipped: 0 } }
         case 'review_revert': window.__reverted.push(args); return { success: true, data: { reverted: 1, skipped: 0 } }
-        case 'exam_sessions': return { success: true, data: { items: sessions } }
+        case 'exam_sessions': {
+          // 如实实现按题库筛选（与 src-tauri 的 exam_sessions_impl 同口径）：
+          // 空白串 = 不筛选；传了库时**排除**没有 bank_id 的历史场次
+          // （不能把「不知道属于哪个库」当成「属于所有库」）。
+          const want = args && typeof args.bankId === 'string' ? args.bankId.trim() : ''
+          const items = want ? sessions.filter((x) => x.bank_id === want) : sessions
+          return { success: true, data: { items } }
+        }
         case 'exam_detail': window.__detailArg = args; return { success: true, data: detail }
         case 'assets_resolve': return { success: true, data: {} }
         case 'wrong_list': {
