@@ -206,7 +206,17 @@ export function mockScript() {
         }
         case 'questions_create': window.__creates++; window.__lastCreate = args; return { success: true, data: { id: 'qNew' } }
         case 'questions_update': window.__lastUpdate = args; return { success: true, data: {} }
-        case 'practice_pool': return { success: true, data: args && args.ids ? args.ids.map((id) => qs.find((q) => q.id === id)).filter(Boolean) : qs }
+        case 'practice_pool': {
+          // 真实实现（src-tauri/src/db/practice.rs::practice_pool）按 ids / typeFilter / bankId 过滤。
+          // 这里**必须如实过滤**：无条件返回全部题会让「题型/题库参数下发了但没生效」
+          // 这类缺陷在 e2e 里永远走不到（本文件头部记的就是这个教训）。
+          if (args?.ids) return { success: true, data: args.ids.map((id) => qs.find((q) => q.id === id)).filter(Boolean) }
+          let pool = qs.slice()
+          if (args?.typeFilter) pool = pool.filter((q) => q.type === args.typeFilter)
+          if (args?.bankId) pool = pool.filter((q) => q.bank_id === args.bankId)
+          const limit = args?.limit ?? pool.length
+          return { success: true, data: pool.slice(0, limit) }
+        }
         case 'review_due': return { success: true, data: qs.slice(0, window.__reviewOnly ? 1 : 5) }
         case 'record_answer': window.__recorded.push(args); return { success: true, data: { inserted: 1, skipped: 0 } }
         case 'review_revert': window.__reverted.push(args); return { success: true, data: { reverted: 1, skipped: 0 } }
@@ -258,7 +268,11 @@ export function mockScript() {
           }
         }
         case 'wrong_dismiss': return { success: true, data: { id: args?.questionId } }
-        case 'records_overview': return { success: true, data: { total_practiced: 0, today_practiced: 0, correct_rate: null } }
+        // records_overview：形状照 src-tauri/src/db/practice.rs::records_overview_impl。
+        // by_type 的 count 是**作答次数**（不是题量）。这里默认空数组 —— 弱项专练的
+        // 推荐口径由单测全覆盖（tests/unit/practice-loop.test.js），e2e 只验
+        // 「同路由点击真的换题型」这一条浏览器行为，不靠 mock 数据凑推荐结果。
+        case 'records_overview': return { success: true, data: { days: [], by_type: [] } }
         case 'is_portable_mode': return { success: true, data: false }
         case 'banks_create': window.__lastBankCreate = args; return { success: true, data: { id: 'bank_new', name: args?.name } }
         case 'banks_update': return { success: true, data: { id: args?.id } }

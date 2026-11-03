@@ -101,6 +101,13 @@
  * @property {Array<{date:string, count:number, correct:number}>} records_7d
  */
 
+/** records_overview @typedef {Object} RecordsOverview
+ * 练习流水聚合（口径 mode != 'exam'，与错题本/统计一致）。
+ * @property {Array<{date:string, count:number, correct:number, avg_ms:number}>} days
+ * @property {Array<{type:QuestionType, count:number, correct:number, avg_ms:number}>} by_type
+ *   count = **作答次数**（不是题量）；弱项判定要的是「做过多少、对了多少」，见 utils/practiceLoop.js
+ */
+
 /** record_answer @typedef {{inserted:number, skipped:number}} RecordAnswerResult */
 
 /** import_questions 逐条结果 @typedef {{index:number, status:'inserted'|'duplicate'|'error', id?:string, message?:string}} ImportItemResult */

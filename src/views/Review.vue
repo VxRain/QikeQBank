@@ -215,7 +215,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { reviewDue, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.js'
 import { expandQuestions } from '@/api/assets.js'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
@@ -262,6 +262,7 @@ function commitCount() {
   }
 }
 const reviewLimit = computed(() => lastCount.value)
+const route = useRoute()
 const router = useRouter()
 const bankName = computed(() => bankStore.banks.find((b) => b.id === bankId.value)?.name || '')
 const error = ref('')
@@ -803,7 +804,8 @@ onMounted(async () => {
       console.error(e)
     }
   }
-  bankId.value = resolveBankFilter('review')
+  // ?bank= 深链（完成页「去复习」带当前题库范围）：不存在则回落到记忆/全部
+  bankId.value = resolveBankFilter('review', route.query.bank)
   await refreshDue()
   const snap = await promptResume(SNAP_MODE, { title: '继续上次复习？' })
   if (snap) await resumeSession(snap)

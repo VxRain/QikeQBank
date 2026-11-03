@@ -96,7 +96,7 @@
 | FE-P1-03 | 难度 / 状态元数据产品化 | M | 部分 | [ ] |
 | FE-P1-04 | 单题统计 | S–M | 是 | [ ] |
 | FE-P1-05 | 材料子题排序 / 改题型 / 复制题目 | M | 否 | [ ] |
-| FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [ ] |
+| FE-P1-06 | 刷题反馈与完成闭环 | S–M | 否 | [x] |
 | FE-P1-07 | 模考标准卷 / 暂停 / 成绩趋势 | M–L | 部分 | [ ] |
 | FE-P1-08 | 错题顽固题与导出 | S–M | 部分 | [ ] |
 | FE-P1-09 | 复习预测 / 多选题库 / 按题型 | M | 是 | [ ] |
@@ -544,13 +544,25 @@
 - 单题支持「另存为副本」；材料题支持「复制子题」。
 - **文件**：`src/components/QuestionEditor.vue`、`src/views/Form.vue`。
 
-### [ ] FE-P1-06 刷题反馈与完成闭环
+### [x] FE-P1-06 刷题反馈与完成闭环
 
 - 作答后选项本身标绿/红，而不是只看下方答案列表。
 - 完成页增加「同配置再来一轮 / 去复习 / 去错题本」。
 - 加「弱项专练」：按题型正确率/错题数生成入口（可先跳转带参数的练习配置）。
 - 可选：单题计时、难度标识。
 - **文件**：`src/views/Practice.vue`。
+
+**已完成（2026-11-04）**
+
+口径全部抽到 `src/utils/practiceLoop.js`（纯函数），因为这几条写错了界面上看不出：
+- `optionMarkOf`：正确选项一律绿（**漏选的也绿**——否则用户只看到「回答错误」，看不出漏了哪个）、我选了但不对的标红、**未判分恒返回空**（作答中绝不泄露答案）。`QuestionRunner` 标色并带 `aria-label`；样式在 `uno.config.js` 成对定义且带 `!`，必须同时压过默认底色与选中态。
+- `elapsedMsOf` / `fmtClock`：单题计时用「累计 + 本次进入时刻」，跳走再跳回接着算（从 0 重开会让用户觉得「刚才白答了」）；判分后停表；不足 1s 显示 0。
+- `rankWeakTypes` / `weakPracticeEntry`：弱项排序「正确率最低 → 错题数多 → 样本大」，门槛 `count ≥ 3` 且 `rate < 0.6`；推荐前按可用题量过滤，避免推「点了就报没有题」的入口；入口带 `again=1`。
+- `doneLinks`：完成页「去复习 / 去错题本」带 `?bank=`，且 `Review.vue` / `Wrong.vue` 真的把它传给 `resolveBankFilter`（带了不认等于白带）。
+- **难度点阵**样式从 `List.vue` 的 scoped 提到 `App.vue` 全局——scoped 会让第二处静默失效（DOM 正常、没样式）。
+- **修掉三个真实缺陷**：① 完成页跳 `/practice?types=…` 命中同路由不重新挂载 → 深链参数失效，改由 `watch(route.query.*)` 重新应用；② 弱项专练不带 `again=1` 时 `phase` 仍是 `done`，用户点了没反应（devBak 原用例只验了 hash 带 `types`，没验界面变化）；③ e2e mock 的 `practice_pool` **完全忽略 `typeFilter`**，导致所有题型相关断言在假数据下恒真 —— 已改为如实过滤。
+- 守卫：`tests/unit/practice-loop.test.js` 36 条（判色口径 / 计时 / 弱项排序与入口 / 闭环链接 + 8 条接线守卫）；e2e `practice` 8 → 21（只留浏览器才能证伪的三类：模板接线、「作答中不泄露答案」、同路由 query 变更）。
+- 与 P0-12 的边界：未改抽题配额与材料题统计口径；「再来一轮」沿用现有 `practice_pool` 行为。
 
 ### [ ] FE-P1-07 模考标准卷 / 暂停 / 成绩趋势
 
@@ -895,3 +907,4 @@
 | v4 | 2026-10-30 | FE-P0-09/10/11 完成并勾选（列表排序筛选与页码收敛 / 批量操作单事务命令 / 错题本搜索排序统计）。后端：`questions_list` 与 `wrong_list` 各加参数、新增 `questions_batch_update`、`questions_batch_remove`、`wrong_stats` 共 3 条命令，**schema 零改动**。范围调整：FE-P0-11 的「导出错题」移出（落到 FE-P1-08），FE-P0-10 的「与 FE-P0-02 恢复语义一致」标注为待 FE-P0-02。修掉 3 个只在运行时暴露的缺陷（SQL 三值逻辑致 NULL 过滤全表、CTE 不可嵌套、前端 TDZ 白屏）。cargo 157、单测 154、E2E 98 |
 | v5 | 2026-10-30 | **E2E 分层改造（不新增功能、断言零丢失 103→103）**。背景：原 e2e 为 769 行单文件无模块边界，改一行页面也要跑完 6 个页面共 93s，且需手动先起 dev server。①**规定层修正**（消除「改一行跑全量」的制度成因）：`AGENTS.md` 验证门禁原不含 e2e 且与本文件 §0.3 自相矛盾，现补入并按「单模块为默认 / 全量为提交前」分级；三处文档（`AGENTS.md` / 本文件 §0.3 / `PLAN.md §8`）统一 7 个模块名。②**脚本模块化**：拆为 `list`/`batch`/`form`/`practice`/`review`/`exam`/`wrong`，每模块独立 browser context、支持位置参数过滤、`--changed` 按 git 改动选模块。③**dev server 自动起/复用**。④顺带修掉一个既有真 bug：`vite.config.js` 的 `watch.ignored` 未排除 `dist-portable/`，其中被 WebView 独占的 Cookies 文件会触发 `EBUSY` 直接把 dev server 打挂（这正是「手动起 server 经常白跑」的根因）。⑤**等待语义重写**：62 处 `waitForTimeout`（共 62s）全部改为「等真实 DOM 谓词 + Vue 更新批次」，并实测对照证明「等 IPC 静默」为 6/10 成功（flaky 源）、「等真实挂载标记」为 10/10。**实测**：单模块 1.3~3.3s、全量 14.5~17.7s（93s → ~16s，-83%），连跑 5 次 0 flaky，断言 103/103 逐条对齐无丢失。⑥新增 FE-ARCH-09：E2E 迁 `@playwright/test`（方案 C，手调等待无法根治 flaky；并记下 `@playwright/test` 已在 `node_modules` 却未声明于 `package.json` 这一会导致 CI 必坏的隐患） |
 | v6 | 2026-10-30 | **E2E 正确性与等待机制再修（P0~P3，不新增功能）**。v5 的等待方案有两处按官方标准不该留的东西，本轮按 Playwright 一手文档纠正。①**P0 修静默吞失败**：`waitForSelector(marker).catch(() => {})` 会在标记失效时静默继续，导致后续断言在**错误页面**上求值（误导性失败甚至假绿）。改为 `requireRoute()` 超时**必抛**，异常带实际 `title/inflight/hash/页面文本`。实测：注入失效标记后立即报「期望 #/wrong 页面就绪，实际页面：…」，而非等到后面报「按钮找不到」。②**P1 `page.clock` 消除时间等待**：实测 2000ms 防抖 → `fastForward(2100)` 真实耗时 **3ms**（对照真实等待 2029ms）。仅 `form`/`review` 启用（`exam`/`practice` 有 12 处 `Date.now()` 算用时/限时，风险高，暂不开）。顺带把 review 撤销从「碰巧在 5000ms 窗口内」升级为**精确边界测试**（4.9s 仍可撤销 / 5.2s 自动消失，+4 条断言）。③**P2 就绪信号换源**：从「界面文案」（`/新建题库/` 等 19 处，产品改文案即废）换成「`document.title`(= `meta.title` + APP_NAME) 且 `__inflight === 0`」。前者是**路由元数据**、后者靠 `bridge.js` 唯一 IPC 漏斗，二者都与文案/布局解耦。实测 6 个路由 ×8 次全 8/8、平均 6~77ms。同时**删除 `networkidle`**——Playwright API 文档明确标注 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead." ④**前置契约守卫**：新增 `tests/unit/e2e-ready-signal.test.js`（7 项），e2e 启动前自动执行（~0.3s，失败 exit 3），防 `ROUTE_TITLE ↔ meta.title` 漂移、title 格式变更、inflight 漏 try/finally、networkidle 回流、超时被吞；实测改 `meta.title` 后 **0.29s 被拦下**而非白跑 30s 超时。⑤**P3 分层**：新增 `tests/unit/request-params-wiring.test.js`（6 项静态守卫，校验 `fetchList` 真的把 query/type/difficulty/status/sort/limit/offset 拼进请求，含空值守卫），注入「忘记下发 difficulty」后两条守卫同时报警。**注意**：实测从 e2e 删除 5 条纯参数断言**并未提速**（list 1493→1539ms、wrong 649→699ms，属噪声），说明耗时由「操作 + 等待」驱动而非断言条数，故**保留 E2E 覆盖**、单测守卫作补充而非替代。**实测**：全量 16.9s → **9.8~11.0s**，断言 108 → **112**，连跑 5 次 0 flaky；单测 154 → **167**；build/smoke/clippy 全绿 |
+| v12 | 2026-11-04 | **FE-P1-06 完成**（刷题反馈与完成闭环）。口径全抽到 `utils/practiceLoop.js`：`optionMarkOf`（正确项一律绿含漏选、我选错的标红、**未判分恒空**）、`elapsedMsOf`（累计+本次段，跳走再回来接着算，判分停表）、`rankWeakTypes`（正确率→错题数→样本量，门槛 ≥3 次且 <60%，并按可用题量过滤掉「推了也没题」的题型）、`doneLinks`（带 `?bank=` 且目标页真的认它）。**修掉三个真实缺陷**：①完成页跳 `/practice?types=…` 命中同路由不重新挂载，深链参数失效（devBak 用 `watch(route.query.*)` 修，本仓同步）；②弱项专练不带 `again=1` 时 `phase` 仍是 `done`，用户点了没反应（devBak 用例只验 hash 带 types，未验界面）；③**e2e mock 的 `practice_pool` 完全忽略 `typeFilter`**，使所有题型相关断言在假数据下恒真，已改为如实过滤。**e2e 精简原则**：只留浏览器才能证伪的三类（模板接线 / 作答中不泄露答案 / 同路由 query 变更），弱项排序等纯函数口径不再在 e2e 抄第二遍。单测 +37（373），e2e practice 8→21，全量 286 条 / 23.6s |

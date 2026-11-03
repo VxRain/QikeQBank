@@ -52,7 +52,7 @@
 
 **不做**：子题复制、单题「另存为副本」（`asNewCopy`）
 
-### [ ] FE-P1-06 刷题反馈与完成闭环
+### [x] FE-P1-06 刷题反馈与完成闭环
 
 - 判分后**选项自身标色**（`option-btn-right/wrong` + 图标 + `aria-label`）。
   口径：正确选项一律绿（**漏选的也要标绿**，否则看不出漏了哪个）、
@@ -62,6 +62,25 @@
   「正确率最低 → 错题数多 → 样本大」，门槛 `count>=3 && rate<0.6`
   （1 题答错不算弱项；已达标的题型不推）
 - 单题计时 + 难度标识（卡头点阵，材料子题取自身难度）
+
+**完成记录（2026-11-04）**：口径全部抽到 `src/utils/practiceLoop.js`（`optionMarkOf` /
+`elapsedMsOf` / `fmtClock` / `rankWeakTypes` / `weakPracticeEntry` / `doneLinks`）。
+三处刻意偏离 devBak：
+
+1. **弱项入口带 `again=1`**（devBak 只带 `types`）。devBak 实现在完成页点「弱项专练」
+   只改 URL 不重开轮 → `phase` 仍是 `done`，用户看到的是「点了没反应」。它的 e2e 只断言
+   「hash 带 types=multi」，没验界面真的变了，所以一直没被发现。本仓 e2e 从完成页出发、
+   断言真的进了作答卡，第一次跑就红。
+2. **推荐前按可用题量过滤**（devBak 没有）。历史很弱但现在该题型一道题都不剩时，
+   推一个点了就报「没有符合条件的试题」的入口，比不推更糟。
+3. **e2e 不抄单测结论**。devBak 把「推的是 multi / 不推 single / 不推 fill」都写进 e2e，
+   还为此改 mock 数据；那是把单测结论搬进浏览器。本仓只留浏览器才能证伪的三类
+   （模板接线 / 作答中不泄露答案 / 同路由 query 变更），practice 模块 21 条 / 5.3s。
+
+顺带修掉本仓 e2e mock 的一个真缺陷：`practice_pool` 原先**完全忽略 `typeFilter`**
+（`return qs` 无条件全量），所有题型相关断言在假数据下恒真。已改为如实按
+`ids` / `typeFilter` / `bankId` / `limit` 过滤——修完后 practice 立刻有断言转红，
+证明此前是假绿。
 
 ### [ ] FE-P1-07 模考 100 分标准卷 / 暂停继续
 

@@ -51,7 +51,7 @@ export const MODULE_BASELINE = {
   list: 29,
   batch: 15,
   form: 34,
-  practice: 8,
+  practice: 21,
   review: 18,
   exam: 20,
   wrong: 21,

@@ -116,6 +116,11 @@ export default defineConfig({
     // 选项选中：主色淡底 + 主色描边 + 光环。成对声明 hover（不加深的话 hover 时只改边框很寡淡）
     // shadow 必须带 `!`：option-btn 自带 shadow-sm，同层竞争靠发射顺序太脆
     ['option-btn-on', '!bg-primary-bg !border-primary-border !text-text !shadow-[0_0_0_3px_rgba(31,77,58,0.12)] hover:!bg-primary-bg hover:!border-primary hover:!text-text'],
+    // 判分后的选项自身着色（FE-P1-06）：必须在 option-btn-on 之后定义，且带 `!`
+    // ——判分后这一项既要压过 option-btn 的默认底色，也要压过选中态。
+    // 颜色沿用 App.vue 的 --success/--danger 色系（success-bg / danger-bg + 同族描边）。
+    ['option-btn-right', '!bg-success-bg !border-[#bcd9c4] !text-text !shadow-[0_0_0_3px_rgba(47,125,79,0.14)] hover:!bg-success-bg hover:!border-[#bcd9c4] hover:!text-text'],
+    ['option-btn-wrong', '!bg-danger-bg !border-[#e3c9c5] !text-text !shadow-[0_0_0_3px_rgba(180,60,50,0.12)] hover:!bg-danger-bg hover:!border-[#e3c9c5] hover:!text-text'],
 
     // ── 图标组（Banks 视图切换等「多选一」图标钮）──
     // base 只改尺寸/形状，方块化交给外层容器；不嵌 btn（避免 shadow-none/阴影叠加歧义）

@@ -767,20 +767,6 @@ watch(
 </script>
 
 <style scoped>
-/* 难度点阵：5 个点，亮起数 = difficulty（复用全局 CSS 变量，不另起色板） */
-.difficulty-dots {
-  display: inline-flex;
-  gap: 2px;
-  align-items: center;
-}
-.difficulty-dots .dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--line);
-}
-.difficulty-dots .dot.on {
-  background: var(--primary);
-}
+/* 难度点阵样式在 App.vue 全局（列表与刷题页共用），见 .difficulty-dots */
 </style>
 

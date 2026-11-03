@@ -47,13 +47,25 @@
           :key="o.id"
           type="button"
           class="option-btn"
-          :title="interactiveHint"
+          :title="optionTitle(o)"
           :disabled="locked"
-          :class="isPicked(o.id) && 'option-btn-on'"
+          :class="optionClass(o.id)"
           @click="pick(o.id)"
         >
           <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
           <span class="opt-body" v-html="optHtml(o)"></span>
+          <!-- 判分后选项自身标绿/红（FE-P1-06）：不依赖下方答案对照行，
+               眼睛落在选项上就能看出对错。判定口径见 utils/practiceLoop.js -->
+          <i
+            v-if="markOf(o.id) === 'correct'"
+            class="i-lucide-circle-check shrink-0 text-[15px] text-success ml-auto"
+            aria-label="正确答案"
+          />
+          <i
+            v-else-if="markOf(o.id) === 'wrong'"
+            class="i-lucide-circle-x shrink-0 text-[15px] text-danger ml-auto"
+            aria-label="你选错了"
+          />
         </button>
       </div>
 
@@ -88,6 +100,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { renderDoc, renderOptions } from '@/utils/render.js'
+import { optionMarkOf } from '@/utils/practiceLoop.js'
 
 const props = defineProps({
   // { q, parent, isChild, childIdx, childCount, uid }
@@ -174,6 +187,34 @@ function optHtml(o) {
 }
 function isPicked(id) {
   return q.value.type === 'multi' ? props.picked.includes(id) : props.selected === id
+}
+
+/**
+ * 判分后该选项的标记（FE-P1-06）：'correct' | 'wrong' | ''
+ * 口径与判分一致，详见 utils/practiceLoop.js::optionMarkOf（含「未判分恒空」）。
+ */
+function markOf(id) {
+  return optionMarkOf(q.value, id, { selected: props.selected, picked: props.picked }, props.locked)
+}
+
+/**
+ * 选项样式：判分后压过选中态。
+ * 顺序不能反——选中态（option-btn-on）也是 `!important`，谁在后谁赢；
+ * 标色必须在选中态之后返回，否则「我选了但错了」会显示成普通的蓝/绿选中态。
+ */
+function optionClass(id) {
+  const m = markOf(id)
+  if (m === 'correct') return 'option-btn-right'
+  if (m === 'wrong') return 'option-btn-wrong'
+  return isPicked(id) ? 'option-btn-on' : ''
+}
+
+function optionTitle(o) {
+  const m = markOf(o.id)
+  if (m === 'correct') return '正确答案'
+  if (m === 'wrong') return '你选择了这个（不是正确答案）'
+  // 注意：模板里能直接写 interactiveHint（props 自动解包），但 script 里必须走 props.
+  return props.interactiveHint
 }
 
 function pick(id) {

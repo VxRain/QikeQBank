@@ -186,7 +186,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'
@@ -196,6 +196,7 @@ import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 import { clampPage } from '@/stores/listFilter.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
 
+const route = useRoute()
 const router = useRouter()
 const type = ref('')
 const bankId = ref('')
@@ -544,7 +545,8 @@ onMounted(async () => {
       console.error(e)
     }
   }
-  bankId.value = resolveBankFilter('wrong')
+  // ?bank= 深链（完成页「去错题本」带当前题库范围）：不存在则回落到记忆/全部
+  bankId.value = resolveBankFilter('wrong', route.query.bank)
   // 统计与列表并行：统计挂了不影响看错题
   await Promise.all([fetchList(), fetchStats()])
 })
