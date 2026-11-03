@@ -218,6 +218,23 @@ onBeforeUnmount(() => {
 /* UnoCSS 无 preflight：补 Tailwind 式 border 默认值，否则 <button> 用 outset、<a>/<div> 用 none → 边框丢失或立体感 */
 *, *::before, *::after { border-style: solid; border-width: 0; }
 html, body { margin: 0; padding: 0; }
+/*
+ * 滚动条槽位常驻（修「切页面时顶栏宽度/位置跳动」）：
+ *
+ * 缺陷：页面一旦超过一屏（如模考 / 错题本），WebView2 会给出 10px 占位滚动条，
+ * 视口可用宽度从 1280 掉到 1270 → `max-w-[1140px] mx-auto` 的顶栏内层左边距
+ * 从 70 变 65，同时 header 自身宽度少 10px。看起来就是「换个页面顶栏左右抖一下」。
+ *
+ * 为什么不用 `overflow-y: scroll`：那会让短页面也常驻一条滚动条轨道（空槽），
+ * 且不改滚动条「占位/不占位」的事实，只是把它固定成常占位。
+ * `scrollbar-gutter: stable` 只是**预留槽位**：不出现滚动条时不画轨道，
+ * 出现时直接落在预留位里 → 两种状态的布局宽度完全一致，视觉上无位移。
+ *
+ * 实测（headed Chromium，1280×720）：无此规则时 banks/exam 两态 innerLeft 70↔65、
+ * headerW 1280↔1270；加上后两态均为 65 / 1270。
+ * 弹层锁滚动（SettingsDialog 的 `body.overflow=hidden`）也因此不再引起横移。
+ */
+html { scrollbar-gutter: stable; }
 body {
   font-family: 'Inter', ui-sans, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);

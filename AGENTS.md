@@ -34,4 +34,10 @@
   - `--list` 列模块；dev server 由脚本自动起或复用（`BASE_URL=` 可指向已运行实例）。
   - 新增用例别写固定 sleep，也别用界面文案当就绪标记：`goto(page, hash)` 无需传标记，就绪判定统一走 `requireRoute()`（`document.title` = `meta.title` + ` · 奇客题库`，且 `window.__inflight === 0`），超时必抛。时间相关断言用 `page.clock.fastForward()`（仅 `form`/`review` 已启用）。理由与实测数据见 `PLAN.md §8`。
   - 跑 e2e 前会自动执行契约守卫（`tests/unit/e2e-ready-signal.test.js`）：校验 `ROUTE_TITLE ↔ router 的 meta.title` 等跨文件契约，不过则直接中止（~0.3s），避免白跑超时。
+- **修 bug 的默认动作 = 只跑既有门禁**：`pnpm build` + 对应页面的 e2e 模块（如改 `src/App.vue` → `pnpm test:e2e:header`）。
+  - **不新增测试用例、不改 `tools/e2e/runner.js` 的 `MODULE_BASELINE`**。规则里「新增用例别写固定 sleep」只规范**写法**，不等于「修 bug 必须补用例」。
+  - 确实需要补用例 / 加守卫时：先说清「为什么既有门禁漏掉了它」和「新用例能拦住什么」，等确认后再写。
+  - 反例（2026-11 实际发生）：修一行滚动条 CSS，顺手写了 7 个探针脚本 + 3 条新 e2e 断言 + 改基准数 54→56；最后断言因 headless 是 overlay 滚动条而**假绿**（0px 不占位，两态本来就没差异），全部回滚。成本 7 分钟，收益 0。
+- **临时探针 / 验证脚本禁止落在仓库工作区**：用 `node -e`、`node --input-type=module -e`，或写到系统临时目录（`/tmp`、`$TEMP`）。仓库 `tools/` 只放长期维护的脚本。
+  - 理由：仓库里的临时文件会被 `git status` 与 `test:e2e:changed` 读到（按 `owns` 匹配路径），污染改动面。
 - 改动画风/功能前先读 PLAN.md 与 README.md，保持与既有结构一致。
