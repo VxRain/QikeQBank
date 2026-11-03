@@ -48,17 +48,67 @@
 
       <div class="bg-card border border-line rounded-[8px] p-2.5">
         <h3 class="m-0 mb-2 text-[13px] font-700 text-text font-[var(--serif)] flex items-center gap-1.5"><i class="i-lucide-list text-primary text-[14px]" />子题（{{children.length}}）</h3>
-        <div v-for="(child, cIdx) in children" :key="child._uid" class="bg-bg-accent border border-line rounded-[8px] p-2.5 mb-2.5">
+        <div
+          v-for="(child, cIdx) in children"
+          :key="child._uid"
+          class="bg-bg-accent border border-line rounded-[8px] p-2.5 mb-2.5 transition-[border-color,box-shadow] duration-150"
+          :class="childDragFrom >= 0 && childDragOver === cIdx ? '!border-primary shadow-md' : ''"
+          @dragover.prevent="onChildDragOver(cIdx)"
+          @dragleave="onChildDragLeave(cIdx)"
+          @drop.prevent="onChildDrop(cIdx)"
+        >
           <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
             <b class="text-[12px] text-text">子题 {{cIdx+1}} · {{ typeLabel(child.data.type) }}</b>
             <span class="flex items-center gap-1.5 flex-wrap">
+              <!-- 子题排序（FE-P1-05）：首/末位禁用而非隐藏，位置不跳动 -->
+              <span class="inline-flex items-center gap-0.5" role="group" :aria-label="`调整第 ${cIdx+1} 个子题顺序`">
+                <button
+                  type="button"
+                  class="btn btn-tiny !px-1.5"
+                  :title="`上移子题 ${cIdx+1}`"
+                  :aria-label="`上移子题 ${cIdx+1}`"
+                  :disabled="!canMoveChild(cIdx, children.length, -1)"
+                  @click="moveChildBy(cIdx, -1)"
+                ><i class="i-lucide-chevron-up text-[13px]" /></button>
+                <button
+                  type="button"
+                  class="btn btn-tiny !px-1.5"
+                  :title="`下移子题 ${cIdx+1}`"
+                  :aria-label="`下移子题 ${cIdx+1}`"
+                  :disabled="!canMoveChild(cIdx, children.length, 1)"
+                  @click="moveChildBy(cIdx, 1)"
+                ><i class="i-lucide-chevron-down text-[13px]" /></button>
+                <i
+                  class="i-lucide-grip-vertical text-[14px] text-muted-light cursor-grab active:cursor-grabbing px-0.5"
+                  title="拖拽调整顺序"
+                  draggable="true"
+                  @dragstart="onChildDragStart(cIdx, $event)"
+                  @dragend="onChildDragEnd"
+                />
+              </span>
+              <!-- 子题改题型（FE-P1-05）：onChildTypeChange 原先是死代码，从未接到任何控件 -->
+              <select
+                :value="child.data.type"
+                class="select px-1.5 py-1 text-[12px] w-auto"
+                title="改子题题型（已填内容按「切换题型时保留内容」设置复用）"
+                :aria-label="`第 ${cIdx+1} 个子题的题型`"
+                @change="onChildTypeChange(cIdx, $event.target.value)"
+              >
+                <option v-for="t in CHILD_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+              </select>
               <label class="text-[12px] text-muted">分</label>
               <input v-model.number="child.data.score" type="number" class="input px-1.5 py-1 text-[12px] w-[60px]" @change="onChildUpdate(cIdx, child.data)" />
               <label class="text-[12px] text-muted">难度</label>
               <select v-model.number="child.data.difficulty" class="select px-1.5 py-1 text-[12px] w-[64px]" @change="onChildUpdate(cIdx, child.data)">
                 <option :value="1">1</option><option :value="2">2</option><option :value="3">3</option><option :value="4">4</option><option :value="5">5</option>
               </select>
-              <button class="btn btn-small btn-danger" @click="removeChild(cIdx)"><i class="i-lucide-trash-2" />删除</button>
+              <button
+                type="button"
+                class="btn btn-small btn-danger"
+                :title="`删除子题 ${cIdx+1}`"
+                :aria-label="`删除子题 ${cIdx+1}`"
+                @click="removeChild(cIdx)"
+              ><i class="i-lucide-trash-2" />删除</button>
             </span>
           </div>
           <QuestionForm :key="child._uid" :question="child.data" :show-score="false" @update="v=>onChildUpdate(cIdx,v)" />
@@ -83,6 +133,10 @@ import PasteBox from './PasteBox.vue'
 import { settings } from '@/stores/settings.js'
 import { QUESTION_TYPES, QUESTION_TYPE_MAP, CHILD_QUESTION_TYPES as CHILD_TYPES, typeLabel } from '@/constants/questions.js'
 import { createDefaultQuestion } from '@/utils/gradeQuestion.js'
+import { toast } from '@/stores/ui.js'
+import {
+  childIdSeed, childIdForAppend, dedupeChildIds, moveChild, canMoveChild, removeChildAt
+} from '@/utils/materialChildren.js'
 
 const props = defineProps({ modelValue: Object })
 const emit = defineEmits(['update:modelValue'])
@@ -325,6 +379,7 @@ function onChildUpdate(cIdx, payload){
 }
 function onChildTypeChange(cIdx, newType){
   const child = children.value[cIdx]
+  if (!child || newType === child.data.type) return
   let def
   if (settings.keepContentOnTypeChange) {
     def = preserveTypeChange(child.data, newType)
@@ -333,6 +388,9 @@ function onChildTypeChange(cIdx, newType){
     def = createDefault(newType)
     def.stem = preservedStem(keepStem, newType) || def.stem
   }
+  // 子题 id 必须原样保留：它是答题记录（detail.child_id）的引用锚点，
+  // 重编会让历史回看指向别的题。只要没换位置，id 就不该变。
+  def.id = child.data.id
   child.data = def
   child._uid = `u${++uidSeq}`
   local.children[cIdx] = def
@@ -340,15 +398,90 @@ function onChildTypeChange(cIdx, newType){
 }
 function addChild(type){
   const def = createDefault(type)
+  // 只有已持久化的题才前端发号；新建题交给后端 ensure_child_ids 按新父 id 分配，
+  // 否则写死 q_c1 会让所有新建材料题的子题撞号（详见 utils/materialChildren.js）
+  const newId = childIdForAppend(local, local.children)
+  if (newId) def.id = newId
   def.stem = createDoc(`子题${local.children.length+1}`)
   local.children.push(def)
   children.value.push(wrapChild(def))
   emitUpdate()
 }
 function removeChild(idx){
-  local.children.splice(idx,1)
-  children.value.splice(idx,1)
+  const r = removeChildAt(local.children, idx)
+  if (r.error === 'empty') {
+    // 子题清空后会变成「抽得到但点不进去」的空材料题，而列表里看不出异常
+    toast('材料题至少要保留 1 个子题；要换成单题请改题型', 'error')
+    return
+  }
+  if (r.error) return
+  local.children = r.children
+  children.value = r.children.map(wrapChild)
   emitUpdate()
+}
+
+// ---------- 子题排序（FE-P1-05）----------
+const childDragFrom = ref(-1)
+const childDragOver = ref(-1)
+
+/**
+ * 消除子题 id 重复（只修重复，不补缺失）。重复意味着同一材料里两道题同号，
+ * `detail.child_id` 回看只能命中第一个 —— 成绩张冠李戴，而界面上完全看不出来。
+ */
+function normalizeChildIdsInPlace() {
+  const list = Array.isArray(local.children) ? local.children : []
+  const next = dedupeChildIds(list, local.id ? childIdSeed(local) : null)
+  next.forEach((c, i) => {
+    if (!c || c === list[i]) return
+    if (typeof c.id === 'string' && c.id) list[i].id = c.id
+    else delete list[i].id
+  })
+}
+
+/**
+ * 移动子题：上移/下移/拖拽三路共用 moveChild（底层是 utils/arrayMove.js::moveItem）。
+ * 只挪位置，不重编 id —— 见 utils/materialChildren.js 文件头的取舍说明。
+ */
+function moveChildTo(from, to) {
+  const next = moveChild(local.children || [], from, to)
+  if (!next) return
+  local.children = next
+  children.value = next.map(wrapChild)
+  normalizeChildIdsInPlace()
+  emitUpdate()
+}
+
+function moveChildBy(cIdx, dir) {
+  moveChildTo(cIdx, cIdx + dir)
+}
+
+function onChildDragStart(cIdx, e) {
+  childDragFrom.value = cIdx
+  // Firefox 必须 setData 才会启动拖拽
+  try { e.dataTransfer?.setData('text/plain', String(cIdx)) } catch { /* 无 dataTransfer 的环境忽略 */ }
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+/** 高亮当前悬停的子题卡（指示将落在这个位置） */
+function onChildDragOver(cIdx) {
+  if (childDragFrom.value >= 0) childDragOver.value = cIdx
+}
+
+/** dragleave 会在移入子节点时反复触发，因此只在真正离开整张卡片时取消高亮 */
+function onChildDragLeave(cIdx) {
+  if (childDragOver.value === cIdx) childDragOver.value = -1
+}
+
+function onChildDragEnd() {
+  childDragFrom.value = -1
+  childDragOver.value = -1
+}
+
+function onChildDrop(to) {
+  const from = childDragFrom.value
+  onChildDragEnd()
+  if (from < 0 || from === to) return
+  moveChildTo(from, to)
 }
 
 // ---------- 外部整体替换（切换编辑的题目）----------
