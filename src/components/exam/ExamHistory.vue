@@ -26,10 +26,16 @@
             </div>
             <div v-else-if="error" class="error-box">{{ error }}</div>
             <template v-else-if="rows.length">
+              <!--
+                每行必须 shrink-0：父容器是 `overflow-auto flex flex-col`，行的默认
+                `flex-shrink:1` 会让「展开后总高超出面板」时去压缩行高，而不是让容器滚动
+                → 行内容被自己的 overflow-hidden 裁掉（实测 4 行全被裁），
+                且容器 scrollHeight === clientHeight，连滚动条都不出。
+              -->
               <div
                 v-for="r in rows"
                 :key="r.key"
-                class="border border-line rounded-[10px] bg-card overflow-hidden"
+                class="shrink-0 border border-line rounded-[10px] bg-card overflow-hidden"
               >
                 <button
                   type="button"

@@ -20,8 +20,10 @@
             <span class="inline-flex items-center gap-1.5"><span class="sc-dot sc-flag"></span>标记 <b class="text-text">{{ counts.flagged }}</b></span>
           </div>
 
+          <!-- 子项 shrink-0：同 ExamHistory，父容器是 overflow-auto flex flex-col，
+               不锁住的话内容超高时是压缩行高（内容被裁）而不是容器出滚动条 -->
           <div class="flex-1 overflow-auto px-5 py-4 flex flex-col gap-4">
-            <div v-for="g in groups" :key="g.key" class="flex flex-col gap-2">
+            <div v-for="g in groups" :key="g.key" class="shrink-0 flex flex-col gap-2">
               <div v-if="g.isMaterial" class="text-[12px] text-muted font-600 flex items-center gap-1.5">
                 <i class="i-lucide-files text-[13px]" />
                 材料题 · 第 {{ g.items[0].idx + 1 }} 题
