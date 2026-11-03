@@ -120,7 +120,7 @@ export function weakPracticeEntry(input, opts = {}) {
   q.set('types', top.type)
   // again=1：弱项专练的语义是「按这个题型开一轮新的」，不是「把题型勾上等我配」。
   // 不带这个参数的话，在完成页点它会只改 URL 而 phase 仍是 done ——
-  // 用户看到的就是「点了没反应」（真实缺陷，e2e 抓到；devBak 的用例只验了 hash 带 types）。
+  // 用户看到的就是「点了没反应」（e2e 抓到的真实缺陷）。
   q.set('again', '1')
   return {
     type: top.type,
