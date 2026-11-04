@@ -14,7 +14,7 @@
  * - parseDocxFile(arrayBuffer, mammoth) -> Promise<{ blocks, warnings:{images, formulas} }>
  */
 import type { QuestionType } from '../api/types.ts'
-import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
+import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.ts'
 import {
   textToDoc,
   optionMatch,

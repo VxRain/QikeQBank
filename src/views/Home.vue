@@ -182,7 +182,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { stats as fetchStats, recordsOverview, isPortableMode } from '@/api/practice.ts'
-import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
+import { QUESTION_TYPES, typeLabel } from '@/constants/questions.ts'
 
 const router = useRouter()
 function go(path) {

@@ -198,7 +198,7 @@ import { settings } from '@/stores/settings.ts'
 import { leaveRuleText, leaveRuleHint as leaveRuleHintOf } from '@/utils/wrongRules.ts'
 import { renderDoc } from '@/utils/render.ts'
 import QuestionPreview from '@/components/QuestionPreview.vue'
-import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
+import { QUESTION_TYPES, typeLabel } from '@/constants/questions.ts'
 import { clampPage } from '@/stores/listFilter.ts'
 import { toast, confirmDialog } from '@/stores/ui.ts'
 

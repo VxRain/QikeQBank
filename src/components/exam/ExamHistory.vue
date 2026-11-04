@@ -131,7 +131,7 @@ import { ref, watch } from 'vue'
 import { examDetail } from '@/api/exam.ts'
 import { buildReviewRows, enrichReviewItems } from '@/utils/examTrend.ts'
 import { renderDoc } from '@/utils/render.ts'
-import { TYPE_FULL_LABELS } from '@/constants/questions.js'
+import { TYPE_FULL_LABELS } from '@/constants/questions.ts'
 
 const props = defineProps({
   open: { type: Boolean, default: false },

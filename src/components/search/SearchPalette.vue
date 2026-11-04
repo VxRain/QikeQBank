@@ -216,7 +216,7 @@ import { list as listQuestions, get as getQuestion } from '@/api/questions.ts'
 import { toast } from '@/stores/ui.ts'
 import { SETTINGS_SECTIONS, isItemVisible, matchItem } from '@/components/settings/registry.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'
-import { typeLabel } from '@/constants/questions.js'
+import { typeLabel } from '@/constants/questions.ts'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }

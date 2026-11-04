@@ -12,7 +12,7 @@ import {
   defaultScoreOf,
   defaultDifficultyOf,
   isQuestionType
-} from '../../src/constants/questions.js'
+} from '../../src/constants/questions.ts'
 
 // FE-ARCH-01 守卫：题型元数据只有这一份，任何"改名/加类型"都必须先过这里。
 test('QUESTION_TYPES: 六个题型、key 唯一、order 递增', () => {

@@ -347,12 +347,12 @@ import { ui, toast } from '@/stores/ui.ts'
 import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.ts'
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
-import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
+import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.ts'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.ts'
 import { elapsedMsOf, fmtClock, weakPracticeEntry, doneLinks } from '@/utils/practiceLoop.ts'
 import { blankAnswersOf, fmtDurationCn, dedupeShuffle, buildRunItems } from '@/utils/questionDisplay.ts'
 
-// 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板用完整名（单选题）
+// 题型清单/文案统一来自 constants/questions.ts（FE-ARCH-01）；组卷面板用完整名（单选题）
 const ALL_TYPES = QUESTION_TYPE_KEYS
 const COUNT_OPTIONS = [
   { value: 5, label: '5 题' },

@@ -389,10 +389,10 @@ import ExamSheet from '@/components/exam/ExamSheet.vue'
 import ExamTrend from '@/components/exam/ExamTrend.vue'
 import ExamHistory from '@/components/exam/ExamHistory.vue'
 import { hasAnswerEntry, remapFlaggedUids, firstUnansweredIndex } from '@/utils/examSheet.ts'
-import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
+import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.ts'
 import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.ts'
 
-// 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板与成绩单用完整名
+// 题型清单/文案统一来自 constants/questions.ts（FE-ARCH-01）；组卷面板与成绩单用完整名
 const ALL_TYPES = QUESTION_TYPE_KEYS
 const COUNT_OPTIONS = [
   { value: 5, label: '5 题' },

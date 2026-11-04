@@ -16,7 +16,7 @@
  * + 编辑器，不动作答页（tests/unit/grade-question.test.js 用测试题型守这条）。
  */
 
-import { QUESTION_TYPES, typeLabel, hasOptions } from '../constants/questions.js'
+import { QUESTION_TYPES, typeLabel, hasOptions } from '../constants/questions.ts'
 import { validateQuestion } from './validate.ts'
 import {
   fillBlankCorrect,

@@ -21,7 +21,7 @@
  * 那样跨场次成绩不可比，用户会以为是自己考差了。
  */
 import { fullScoreOf } from './grading.ts'
-import { QUESTION_TYPE_KEYS } from '../constants/questions.js'
+import { QUESTION_TYPE_KEYS } from '../constants/questions.ts'
 import type { GradableQuestion } from './grading.ts'
 
 /** 题池里的一项：题目 + 其分值折算成的整数单位 */

@@ -16,7 +16,7 @@
  * block 形状与 parseTemplateFile 一致 { index, type, typeLabel, stemText, raw, question|null, error|null }。
  */
 import type { QuestionType } from '../api/types.ts'
-import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
+import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.ts'
 import {
   textToDoc,
   stemToFillDoc,

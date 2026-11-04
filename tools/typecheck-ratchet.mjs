@@ -9,8 +9,8 @@
  * 为什么不按文件白名单 include（实测否决）：
  *   tsconfig 的 include 会把被引文件一起纳入编译，白名单只写
  *   `src/utils/gradeQuestion.ts` 时实际报出 73 条 —— 自己 52 条 +
- *   validate.ts 14 + grading.ts 2 + constants/questions.js 5。派给单个
- *   worker 的任务会被别人文件的错误卡住，验收标准无法收敛。
+ *   validate.ts 14 + grading.ts 2 + constants/questions（当时还是 .js，现已迁 .ts）5。
+ *   派给单个 worker 的任务会被别人文件的错误卡住，验收标准无法收敛。
  *   改为全项目编译 + 按文件计数比对：worker 的验收标准收敛成一句话
  *   「我的文件归零，其余文件数字不变」。
  *

@@ -25,14 +25,14 @@ const SAMPLE = `src/utils/parsePureText.ts(163,9): error TS7034: Variable 'token
 src/utils/parsePureText.ts(164,57): error TS7005: Variable 'tokens' implicitly has an 'any[]' type.
 src/utils/parseTemplate.ts(41,5): error TS7053: Element implicitly has an 'any' type because expression of type 'QuestionType' can't be used to index type '{}'.
   Property 'single' does not exist on type '{}'.
-src/constants/questions.js(41,5): error TS7053: Element implicitly has an 'any' type.
+src/constants/questions.ts(41,5): error TS7053: Element implicitly has an 'any' type.
 
 Found 4 errors in 3 files.
 `
 
 const PURE_TEXT = 'src/utils/parsePureText.ts'
 const TEMPLATE = 'src/utils/parseTemplate.ts'
-const QUESTIONS = 'src/constants/questions.js'
+const QUESTIONS = 'src/constants/questions.ts'
 const SEARCH = 'src/stores/search.ts'
 const SESSION = 'src/stores/session.ts'
 const SETTINGS = 'src/stores/settings.ts'

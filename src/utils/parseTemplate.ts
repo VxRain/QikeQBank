@@ -16,9 +16,9 @@
  */
 
 import type { BlankAnswer, QuestionType } from '../api/types.ts'
-import { TYPE_LABELS, TYPE_ALIASES } from '../constants/questions.js'
+import { TYPE_LABELS, TYPE_ALIASES } from '../constants/questions.ts'
 
-// 题型命名/别名唯一权威在 constants/questions.js（FE-ARCH-01）；此处 re-export 兼容旧引用
+// 题型命名/别名唯一权威在 constants/questions.ts（FE-ARCH-01）；此处 re-export 兼容旧引用
 export { TYPE_LABELS }
 
 /* ---------- 解析结果形状（parseSheet / parseDocxTemplate / ImportFileBox 共用） ---------- */
