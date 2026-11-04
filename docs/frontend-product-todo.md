@@ -117,16 +117,17 @@
 **挡不住的**（`strict: false` 的直接后果，别指望它）：
 
 - **不挡 undefined / null 访问**：`strictNullChecks: false`，`a.b.c` 里 `b` 可能不存在也照样通过
-- **不挡隐式 any**：`noImplicitAny: false`。打开这一个开关，**全项目 617 条错误 / 47 文件**（起点 903 / 55，已按棘轮清零三批共 286 条，见 §0.6.1），分布：
-  - `src/views/` 264 / `src/components/` 241 / `src/utils/` 83 / `src/stores/` 19 / `src/constants/` 5 / `src/composables/` 2 / `App.vue` 3
-  - **api 层为 `0`**（真标了类型）；`utils`+`stores` 剩余 102 条 / 17 文件（起点 388），最大单文件 `normalize.ts` 17 / `render.ts` 17 / `validate.ts` 14
-  - 已清零的 8 个 `utils`/`stores` 文件：`parseTemplate` 38 / `parsePureText` 50 / `gradeQuestion` 52 / `parseDocxTemplate` 52 / `parseSheet` 37 / `session` 34 / `settings` 15 / `search` 8
-  - 错误码实测（2026-11，617 条时）：TS7006 390 / TS7053 91 / TS2339 48 / TS7005 36 / TS7031 15 / TS7034 14，其余 TS7023 6 / TS7018 6 / TS7022 5 / TS7016 2 / TS7011 2 / TS7024 1 / TS2345 1
+- **不挡隐式 any**：`noImplicitAny: false`。打开这一个开关，**全项目 480 条错误 / 27 文件**（起点 903 / 55，已按棘轮清零 423 条，见 §0.6.1），分布：
+  - `src/views/` 262 / `src/components/` 215 / `App.vue` 3
+  - **`api` / `utils` / `stores` / `constants` / `composables` / `router` 均为 `0`** —— 纯脚本层已全部清零
+  - 剩余 480 条全在 30 个 **未加 `lang="ts"` 的 `.vue`** 里（不含 `App.vue` 的 3 条），属下一阶段独立立项
+  - 错误码实测（2026-11，480 条时）：以 TS7006（参数隐式 any）为主，其余 TS7053 / TS2339 / TS7005 / TS7034 等
   - 复现：`pnpm typecheck:strict`（读 `tsconfig.strict.json`，即 `tsconfig.json` + `noImplicitAny: true`）
-  - 注①（口径）：**任何单看某个目录的合计数都不能当成「全项目债务」**——388 是已迁移目录的，903 才是全量。
-  - 注②（**已是棘轮**）：数字会随收紧**下降**（显式 any 清掉后，隐式 any 的推断位置也跟着减少），因此**不能用一个总数字做基线**（总数字合法地会变）；改为**按文件计数**上棘轮，见下节。
-- **4 个文件只是改了后缀**，内容零改动，因此仍是隐式 any 语义：`utils/image.ts`（66 行）、`render.ts`（87）、`normalize.ts`（80）、`validate.ts`（85）
-  （`parseTemplate.ts` 原先也在这份清单里，但已在 §0.6.1 的批次 2 清零并大幅改动，383 → 478 行，故移出）
+  - 注①（口径）：**任何单看某个目录的合计数都不能当成「全项目债务」**——已清零目录的 0 不代表全项目无债，480 都在 `.vue` 里。
+  - 注②（**已是棘轮**）：数字会随收紧**下降**，因此**不能用一个总数字做基线**（总数字合法地会变）；改为**按文件计数**上棘轮，见下节。
+- **4 个文件曾只是改了后缀**（内容零改动，因此仍是隐式 any 语义）：`utils/image.ts`（66 行）、`render.ts`（87）、`normalize.ts`（80）、`validate.ts`（85）
+  —— 这 4 个**已全部在后续批次清零**（image 3 / render 17 / normalize 17 / validate 14）；`parseTemplate.ts` 同样已清零（383 → 478 行）。此条仅作历史记录。
+- **`src/` 下已无任何 `.js` 文件**（含 `main` / `router` / `constants/questions` / `composables` / `components/settings/registry` 全部迁 `.ts`）。
 
 #### 0.6.1 noImplicitAny 棘轮（已落地）
 
@@ -154,6 +155,37 @@
 派给单个 worker 时它会被别人文件的错误卡住，验收标准无法收敛。改成**全项目编译 + 按文件计数比对**后，每个 worker 的验收标准收敛成一句话：**我的文件归零，其余文件数字不变**。注意「其余文件」允许**下降**（依赖收紧顺带修好）但不允许上升。
 
 **分批顺序由依赖决定，不能按文件随意并行**：`parseDocxTemplate.ts` 与 `parseSheet.ts` 都 import `parseTemplate.ts` 的类型，必须排在它之后；`session.ts` / `settings.ts` / `gradeQuestion.ts` 都会改到 `Practice.vue` / `Review.vue`，跨批并行会文本覆盖。
+
+**当前进度（2026-11）**：903 → **480 条 / 27 文件**，已清零 **423 条**。
+`api` / `utils` / `stores` / `constants` / `composables` / `router` **全部归零**，
+剩余 480 条全在未加 `lang="ts"` 的 `.vue` 里（views 262 / components 215 / App.vue 3）。
+
+#### 0.6.1.1 清零过程中反复出现的四类陷阱（均已实测确认）
+
+1. **`strict:false` 下判别联合不会收窄**。`validateSteps` 原本返回
+   `{ok:false;msg} | {ok:true;steps}`，但 `if (!r.ok)` 与三目都无法收窄，
+   `r.msg` / `r.steps` 在另一侧报 TS2339。改用「`ok` + 可选字段」的宽结构。
+   等价地，`blankIdsInOrder` 声明 `Array<string|null|undefined>` 时**不能**加
+   运行期过滤——实测那会让 `[null,'b1']` vs `['b1']` 从「报不一致」变成「通过」，
+   那是修 bug 而非类型工作。
+2. **`as X[]` 断言的「必要性」往往站不住**。`normalize.ts` / `validate.ts` 曾有
+   6 处 `as PmNode[]`，注释称「不这么写调用方就传不进来」——实测把
+   `content?: unknown[]` 直接改成 `content?: PmNode[]` 并删掉断言后**仍是 0 错误**
+   （接口字段全可选 + `strict:false` 下 `unknown[]` 可赋给 `PmNode[]`）。
+   **为断言编理由比断言本身更危险**，会诱导后人继续加。
+3. **`.ts` 里不能用 `@/` 别名**。守卫 `ts-import-guard.test.js` A 组强制相对路径
+   （`node --test` 不认 Vite alias）。原 `.js` 用别名没问题（守卫只扫 `.ts`），
+   迁过来立刻红。反之，改后缀时要 grep **全仓**：`SettingsDialog.vue` 用的是
+   `./registry.js` 相对路径，按 `settings/registry.js` 批量替换会漏。
+4. **并发跑 `typecheck` 会共用 `tsbuildinfo`**。主 `tsconfig` 是
+   `incremental: true`，多路同时跑会拿到过期结果（假绿/假红）。
+   因此 `tsconfig.strict.json` 刻意设 `incremental: false`，且 worker 只准用
+   `npx vue-tsc -p tsconfig.strict.json | grep "^<自己文件>"` 判断成败。
+
+**行为对拍的铁律**：必须**逐字节比异常类型与消息**，只看正常返回值会漏。
+实测碰到两类假信号：① 给旧版放 katex 桩、新版用真 katex，制造了 54 个假差异；
+② 给 `getAggregatedPlainText` 加 `input || {}` 兜底，把 `null` 入参从
+「抛 TypeError」变成「返回空串」——被对拍当场抓住。
 
 **显式 any 已清零并上了守卫**（`tests/unit/ts-import-guard.test.js` D 组）：`src/**/*.ts` 里不再有 `: any` / `as any` / `any[]` / `Record<string, any>`。清的过程**挖出了 4 处真契约缺口**（都属「any 掩盖了它」）：
 
@@ -193,7 +225,19 @@ const extra: SessionExtra = isPlainObject(r.extra) ? (r.extra as SessionExtra) :
 
 顺带把 ExamHistory 里的「材料题子题切换 + 填空正确答案注入」从 SFC 搬到 `utils/examTrend.ts::enrichReviewItems`（SFC 未加 `lang="ts"`，写不了类型注解，留原处只能永远靠静态推断），**并补上 `parseSheet` 的 7 条单测**——它此前零覆盖，而它的类型本次被改动过。
 
-**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。`noImplicitAny` 分文件清零已开工（§0.6.1）：8 个 `utils`/`stores` 文件、286 条已清零（903 → 617），棘轮已就位锁住不回退。剩余 617 条里 `views` 264 / `components` 241 是下一批，`utils`+`stores` 还剩 102 条（17 文件）。收紧过程又挖出 1 处既有缺口（`session.ts` 的 `extra` 未校验内部字段，§0.6.2），**属既有缺陷、非本次漂移**，待独立立项。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
+**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。
+
+`noImplicitAny` 分文件清零已推进到 **903 → 480 条 / 27 文件**（清零 423 条，§0.6.1）：
+**纯脚本层（`api` / `utils` / `stores` / `constants` / `composables` / `router`）已全部归零**，
+且 `src/` 下**不再有 `.js` 文件**。棘轮已就位锁住不回退。
+
+**剩余 480 条全在 30 个未加 `lang="ts"` 的 `.vue` 里**（views 262 / components 215 / App.vue 3），
+这是下一阶段的关键决策点：SFC 未加 `lang="ts"` 时**写不了类型注解**，
+所以不能像 `.ts` 那样「加注解就完事」——得先决定是否给 SFC 开 `lang="ts"`
+（会牵出全部 props/emits 标注，且可能一次曝露大量新错）。建议先用单个小组件试水量化。
+
+收紧过程又挖出 1 处既有缺口（`session.ts` 的 `extra` 未校验内部字段，§0.6.2），
+**属既有缺陷、非漂移**，待独立立项。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
 
 **不建模块 shim**（`declare module '*.vue'`）：实测不加时模块类错误为 0；加了反而把 SFC 的 props/emits 推导顶成 `any`。`src/env.d.ts` 只做 `vue-router` 的 `RouteMeta` 增强。
 
