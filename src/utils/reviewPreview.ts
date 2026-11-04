@@ -9,8 +9,12 @@
 import { answer as fsrsAnswer, cardFromRow } from './fsrs.ts'
 import type { FsrsRow, FsrsSettings } from './fsrs.ts'
 
-/** 四个 rating 的固定顺序（与界面按钮、键盘 1–4 一致） */
-export const RATING_GRADES = Object.freeze(['again', 'hard', 'good', 'easy'])
+/**
+ * 四个 rating 的固定顺序（与界面按钮、键盘 1–4 一致）。
+ * 用 `as const` 而不是裸数组：否则元素退化成 `string`，在
+ * `previewIntervals` 里拿它去下标 `Record<RatingGrade, …>` 会报 TS7053。
+ */
+export const RATING_GRADES = Object.freeze(['again', 'hard', 'good', 'easy'] as const)
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE

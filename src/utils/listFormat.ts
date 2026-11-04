@@ -54,13 +54,13 @@ export function rowStats(q: QuestionStatsSource | null | undefined): RowStatsRes
 }
 
 /** 正确率 → 配色类：未作答浅灰；及格线 60% 以上绿、以下红（与错题本同口径） */
-export function rateClass(rate) {
+export function rateClass(rate: number | null | undefined): string {
   if (rate == null) return 'text-muted-light'
   return rate >= 0.6 ? 'text-success font-600' : 'text-danger font-700'
 }
 
 /** 正确率 → 展示文本：null 给「—」，否则取整百分比 */
-export function rateText(rate) {
+export function rateText(rate: number | null | undefined): string {
   return rate == null ? '—' : Math.round(rate * 100) + '%'
 }
 
@@ -68,11 +68,11 @@ export function rateText(rate) {
  * ISO 时间 → `YYYY-MM-DD HH:mm`。
  * 无效/缺失一律给「—」——不能显示 Invalid Date。
  */
-export function fmtDate(iso) {
+export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
-  const p = (n) => String(n).padStart(2, '0')
+  const p = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
@@ -80,7 +80,7 @@ export function fmtDate(iso) {
  * 毫秒 → 人读时长（只用于「做题快慢」的感知，不参与判分）。
  * ≤0 给「—」；<10 秒保留一位小数（「3.2 秒」比「3 秒」有信息量）。
  */
-export function fmtDuration(ms) {
+export function fmtDuration(ms: number | string | null | undefined): string {
   const n = Number(ms) || 0
   if (n <= 0) return '—'
   const s = n / 1000
@@ -91,7 +91,7 @@ export function fmtDuration(ms) {
 }
 
 /** 题干截断（列表行只给一眼能认出的长度） */
-export function truncate(s, n) {
+export function truncate(s: string | null | undefined, n: number): string {
   if (!s) return '-'
   return s.length > n ? s.slice(0, n) + '…' : s
 }

@@ -106,7 +106,7 @@ export function lettersOf(q: QuestionLike | null | undefined, ids: string[] | nu
  * 毫秒 → 「N时N分N秒」/「N分N秒」/「N秒」（做题用时的人读形式）。
  * 与 `utils/practiceLoop.ts::fmtClock` 的区别：那个是 mm:ss 的秒表，这个是中文叙述。
  */
-export function fmtDurationCn(ms) {
+export function fmtDurationCn(ms: unknown) {
   const s = Math.max(0, Math.round((Number(ms) || 0) / 1000))
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)

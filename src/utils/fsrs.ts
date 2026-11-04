@@ -5,7 +5,7 @@
  * 纯函数 + 可注入 now，保证 node:test 可测；不直接读 settings（调用方传入）。
  */
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from 'ts-fsrs'
-import type { Card, ReviewLog, Steps } from 'ts-fsrs'
+import type { Card, FSRS, Grade, ReviewLog, Steps } from 'ts-fsrs'
 
 export { Rating, State }
 
@@ -17,7 +17,10 @@ export const FSRS_DEFAULTS = {
   enableFuzz: false,
 }
 
-const GRADE_TO_RATING = {
+// 键集合是四个合法档位，但入参 grade 是任意字符串（调用方传入设置值），
+// 所以值类型写成 `Grade | undefined`：既能安全下标，也让下面的 null 守卫成立
+// （Grade = Exclude<Rating, Rating.Manual>，恰好是 ts-fsrs 的 next() 可接受类型）
+const GRADE_TO_RATING: Record<string, Grade | undefined> = {
   again: Rating.Again,
   hard: Rating.Hard,
   good: Rating.Good,
@@ -45,7 +48,10 @@ export function withDefaults(s: FsrsSettings = {}) {
   }
 }
 
-let scheduler = null
+// scheduler 单例：首次 getScheduler 时惰性创建（fsrs(…) 返回 FSRS）。
+// 必须显式声明联合类型：写 null 会让 TS 把它钉成 null 字面量，
+// 后续赋值与 .next() 全部落进隐式 any
+let scheduler: FSRS | null = null
 let schedulerKey = ''
 
 export function schedulerKeyOf(s: FsrsSettings = {}): string {
@@ -54,7 +60,7 @@ export function schedulerKeyOf(s: FsrsSettings = {}): string {
 }
 
 /** 按设置取 scheduler（签名不变则复用，变则重建） */
-export function getScheduler(s: FsrsSettings = {}) {
+export function getScheduler(s: FsrsSettings = {}): FSRS {
   const key = schedulerKeyOf(s)
   if (!scheduler || schedulerKey !== key) {
     const p = withDefaults(s)

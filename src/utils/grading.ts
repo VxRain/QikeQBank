@@ -70,6 +70,26 @@ export interface BlankResult {
   correct: boolean
 }
 
+/**
+ * 单题型判分基元（gradeSingle / gradeMulti / gradeFill / gradeShort）的**并集**形状。
+ *
+ * 为什么需要它：gradeExamQuestion 按题型只调用其中一个基元，结果赋给同一个局部变量后
+ * 再统一读 ratio / unanswered / subset / results。不写类型标注时，TS 会把该变量推断成
+ * 各分支的**最佳公共父类型**：subset / results 只在少部分分支出现，被公共类型丢掉，
+ * 剩下 `{ ratio; unanswered? }`，于是 `r.subset` / `r.results` 报 TS2339。
+ * 实测证明：去掉标注后 `const probe: number = r` 显示 `r` 的类型正是
+ * `{ ratio: number; unanswered?: boolean }`。即**推断缺口，不是真的少了字段**；
+ * 各基元自己的返回类型保持精确（subset 只有多选有、results 只有填空有）。
+ */
+interface RawGrade {
+  ratio: number
+  unanswered?: boolean
+  /** 仅多选：漏选（未全对但无错选） */
+  subset?: boolean
+  /** 仅填空：逐空结果 */
+  results?: BlankResult[]
+}
+
 /** 单题判分结果 */
 export interface GradeResult {
   ratio: number
@@ -179,7 +199,7 @@ export function gradeExamQuestion(
       children
     }
   }
-  let r
+  let r: RawGrade
   if (q?.type === 'single' || q?.type === 'judge') r = gradeSingle(q, a.selected)
   else if (q?.type === 'multi') r = gradeMulti(q, a.picked, opts.multiRule || 'partial')
   else if (q?.type === 'fill') r = gradeFill(q, a.fillValues)

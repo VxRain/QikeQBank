@@ -6,13 +6,27 @@
  * 不必为了测一个分组去起浏览器。
  */
 
+/**
+ * 单题作答的最小形状：只有「有没有内容」有意义，
+ * 字段结构由 Exam 组卷决定（选择 selected / 多选 picked / 填空 fillValues / 简答 shortSelf）。
+ */
+export interface AnswerEntryLike {
+  selected?: unknown
+  picked?: unknown[] | null
+  fillValues?: Record<string, unknown> | null
+  shortSelf?: unknown
+}
+
 /** 判分前「有内容」即可（与 Exam.vue 的 hasAnswer 同口径：简答自评也算已答） */
-export function hasAnswerEntry(a) {
+export function hasAnswerEntry(a: unknown): boolean {
   if (!a) return false
-  if (a.selected) return true
-  if (Array.isArray(a.picked) && a.picked.length) return true
-  if (Object.values(a.fillValues || {}).some((v) => String(v || '').trim())) return true
-  if (a.shortSelf) return true
+  // 入参来自调用方的 answers 表（Record<string, unknown>），这里只读不写，故就地声明形状
+  const entry = a as AnswerEntryLike
+  if (entry.selected) return true
+  if (Array.isArray(entry.picked) && entry.picked.length) return true
+  const fillValues: Record<string, unknown> = entry.fillValues || {}
+  if (Object.values(fillValues).some((v) => String(v || '').trim())) return true
+  if (entry.shortSelf) return true
   return false
 }
 
@@ -37,12 +51,28 @@ export interface SheetItemInput {
   [k: string]: unknown
 }
 
+/** 答题卡格子（groupSheetItems 的产物：输入项 + 全局题序 + 三态） */
+export interface SheetCell {
+  uid: string
+  /** 全局题序（从 0 起，答题卡显示的题号 = idx + 1） */
+  idx: number
+  q?: SheetItemInput['q']
+  /** 是否被标记（存疑） */
+  flagged: boolean
+  /** 该题是否已作答 */
+  answered: boolean
+  /** 材料子题序号（仅材料子题有） */
+  childIdx?: number
+  /** 材料题子题总数（仅材料子题有） */
+  childCount?: number
+}
+
 /** 答题卡分组：材料题子题归一组，其余独立成组 */
 export interface SheetGroup {
   key: string
   isMaterial: boolean
   parentIndex: number
-  items: SheetItemInput[]
+  items: SheetCell[]
 }
 
 /**
@@ -56,11 +86,11 @@ export function groupSheetItems(
   flagged: Record<string, boolean> = {}
 ): SheetGroup[] {
   const out: SheetGroup[] = []
-  const byParent = new Map()
+  const byParent = new Map<string, SheetGroup>()
   const list = Array.isArray(items) ? items : []
   for (let i = 0; i < list.length; i++) {
     const it = list[i]
-    const entry = {
+    const entry: SheetCell = {
       uid: it.uid,
       idx: i,
       q: it.q,
@@ -68,7 +98,9 @@ export function groupSheetItems(
       answered: hasAnswerEntry(answers[it.uid])
     }
     if (it.isChild && it.parent) {
-      const key = it.parent.id
+      // 材料题子题的 parent.id 必然存在（组卷时由母题写入）；断言只为满足 Map 键类型，
+      // 运行期即便缺失也仍按「同一个 undefined 键」归组，行为不变。
+      const key = it.parent.id as string
       let g = byParent.get(key)
       if (!g) {
         g = { key, isMaterial: true, parentIndex: i, items: [] }
@@ -83,11 +115,22 @@ export function groupSheetItems(
   return out
 }
 
-/** 三态计数（标记优先于已答：标了就是待定，视觉上要显眼） */
-export function countSheet(items, answers = {}, flagged = {}) {
+/**
+ * 三态计数（标记优先于已答：标了就是待定，视觉上要显眼）。
+ *
+ * items 入参放宽到 `readonly unknown[]`：ExamSheet.vue 的 `props.items` 被
+ * defineProps 的 `type: Array` 推断成 `unknown[]`，SFC 未加 lang="ts" 也写不了断言。
+ * 这里只读 uid，内部用最小形状收回类型，写错字段名仍会报错。
+ */
+export function countSheet(
+  items: readonly unknown[] | null | undefined,
+  answers: Record<string, unknown> = {},
+  flagged: Record<string, boolean> = {}
+): { total: number; answered: number; unanswered: number; flagged: number } {
   let answered = 0
   let flaggedN = 0
-  for (const it of Array.isArray(items) ? items : []) {
+  const list = (Array.isArray(items) ? items : []) as readonly SheetItemInput[]
+  for (const it of list) {
     if (hasAnswerEntry(answers[it.uid])) answered++
     if (flagged[it.uid]) flaggedN++
   }
@@ -95,8 +138,8 @@ export function countSheet(items, answers = {}, flagged = {}) {
   return { total, answered, unanswered: total - answered, flagged: flaggedN }
 }
 
-/** 单元格状态：'flag' | 'done' | 'todo' */
-export function cellStateOf(entry) {
+/** 单元格状态：'flag' | 'done' | 'todo'（只读两个布尔语义字段，不绑死完整格子形状） */
+export function cellStateOf(entry: { flagged?: unknown; answered?: unknown }): 'flag' | 'done' | 'todo' {
   if (entry.flagged) return 'flag'
   return entry.answered ? 'done' : 'todo'
 }
@@ -124,8 +167,8 @@ export function firstUnansweredIndex(items: SheetItemInput[] | null | undefined,
 export function remapFlaggedUids(oldUids: string[] | null | undefined, items: SheetItemInput[] | null | undefined): Record<string, boolean> {
   const out: Record<string, boolean> = {}
   const list = Array.isArray(items) ? items : []
-  const qidOf = (uid) => String(uid).replace(/_\d+$/, '')
-  const byQid = new Map()
+  const qidOf = (uid: string) => String(uid).replace(/_\d+$/, '')
+  const byQid = new Map<string, SheetItemInput>()
   for (const it of list) {
     if (it.q?.id) byQid.set(it.q.id, it) // 普通题/子题自身的 id
     if (it.uid) byQid.set(it.uid, it) // 旧草稿恰好没变时直接命中

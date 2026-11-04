@@ -1,14 +1,74 @@
 import katex from 'katex'
 
-export function escapeHtml(s){ return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+/**
+ * Tiptap/ProseMirror 节点的最小形状（本模块只读这几个字段，不求完整节点类型）。
+ *
+ * 递归描述：内联节点与块节点共用一份形状，`content` 既可装段落里的 inline 节点，
+ * 也可装 doc 里的 block 节点。这样 `renderDoc(node)` 递归传自身时不需要额外断言。
+ *
+ * 字段全为可选是刻意的：`noImplicitAny` 只关隐式 any，`strictNullChecks` 仍是关闭的，
+ * 所以可选字段不会让 `n.attrs.latex` 这类原有写法变成错误——**运行期行为一行没动**。
+ */
+interface TiptapMark {
+  type?: string
+  attrs?: { color?: string } | null
+}
+interface TiptapAttrs {
+  latex?: string
+  id?: string
+  src?: string
+  alt?: string
+  caption?: string
+  width?: number | string
+}
+interface TiptapNode {
+  type?: string
+  text?: string
+  marks?: TiptapMark[] | null
+  attrs?: TiptapAttrs | null
+  content?: TiptapNode[] | null
+}
 
-export function renderInlineMath(latex){
+/** 选项：renderOptions 只读 id（定位正确答案）与 content（富文本） */
+interface OptionLike {
+  id?: string
+  content?: TiptapNode | null
+}
+
+/** 答案：ids 用于选择题高亮，reference 用于简答参考答案 */
+interface AnswerLike {
+  ids?: string[] | null
+  reference?: TiptapNode | null
+}
+
+/** 材料题子题：题干/分值/题型/选项/答案/解析 */
+interface MaterialChildLike {
+  stem?: TiptapNode | null
+  score?: number | null
+  type?: string
+  options?: OptionLike[] | null
+  answer?: AnswerLike | null
+  analysis?: TiptapNode | null
+}
+
+/** 材料题母题 */
+interface MaterialLike {
+  stem?: TiptapNode | null
+  type?: string
+  children?: MaterialChildLike[] | null
+  options?: OptionLike[] | null
+  answer?: AnswerLike | null
+}
+
+export function escapeHtml(s: unknown): string{ return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+
+export function renderInlineMath(latex: string): string{
   try{ return katex.renderToString(latex, { throwOnError:false, displayMode:false }) } catch(e){ return `<span class="katex-fallback">${escapeHtml(latex)}</span>` }
 }
-export function renderBlockMath(latex){
+export function renderBlockMath(latex: string): string{
   try{ return `<div class="math-block">${katex.renderToString(latex, { throwOnError:false, displayMode:true })}</div>` } catch(e){ return `<div class="math-block">${escapeHtml(latex)}</div>` }
 }
-export function renderInlineNodes(nodes){
+export function renderInlineNodes(nodes: TiptapNode[] | null | undefined): string{
   return (nodes||[]).map(n=>{
     if(n.type==='text'){
       let html = escapeHtml(n.text ?? '')
@@ -26,9 +86,9 @@ export function renderInlineNodes(nodes){
     return ''
   }).join('')
 }
-export function renderDoc(doc){
+export function renderDoc(doc: TiptapNode | null | undefined): string{
   if(!doc || !Array.isArray(doc.content)) return ''
-  return doc.content.map(node=>{
+  return doc.content.map((node): string=>{
     if(node.type==='paragraph') return `<p>${renderInlineNodes(node.content)}</p>`
     if(node.type==='imageBlock'){
       const src=node.attrs.src||''
@@ -42,9 +102,11 @@ export function renderDoc(doc){
     return ''
   }).join('')
 }
-export function renderOptions(options, answerIds){
+export function renderOptions(options: OptionLike[] | null | undefined, answerIds: string[] | null | undefined): string{
   if(!options) return ''
-  const ids = Array.isArray(answerIds) ? answerIds : []
+  // 候选答案 id 里允许出现 undefined：选项 id 本身是可选字段，
+  // 用 `?? ''` 兜底会改变 includes 的判定（空串 id 会被误判为正确答案）。
+  const ids: Array<string | undefined> = Array.isArray(answerIds) ? answerIds : []
   return options.map((o,i)=>{
     const inner = renderDoc(o.content).replace(/^<p>/,'').replace(/<\/p>$/,'')
     const displayKey = String.fromCharCode(65+i)
@@ -52,7 +114,7 @@ export function renderOptions(options, answerIds){
     return `<div class="option${isAns?' correct':''}"><span class="key">${displayKey}.</span>${isAns?'<span style="color:#10b981"> ✓</span>':''} ${inner}</div>`
   }).join('')
 }
-export function renderMaterial(material){
+export function renderMaterial(material: MaterialLike): string{
   let html=`<div class="material">${renderDoc(material.stem)}</div>`
   if(Array.isArray(material.children)){
     material.children.forEach((child, idx)=>{
@@ -70,9 +132,9 @@ export function renderMaterial(material){
   }
   return html
 }
-export function extractPlainText(doc){
+export function extractPlainText(doc: TiptapNode | null | undefined): string{
   if(!doc||!doc.content) return ''
-  const parts=[]
+  const parts=[] as string[]
   for(const n of doc.content){
     if(n.type==='paragraph') parts.push((n.content||[]).map(c=>{
       if(c.type==='text') return c.text||''

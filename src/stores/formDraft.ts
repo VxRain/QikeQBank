@@ -33,28 +33,41 @@ export function draftKey({ isEdit, id, bankId }: DraftCtx = {}): string {
   return `${KEY_PREFIX}new:${bankId || 'unassigned'}`
 }
 
+/**
+ * 稳定序列化的中间值：可 JSON 化的纯数据。
+ *
+ * 它必须写出来（而不是让 TS 推断）——`walk` 递归调自己，返回值又参与
+ * 上层对象的构造，推断会绕成环（TS7022/7023/7024）。显式标注即断开环，
+ * 不是靠忽略错误。
+ */
+type StableValue = null | boolean | number | string | StableValue[] | { [k: string]: StableValue }
+
 /** 稳定序列化：对象键排序，数组保序。undefined 视为缺失（与 JSON 语义一致）。 */
 export function stableStringify(value: unknown): string {
-  const seen = new WeakSet()
-  const walk = (v) => {
+  const seen = new WeakSet<object>()
+  const walk = (v: unknown): StableValue | undefined => {
     if (v === null || typeof v !== 'object') {
       if (typeof v === 'function' || typeof v === 'undefined') return undefined
       if (typeof v === 'number' && !Number.isFinite(v)) return null
-      return v
+      // 非对象分支：undefined/function 已被上面滤掉，非有限数已归 null，
+      // 剩下的（null/boolean/number/string）原样返回——与改造前完全一致。
+      // 注：symbol/bigint 也会走到这里并原样返回，旧实现同样如此（JSON.stringify 会忽略/报错），
+      // 这里不额外加判型，避免改变可观察行为。
+      return v as StableValue
     }
     if (seen.has(v)) return null // 防环（表单是纯数据，这里只是安全网）
     seen.add(v)
     if (Array.isArray(v)) {
-      const out = v.map((x) => {
+      const out: StableValue[] = v.map((x) => {
         const w = walk(x)
         return w === undefined ? null : w
       })
       seen.delete(v)
       return out
     }
-    const out = {}
+    const out: { [k: string]: StableValue } = {}
     for (const k of Object.keys(v).sort()) {
-      const w = walk(v[k])
+      const w = walk((v as Record<string, unknown>)[k])
       if (w !== undefined) out[k] = w
     }
     seen.delete(v)

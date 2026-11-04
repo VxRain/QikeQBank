@@ -1,10 +1,41 @@
 // ---- 纯函数：原样移植自 QBank/server/routes/questions.js（去 express/router，保留函数体） ----
 
-function getPlainText(doc){
+/**
+ * ProseMirror/Tiptap 节点（本模块只读取这些字段）。
+ *
+ * `content` 刻意保持 `unknown[]`：调用方（Form / ImportFileBox / parsePureText 的
+ * `ParsedQuestion`）拿到的 doc 其静态类型就是 `content?: unknown[]`（见 `api/types.ts::Doc`），
+ * 写成 `PmNode[]` 会让那些题目对象无法传进来。遍历处用 `as PmNode[]` 收窄——
+ * 纯类型断言，无运行期判断，行为与改造前逐字一致。
+ */
+interface PmNode {
+  type?: string
+  text?: string
+  attrs?: { latex?: string | null; id?: string | null } | null
+  content?: unknown[]
+}
+
+/**
+ * 本模块会读写的题目字段。只声明归一化/聚合真正用到的键；
+ * `answer.blanks` 留 `unknown` 是因为这里只做 `delete`，不关心其形状。
+ */
+interface NormalizableQuestion {
+  id?: string
+  type?: string
+  stem?: PmNode | null
+  options?: Array<{ id?: string; content?: PmNode | null; isAnswer?: unknown }>
+  answer?: { ids?: string[]; blanks?: unknown; reference?: PmNode | null } | null
+  analysis?: PmNode | null
+  score?: number | null
+  difficulty?: number | null
+  children?: NormalizableQuestion[]
+}
+
+function getPlainText(doc: PmNode | null | undefined): string {
   if(!doc || !doc.content) return ''
-  const parts=[]
-  for(const n of doc.content){
-    if(n.type==='paragraph') parts.push((n.content||[]).map(c=>{
+  const parts: string[] = []
+  for(const n of doc.content as PmNode[]){
+    if(n.type==='paragraph') parts.push(((n.content||[]) as PmNode[]).map(c=>{
       if(c.type==='text') return c.text||''
       if(c.type==='inlineMath') return ` ${c.attrs?.latex||''} `
       if(c.type==='blank') return ' ___ '
@@ -18,7 +49,7 @@ function getPlainText(doc){
 
 // 聚合全文：material 母题拼接所有子题的 stem + 选项 + 参考答案 + 解析；
 // 非 material 为 stem + 自身选项/参考答案/解析。用于搜索命中子题关键词。
-export function getAggregatedPlainText(q){
+export function getAggregatedPlainText(q: NormalizableQuestion): string {
   const parts = [getPlainText(q.stem)]
   const children = (q.type==='material' && Array.isArray(q.children)) ? q.children : []
   for(const c of children){
@@ -35,7 +66,7 @@ export function getAggregatedPlainText(q){
 
 // 规范化：analysis 空段落→null；options 去除 isAnswer；补稳定 id；递归 children
 // v2: material 的 score/difficulty 由服务端强制重算（分值加权，不信任前端）
-export function normalizeQuestion(q){
+export function normalizeQuestion(q: NormalizableQuestion | null | undefined): NormalizableQuestion | null | undefined {
   if(!q) return q
   if(q.analysis && isDocEmpty(q.analysis)) q.analysis = null
   if(Array.isArray(q.options)){
@@ -68,13 +99,13 @@ export function normalizeQuestion(q){
   return q
 }
 // options 短id：题内唯一 o1/o2/...，新增的按位置生成，已有的保留（乱序/引用/判分不漂移）
-function ensureOptionIds(q){
+function ensureOptionIds(q: NormalizableQuestion): void {
   q.options.forEach((o,i)=>{ if(!o.id) o.id = `o${i+1}` })
 }
-function isDocEmpty(doc){
+function isDocEmpty(doc: PmNode | null | undefined): boolean {
   if(!doc || !doc.content) return true
-  return doc.content.every(b=>{
-    if(b.type==='paragraph') return !b.content || b.content.every(n=> !n.text || !String(n.text).trim())
+  return (doc.content as PmNode[]).every(b=>{
+    if(b.type==='paragraph') return !b.content || ((b.content as PmNode[]).every(n=> !n.text || !String(n.text).trim()))
     return false
   })
 }

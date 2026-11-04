@@ -43,15 +43,15 @@ export const DEFAULT_BANK_SORT = 'custom'
  */
 export const SEARCH_SORT_MIN_BANKS = 4
 
-/** 是否显示搜索 / 排序控件 */
-export function shouldShowSearchSort(bankCount) {
+/** 是否显示搜索 / 排序控件（调用方可能传未加载时的 undefined/脏值） */
+export function shouldShowSearchSort(bankCount: unknown) {
   return Number(bankCount) >= SEARCH_SORT_MIN_BANKS
 }
 
 const SORT_VALUES = new Set(BANK_SORT_OPTIONS.map((o) => o.value))
 
 /** 归一化排序值：非法 / 空一律回落默认（不静默保留脏值） */
-export function normalizeBankSort(v) {
+export function normalizeBankSort(v: string | null | undefined): string {
   return SORT_VALUES.has(v) ? v : DEFAULT_BANK_SORT
 }
 
@@ -105,8 +105,9 @@ export function sortAndFilterBanks(
     )
   }
   const key = normalizeBankSort(sort)
-  const num = (v) => Number(v) || 0
-  const cmpName = (a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-CN')
+  const num = (v: unknown) => Number(v) || 0
+  const cmpName = (a: BankLike, b: BankLike) =>
+    String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-CN')
   switch (key) {
     case 'custom':
       // 有自定义顺序就按它，否则等价于 created_asc
@@ -204,7 +205,7 @@ export function loadCustomOrder() {
   }
 }
 
-export function saveCustomOrder(ids) {
+export function saveCustomOrder(ids: unknown) {
   try {
     localStorage.setItem(ORDER_KEY, JSON.stringify(Array.isArray(ids) ? ids : []))
   } catch {
@@ -220,7 +221,7 @@ export function loadBankSort() {
   }
 }
 
-export function saveBankSort(sort) {
+export function saveBankSort(sort: string | null | undefined) {
   try {
     localStorage.setItem(SORT_KEY, normalizeBankSort(sort))
   } catch {

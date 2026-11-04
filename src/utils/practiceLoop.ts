@@ -91,13 +91,21 @@ export function elapsedMsOf({
 }
 
 /** 毫秒 → mm:ss（超过 1 小时显示 h:mm:ss） */
-export function fmtClock(ms) {
+export function fmtClock(ms: number | string | null | undefined) {
   const s = Math.max(0, Math.round((Number(ms) || 0) / 1000))
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
   const sec = s % 60
-  const p = (n) => String(n).padStart(2, '0')
+  const p = (n: number) => String(n).padStart(2, '0')
   return h ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`
+}
+
+/** 弱项排序结果行（模块内部形状，不对外承诺；调用方只读 type/rate） */
+interface WeakRow {
+  type: string
+  rate: number
+  count: number
+  wrong: number
 }
 
 /**
@@ -106,12 +114,16 @@ export function fmtClock(ms) {
  * 排序优先级：正确率最低 → 同正确率时错题数多 → 仍相同则样本量大。
  * 门槛：作答数 ≥ 3 且正确率 < 0.6（1 题答错不算弱项；已达标的题型不推）。
  *
+ * 入参刻意写 `unknown`：调用方的统计可能拉失败（null/undefined/脏行），
+ * 这里逐条判型后跳过，而不是让一个字段缺失把整个入口弄没。
+ *
  * 返回按推荐程度降序排列的弱项。
  */
-export function rankWeakTypes(byType) {
-  const rows = Array.isArray(byType) ? byType : []
-  const scored = []
-  for (const r of rows) {
+export function rankWeakTypes(byType: unknown): WeakRow[] {
+  const rows: ReadonlyArray<unknown> = Array.isArray(byType) ? byType : []
+  const scored: WeakRow[] = []
+  for (const raw of rows) {
+    const r = raw as Partial<TypeStat> | null | undefined
     const type = r?.type
     const count = Number(r?.count)
     if (!type || !Number.isFinite(count) || count < WEAK_MIN_ATTEMPTS) continue

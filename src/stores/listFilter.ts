@@ -112,7 +112,8 @@ export function saveFilter(page: string, bankId: string | null | undefined, filt
   if (!s || !bankId) return false
   const norm = normalizeFilter(filter)
   const def = emptyFilter()
-  const isDefault = Object.keys(def).every((k) => norm[k] === def[k])
+  // 逐键对比「是否全默认」；keyof 限定，避免用字符串索引对象时绕开类型检查
+  const isDefault = (Object.keys(def) as Array<keyof ListFilter>).every((k) => norm[k] === def[k])
   try {
     if (isDefault) {
       s.removeItem(filterKey(page, bankId))

@@ -140,8 +140,8 @@ export function buildTrend(
   const innerH = Math.max(1, height - padT - padB)
 
   const n = ordered.length
-  const xOf = (i) => (n === 1 ? padL + innerW / 2 : padL + (innerW * i) / (n - 1))
-  const yOf = (rate) => padT + innerH * (1 - rate / 100)
+  const xOf = (i: number) => (n === 1 ? padL + innerW / 2 : padL + (innerW * i) / (n - 1))
+  const yOf = (rate: number) => padT + innerH * (1 - rate / 100)
 
   const points = ordered.map((s, i) => ({
     x: Number(xOf(i).toFixed(2)),

@@ -100,7 +100,9 @@ export function subsetSum<T extends { units: number }>(pool: T[], targetUnits: n
  * 再把 `floor` 产生的零头补给原始配比最大的项，保证各项之和**严格等于** total。
  */
 export function normalizeMix(mix: Record<string, number>, total = DEFAULT_TOTAL): Record<string, number> {
-  const raw = {}
+  // 键集合由 QUESTION_TYPE_KEYS 决定（只收合法题型），声明成 Record 才能用题型键取值；
+  // 写 {} 会让 TS 把类型钉成「无属性对象」，后续 raw[t] 全部退成隐式 any
+  const raw: Record<string, number> = {}
   let sum = 0
   for (const t of QUESTION_TYPE_KEYS) {
     const v = Number(mix?.[t])

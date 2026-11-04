@@ -49,7 +49,8 @@ export const autoSync = reactive({
   nextAt: 0 // 下次计划时间戳；0 = 未排期
 })
 
-let timer = null
+/** 排期句柄：浏览器下是 number，Node（单测）下是 Timeout 对象，故用宽类型 */
+let timer: ReturnType<typeof setTimeout> | null = null
 
 function errText(e: unknown): string {
   // `as any` → `in` 收窄：err 可能是 Error、被 reject 的字符串、或后端 Err(String)。
@@ -106,7 +107,7 @@ function clearTimer() {
   autoSync.nextAt = 0
 }
 
-function schedule(delayMs) {
+function schedule(delayMs: number) {
   clearTimer()
   if (!settings.autoSyncEnabled) return
   const delay = Math.max(MIN_GAP_MS, delayMs)

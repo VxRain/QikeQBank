@@ -6,7 +6,7 @@ const PASSTHROUGH_MAX_BYTES = 1024 * 1024
 const HARD_MAX_BYTES = 20 * 1024 * 1024
 const HARD_MAX_EDGE = 12000
 
-function readAsDataURL(blob) {
+function readAsDataURL(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader()
     r.onload = () => resolve(String(r.result || ''))
@@ -15,14 +15,22 @@ function readAsDataURL(blob) {
   })
 }
 
-function dataUrlToB64(url) {
+function dataUrlToB64(url: string): string {
   const i = url.indexOf(',')
   if (i < 0) throw new Error('图片编码失败')
   return url.slice(i + 1)
 }
 
+// 压缩产物：w/h 在 GIF 直存时为 null（canvas 不参与，没有可靠尺寸）
+export interface CompressedImage {
+  b64: string
+  mime: string
+  w: number | null
+  h: number | null
+}
+
 // 返回 { b64（无前缀）, mime, w, h }；失败抛中文 Error（调用方 toast）
-export async function compressImageFile(file) {
+export async function compressImageFile(file: File): Promise<CompressedImage> {
   if (!file || !file.type?.startsWith('image/')) throw new Error('请选择图片文件')
   if (file.type === 'image/svg+xml') throw new Error('不支持 SVG 图片，请转成 PNG 后上传')
   if (file.size <= 0 || file.size > HARD_MAX_BYTES) throw new Error('图片过大（超过 20MB），请压缩后重试')
@@ -53,7 +61,7 @@ export async function compressImageFile(file) {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('压缩失败（无画布上下文）')
     ctx.drawImage(bmp, 0, 0, cw, ch)
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.85))
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.85))
     if (!blob) throw new Error('压缩失败')
     return { b64: dataUrlToB64(await readAsDataURL(blob)), mime: 'image/webp', w: cw, h: ch }
   } finally {
