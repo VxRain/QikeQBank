@@ -2,7 +2,7 @@
  * E2E 就绪信号一致性守卫（P2）
  *
  * 背景：`tools/e2e-frontend.mjs` 的 `goto()` 用「document.title + inflight」判定页面就绪，
- * 而 title 来自 `src/router/index.js` 的 `meta.title`。脚本里的 `ROUTE_TITLE` 是那份表的手抄镜像。
+ * 而 title 来自 `src/router/index.ts` 的 `meta.title`。脚本里的 `ROUTE_TITLE` 是那份表的手抄镜像。
  *
  * 风险：如果有人改了 router 的 `meta.title` 却没同步脚本，E2E 会在**所有涉及该页面的用例**上
  * 集体超时，且报错信息只说「title 对不上」——排查成本高。这个守卫把「漂移」变成一条立刻失败的
@@ -21,7 +21,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
 const read = (p) => readFileSync(resolve(root, p), 'utf8')
 
-const routerSrc = read('src/router/index.js')
+const routerSrc = read('src/router/index.ts')
 const appSrc = read('src/App.vue')
 
 /**
@@ -124,7 +124,7 @@ describe('E2E 就绪信号（P2）', () => {
     for (const [hashPath, title] of Object.entries(e2e)) {
       assert.ok(
         titles.has(title),
-        `ROUTE_TITLE['#${hashPath}'] = '${title}' 在 src/router/index.js 的 meta.title 里不存在；` +
+        `ROUTE_TITLE['#${hashPath}'] = '${title}' 在 src/router/index.ts 的 meta.title 里不存在；` +
         `现有：${[...titles].join(', ')}`
       )
     }

@@ -4,6 +4,16 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 // - `meta.title`：页面名，App.vue 用它拼 document.title（`${title} · 奇客题库`）。
 // - `meta.nav`：顶栏导航项 `{ label, icon, order }`，App.vue 导航由它派生。
 // 新增页面只需在此加一条路由（需要进顶栏时再补 meta.nav），无需改 App.vue。
+//
+// ── .js → .ts（2026-11）──
+// `routes` **刻意不加类型注解**（不写成 `RouteRecordRaw[]`）：两处守卫测试
+// （`tests/unit/e2e-ready-signal.test.js`、`tests/unit/search-store.test.js`）
+// 用正则逐路由块解析这份源码（`path: '/x' … meta: { title: 'Y' }`），
+// 加注解会改变文本形态而破坏解析。类型安全由 vue-router 的 `createRouter`
+// 在调用处推断即可，`meta` 的增强在 `src/env.d.ts`。
+//
+// 本文件迁移前就**没有** noImplicitAny 错误（无隐式 any），迁 .ts 是为让
+// `src/` 下不再有 .js 残留，并让 `meta.title` 参与类型检查。
 const routes = [
   {
     path: '/',

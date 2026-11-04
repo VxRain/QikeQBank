@@ -167,12 +167,12 @@ export const openPalette = async (page) => {
  * @param {RegExp|string} [marker] 目标页面的真实挂载标记（必需，除非显式传 null）
  */
 /**
- * P2：路由 hash → 页面标题（镜像 src/router/index.js 的 meta.title）。
+ * P2：路由 hash → 页面标题（镜像 src/router/index.ts 的 meta.title）。
  *
  * 为什么用这个当就绪信号：
  *   meta.title 是**路由元数据**，写在 router 表里，属于「本来就该稳定」的东西；
  *   而旧的 /新建题库/ 之类是**界面文案**，产品改一句话就废。
- * 值与 src/router/index.js 一一对应，test 里有一致性守卫（见 tests/unit/e2e-ready-signal.test.js）。
+ * 值与 src/router/index.ts 一一对应，test 里有一致性守卫（见 tests/unit/e2e-ready-signal.test.js）。
  */
 export const ROUTE_TITLE = {
   '#/banks': '题库',

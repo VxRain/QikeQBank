@@ -148,7 +148,7 @@ function onGlobalKeydown(e) {
   showShortcuts.value = true
 }
 
-// 顶栏导航由路由表派生：有 meta.nav 的路由按 order 升序渲染，新增页面只改 router/index.js。
+// 顶栏导航由路由表派生：有 meta.nav 的路由按 order 升序渲染，新增页面只改 router/index.ts。
 const navItems = router.options.routes
   .filter((r) => r.meta?.nav)
   .sort((a, b) => a.meta.nav.order - b.meta.nav.order)

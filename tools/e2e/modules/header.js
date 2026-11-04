@@ -10,7 +10,7 @@ import { flush, requireRoute } from '../helpers.js'
 export default {
   id: 'header',
   label: '顶栏：窄窗（含 1024 最小窗）不错乱 / 不裁切',
-  owns: ['src/App.vue', 'src/router/index.js'],
+  owns: ['src/App.vue', 'src/router/index.ts'],
   async run({ page, ok }) {
     // ── 缺陷背景（用户实测）──
     // 手动把窗口调小到 1024（应用最小窗宽）后，顶栏 nav 文字折成竖排、

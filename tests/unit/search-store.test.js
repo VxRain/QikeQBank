@@ -69,11 +69,11 @@ describe('search / 常量', () => {
 
   test('PAGE_ALIASES 的键都是路由表里的真实 path（守卫）', () => {
     // 别称表的键写错了不会报错，只会让该页面搜不到 —— 用源码逐字核对
-    const routerSrc = read('src/router/index.js')
+    const routerSrc = read('src/router/index.ts')
     for (const path of Object.keys(PAGE_ALIASES)) {
       assert.ok(
         routerSrc.includes(`path: '${path}'`),
-        `PAGE_ALIASES 的键 '${path}' 在 src/router/index.js 里不存在（页面已改名/删除？）`
+        `PAGE_ALIASES 的键 '${path}' 在 src/router/index.ts 里不存在（页面已改名/删除？）`
       )
     }
   })

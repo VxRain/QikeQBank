@@ -3,7 +3,7 @@
  * E2E 前置守卫（preflight）
  *
  * 为什么要有这个：`tools/e2e-frontend.mjs` 依赖一批「跨文件契约」——
- *   ① ROUTE_TITLE（脚本里的手抄表）↔ src/router/index.js 的 meta.title
+ *   ① ROUTE_TITLE（脚本里的手抄表）↔ src/router/index.ts 的 meta.title
  *   ② APP_SUFFIX ↔ App.vue 的 APP_NAME
  *   ③ mock 的 invoke 必须 try/finally 维护 inflight
  * 这些一旦漂移，e2e 会**大规模超时**（19 处 goto 集体失败），30s×N 的空转之后

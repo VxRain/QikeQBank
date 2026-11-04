@@ -18,7 +18,7 @@ export default {
     'src/components/ui/ShortcutsDialog.vue',
     'src/components/settings/registry.ts',
     'src/components/settings/SettingsDialog.vue',
-    'src/router/index.js',
+    'src/router/index.ts',
     'src/App.vue'
   ],
   async run({ page, ok }) {

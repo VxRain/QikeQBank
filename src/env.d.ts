@@ -11,7 +11,7 @@
  * 这里只补第三方库/框架没覆盖、但本项目实际用到的类型增强。
  */
 
-// vue-router 的 RouteMeta 是空接口，项目里 meta.nav 由 router/index.js 统一写入。
+// vue-router 的 RouteMeta 是空接口，项目里 meta.nav 由 router/index.ts 统一写入。
 // 不声明的话 App.vue 里 `r.meta?.nav` 被推断成 unknown，无法读 order/label/icon。
 import 'vue-router'
 
