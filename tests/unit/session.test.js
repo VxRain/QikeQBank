@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-// 无 DOM 环境：给 stores/session.js 一个 Map 版 sessionStorage
+// 无 DOM 环境：给 stores/session.ts 一个 Map 版 sessionStorage
 function mockStorage() {
   const m = new Map()
   return {
@@ -28,7 +28,7 @@ const {
   clearAll,
   clampSnapshot,
   progressOf
-} = await import('../../src/stores/session.js')
+} = await import('../../src/stores/session.ts')
 
 const snap = (over = {}) => ({
   mode: 'practice',

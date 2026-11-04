@@ -190,17 +190,17 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.ts'
-import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.ts'
 import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.ts'
 import { checkedOf } from '@/utils/domEvent.ts'
 import { truncate } from '@/utils/listFormat.ts'
-import { settings } from '@/stores/settings.js'
+import { settings } from '@/stores/settings.ts'
 import { leaveRuleText, leaveRuleHint as leaveRuleHintOf } from '@/utils/wrongRules.ts'
 import { renderDoc } from '@/utils/render.ts'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
-import { clampPage } from '@/stores/listFilter.js'
-import { toast, confirmDialog } from '@/stores/ui.js'
+import { clampPage } from '@/stores/listFilter.ts'
+import { toast, confirmDialog } from '@/stores/ui.ts'
 
 const route = useRoute()
 const router = useRouter()

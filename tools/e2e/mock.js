@@ -309,7 +309,7 @@ export function mockScript() {
 
         // ── 云同步（C2）────────────────────────────────────────────────
         // e2e 里 autoSyncEnabled 默认 false（settings_get 返回 [] → settings.settings.autoSyncEnabled
-        // 默认 false，见 src/stores/settings.js:101），且 STARTUP_DELAY_MS=60s，
+        // 默认 false，见 src/stores/settings.ts:101），且 STARTUP_DELAY_MS=60s，
         // 所以 7 个模块（均 < 4s）不会自动触发同步。
         // 这些 mock 是为「将来加同步用例」准备的，形状照 src-tauri/src/db/sync.rs。
         case 'sync_pull': return { success: true, data: { full_resync_required: false, tombstone_floor: null, server_time: '2026-01-01T00:00:00.000Z', bundle: { questions: [], banks: [], records: [], review_states: [], settings: [], delete_log: [], assets: [] } } }

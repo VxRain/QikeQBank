@@ -14,9 +14,9 @@
  */
 import { reactive, watch } from 'vue'
 import { s3ConfigGet, s3Pull } from '../api/sync.ts'
-import { loadBanks } from './bank.js'
-import { hydrateFromDb, settings } from './settings.js'
-import { toast } from './ui.js'
+import { loadBanks } from './bank.ts'
+import { hydrateFromDb, settings } from './settings.ts'
+import { toast } from './ui.ts'
 
 /** 启动后首次同步的延迟：避开首屏加载与注水高峰 */
 export const STARTUP_DELAY_MS = 60_000
@@ -26,6 +26,14 @@ const RETRY_BASE_MS = 5 * 60_000
 const MIN_GAP_MS = 60_000
 /** 连续失败多少次才打扰用户一次 */
 const NOTIFY_AFTER_FAILURES = 3
+
+/** runSync 的结果：skipped 表示「有意跳过」而非失败（不进入退避） */
+export interface SyncResult {
+  ok: boolean
+  res?: Record<string, any>
+  error?: string
+  skipped?: string
+}
 
 /** applied 里的统计键不是「合并行数」，计数时要排除 */
 const STAT_KEYS = new Set(['skipped', 'dropped_orphans', 'conflicts'])
@@ -43,13 +51,14 @@ export const autoSync = reactive({
 
 let timer = null
 
-function errText(e) {
-  return e?.message || String(e || '未知错误')
+function errText(e: unknown): string {
+  return (e as any)?.message || String(e || '未知错误')
 }
 
 /** applied 各表行数求和（排除统计键） */
-export function appliedRows(res) {
-  const applied = res?.applied
+export function appliedRows(res: unknown): number {
+  // res 是后端 sync_s3_pull 的原始 JSON（形状属后端契约，这里只读 applied 表计数）
+  const applied = (res as any)?.applied
   if (!applied || typeof applied !== 'object') return 0
   let n = 0
   for (const [k, v] of Object.entries(applied)) {
@@ -60,7 +69,7 @@ export function appliedRows(res) {
 }
 
 /** 失败后的重试延迟：指数退避，但不超过正常间隔 */
-export function retryDelayMs(failures, intervalMin) {
+export function retryDelayMs(failures: number, intervalMin: number): number {
   const interval = Math.max(1, Number(intervalMin) || 30) * 60_000
   const backoff = RETRY_BASE_MS * 2 ** Math.max(0, Math.min(4, Number(failures || 1) - 1))
   return Math.min(interval, Math.max(MIN_GAP_MS, backoff))
@@ -96,10 +105,8 @@ function schedule(delayMs) {
 
 /**
  * 执行一次同步（自动与手动共用，天然互斥）。
- * @param {{reason?: 'auto'|'manual'}} opts
- * @returns {Promise<{ok:boolean, res?:object, error?:string, skipped?:string}>}
  */
-export async function runSync({ reason = 'auto' } = {}) {
+export async function runSync({ reason = 'auto' }: { reason?: 'auto' | 'manual' } = {}): Promise<SyncResult> {
   if (autoSync.running || autoSync.otherBusy > 0) return { ok: false, skipped: 'busy' }
   if (reason === 'auto' && inExam()) return { ok: false, skipped: 'exam' }
   autoSync.running = true

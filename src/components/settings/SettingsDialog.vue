@@ -121,8 +121,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import SettingRow from './SettingRow.vue'
 import { SETTINGS_SECTIONS, isItemVisible, matchItem } from './registry.js'
-import { ui, confirmDialog, toast } from '@/stores/ui.js'
-import { resetSettingsToDefault } from '@/stores/settings.js'
+import { ui, confirmDialog, toast } from '@/stores/ui.ts'
+import { resetSettingsToDefault } from '@/stores/settings.ts'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }

@@ -24,7 +24,7 @@ async function openSettings(page) {
 /**
  * 读 UI 上的当前值（**不 import store**）。
  *
- * 曾经用 `import('/src/stores/settings.js')` 读 store，结果读到的是一份镜像副本：
+ * 曾经用 `import('/src/stores/settings.ts')` 读 store，结果读到的是一份镜像副本：
  * Vite 给应用侧的模块 URL 加了 `?t=` HMR 后缀，`/src/stores/...` 与 `@/stores/...`
  * 会被解析成**两个不同模块**，各有自己的 reactive 实例。
  * 于是「点了恢复默认，但断言读到旧值」这种假红很难查。
@@ -60,7 +60,7 @@ async function goSection(page, title) {
 export default {
   id: 'settings',
   label: '设置：恢复默认 / 快捷键入口',
-  owns: ['src/components/settings/', 'src/stores/settings.js'],
+  owns: ['src/components/settings/', 'src/stores/settings.ts'],
   async run({ page, ok }) {
     await goto(page, '#/banks')
     await openSettings(page)

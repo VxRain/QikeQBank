@@ -10,7 +10,7 @@ import { flush, goto } from '../helpers.js'
 export default {
   id: 'list',
   label: '试题列表：排序 / 筛选 / 页码收敛',
-  owns: ['src/views/List.vue', 'src/stores/listFilter.js', 'src/stores/bank.js'],
+  owns: ['src/views/List.vue', 'src/stores/listFilter.ts', 'src/stores/bank.ts'],
   async run({ page, ok }) {
     // ── FE-P0-09：列表排序 / 筛选 / 页码收敛 ──
     await goto(page, '#/banks')

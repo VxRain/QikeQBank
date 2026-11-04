@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-// 无 DOM 环境：给 stores/formDraft.js 一个 Map 版 sessionStorage
+// 无 DOM 环境：给 stores/formDraft.ts 一个 Map 版 sessionStorage
 function mockStorage() {
   const m = new Map()
   return {
@@ -26,7 +26,7 @@ const {
   ageText,
   startDraftTimer,
   DRAFT_TTL_MS
-} = await import('../../src/stores/formDraft.js')
+} = await import('../../src/stores/formDraft.ts')
 
 test('dirty 判定：键序无关，尾部空白与结构差异都要认出来', () => {
   const base = { type: 'single', answer: { ids: ['o1'] }, options: [{ id: 'o1' }] }

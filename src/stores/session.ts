@@ -84,31 +84,32 @@ function normalizeRound(r) {
 
 /**
  * 规范化快照：结构不对就返回 null（宁可重开，也不拿半截数据恢复）。
- * @returns {Object|null}
  */
-export function normalizeSnapshot(raw, mode) {
+export function normalizeSnapshot(raw: unknown, mode?: string) {
   if (!raw || typeof raw !== 'object') return null
-  if (asInt(raw.v) !== SESSION_VERSION) return null
-  if (mode && raw.mode !== mode) return null
-  if (!isMode(raw.mode)) return null
-  const keys = Array.isArray(raw.keys) ? raw.keys.filter((k) => typeof k === 'string' && k) : []
+  // raw 来自 localStorage JSON：逐字段判型后再读（下面每个字段都有独立兜底）
+  const r = raw as Record<string, any>
+  if (asInt(r.v) !== SESSION_VERSION) return null
+  if (mode && r.mode !== mode) return null
+  if (!isMode(r.mode)) return null
+  const keys = Array.isArray(r.keys) ? r.keys.filter((k) => typeof k === 'string' && k) : []
   if (!keys.length) return null
-  const answers = raw.answers && typeof raw.answers === 'object' && !Array.isArray(raw.answers) ? raw.answers : {}
-  const rounds = Array.isArray(raw.rounds)
-    ? raw.rounds.map((r) => ({ ...normalizeRound(r), rate: Math.max(0, Math.min(100, asInt(r?.rate))) }))
+  const answers = r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers) ? r.answers : {}
+  const rounds = Array.isArray(r.rounds)
+    ? r.rounds.map((r) => ({ ...normalizeRound(r), rate: Math.max(0, Math.min(100, asInt(r?.rate))) }))
     : []
   return {
     v: SESSION_VERSION,
-    mode: raw.mode,
-    bankId: asStr(raw.bankId),
+    mode: r.mode,
+    bankId: asStr(r.bankId),
     keys,
-    curIdx: Math.max(0, Math.min(keys.length - 1, asInt(raw.curIdx))),
+    curIdx: Math.max(0, Math.min(keys.length - 1, asInt(r.curIdx))),
     answers,
-    round: normalizeRound(raw.round),
+    round: normalizeRound(r.round),
     rounds,
-    startedAt: asInt(raw.startedAt) || Date.now(),
-    updatedAt: asInt(raw.updatedAt) || Date.now(),
-    extra: raw.extra && typeof raw.extra === 'object' && !Array.isArray(raw.extra) ? raw.extra : {}
+    startedAt: asInt(r.startedAt) || Date.now(),
+    updatedAt: asInt(r.updatedAt) || Date.now(),
+    extra: r.extra && typeof r.extra === 'object' && !Array.isArray(r.extra) ? r.extra : {}
   }
 }
 
@@ -116,10 +117,8 @@ export function normalizeSnapshot(raw, mode) {
 
 /**
  * 读取快照。结构不符、版本不符、过期，一律返回 null。
- * @param {'practice'|'review'|'exam'} mode
- * @param {{ttlMs?:number, now?:number}} [opts]
  */
-export function load(mode, opts = {}) {
+export function load(mode: string, opts: { ttlMs?: number; now?: number } = {}) {
   const s = storage()
   if (!s || !isMode(mode)) return null
   let raw
@@ -144,12 +143,13 @@ export function load(mode, opts = {}) {
 
 /**
  * 立即写快照（写入失败如配额不足则放弃，不阻塞作答）。
- * @returns {Object|null} 规范化后的快照（或 null）
+ * 返回规范化后的快照（或 null）。
  */
-export function save(mode, snap) {
+export function save(mode: string, snap: unknown) {
   const s = storage()
   if (!s || !isMode(mode)) return null
-  const normalized = normalizeSnapshot({ ...snap, mode, v: SESSION_VERSION, updatedAt: Date.now() }, mode)
+  const base = snap && typeof snap === 'object' ? (snap as Record<string, any>) : {}
+  const normalized = normalizeSnapshot({ ...base, mode, v: SESSION_VERSION, updatedAt: Date.now() }, mode)
   if (!normalized) return null
   try {
     s.setItem(storageKey(mode), JSON.stringify(normalized))
@@ -215,10 +215,9 @@ export function clearAll() {
 /**
  * 按"恢复时实际拿到的题目项"裁剪快照：被删的题从 keys/answers/round.wrongKeys 里剔除，
  * curIdx 收敛到有效范围。返回新的快照与缺失 key 列表（供 UI 提示）。
- * @param {Object} snap
- * @param {string[]} availableKeys 恢复后真实存在的 key（顺序与快照一致）
+ * @param availableKeys 恢复后真实存在的 key（顺序与快照一致）
  */
-export function clampSnapshot(snap, availableKeys) {
+export function clampSnapshot(snap: any, availableKeys: string[] | null | undefined) {
   const available = new Set(availableKeys || [])
   const keys = (snap?.keys || []).filter((k) => available.has(k))
   const missing = (snap?.keys || []).filter((k) => !available.has(k))

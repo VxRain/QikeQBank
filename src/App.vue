@@ -65,9 +65,9 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { loadBanks, bankStore } from '@/stores/bank.js'
-import { initAutoSync } from '@/stores/autoSync.js'
-import { toast, ui } from '@/stores/ui.js'
+import { loadBanks, bankStore } from '@/stores/bank.ts'
+import { initAutoSync } from '@/stores/autoSync.ts'
+import { toast, ui } from '@/stores/ui.ts'
 import { stats as fetchStats } from '@/api/practice.ts'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
@@ -85,7 +85,7 @@ const RELEASES_URL = `https://github.com/${REPO}/releases`
 // 旧实现是顶栏里的一个自绘下拉：只搜题目、8 条上限、无键盘选中、点空白不关、
 // 且请求没带 summary（整批拉回富文本题干 + 选项 + 解析）。
 // 现在统一收敛为 SearchPalette 命令面板：顶栏按钮与 Ctrl/Cmd+K 打开同一面板，
-// 面板内的分组/键盘/高亮/最近搜索规则全在 stores/search.js（纯函数，可单测）。
+// 面板内的分组/键盘/高亮/最近搜索规则全在 stores/search.ts（纯函数，可单测）。
 const searchOpen = ref(false)
 const showSettings = ref(false)
 const showShortcuts = ref(false)

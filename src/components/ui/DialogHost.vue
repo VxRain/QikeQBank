@@ -1,6 +1,6 @@
 /**
  * 应用内弹层（confirm / prompt）— 全屏遮罩 + 居中卡片 + 入场动画
- * 挂载于 App.vue；由 stores/ui.js 驱动，替代浏览器原生 confirm()/prompt()
+ * 挂载于 App.vue；由 stores/ui.ts 驱动，替代浏览器原生 confirm()/prompt()
  */
 <template>
   <Teleport to="body">
@@ -49,7 +49,7 @@
 
 <script setup>
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
-import { ui, closeDialog } from '@/stores/ui.js'
+import { ui, closeDialog } from '@/stores/ui.ts'
 
 const inputValue = ref('')
 const inputEl = ref(null)

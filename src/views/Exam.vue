@@ -376,11 +376,11 @@ import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.
 import { examSessions } from '@/api/exam.ts'
 import { expandQuestions } from '@/api/assets.ts'
 import { renderDoc } from '@/utils/render.ts'
-import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.ts'
 import { lettersOf, fmtDurationCn, dedupeShuffle } from '@/utils/questionDisplay.ts'
-import { ui, confirmDialog, toast } from '@/stores/ui.js'
+import { ui, confirmDialog, toast } from '@/stores/ui.ts'
 import { randomUUID } from '@/utils/device.ts'
-import { save as saveSession, scheduleSave, flush as flushSession, load as loadSession, clear as clearSession, parentIdsOf } from '@/stores/session.js'
+import { save as saveSession, scheduleSave, flush as flushSession, load as loadSession, clear as clearSession, parentIdsOf } from '@/stores/session.ts'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { buildExamDetail, summarizePaper, ratioToGrade } from '@/utils/grading.ts'
 import { gradeQuestion } from '@/utils/gradeQuestion.ts'
@@ -390,7 +390,7 @@ import ExamTrend from '@/components/exam/ExamTrend.vue'
 import ExamHistory from '@/components/exam/ExamHistory.vue'
 import { hasAnswerEntry, remapFlaggedUids, firstUnansweredIndex } from '@/utils/examSheet.ts'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
-import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.ts'
 
 // 题型清单/文案统一来自 constants/questions.js（FE-ARCH-01）；组卷面板与成绩单用完整名
 const ALL_TYPES = QUESTION_TYPE_KEYS
@@ -709,7 +709,7 @@ function go(idx) {
   focusCard()
 }
 
-// 草稿：统一会话快照（stores/session.js）。只存题目 id + 作答，恢复时按 id 重拉；不落库不进同步。
+// 草稿：统一会话快照（stores/session.ts）。只存题目 id + 作答，恢复时按 id 重拉；不落库不进同步。
 const SNAP_MODE = 'exam'
 function draftSnapshot() {
   return {

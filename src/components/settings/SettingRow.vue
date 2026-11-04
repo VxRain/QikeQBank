@@ -91,7 +91,7 @@ import { computed, ref, watch } from 'vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
 import ToggleSwitch from '@/components/ui/ToggleSwitch.vue'
 import { isItemVisible } from './registry.js'
-import { toast } from '@/stores/ui.js'
+import { toast } from '@/stores/ui.ts'
 
 const props = defineProps({
   item: { type: Object, required: true }

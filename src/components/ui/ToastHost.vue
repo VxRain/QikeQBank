@@ -1,6 +1,6 @@
 /**
  * 应用内 Toast — 右下角堆叠通知（成功/错误/信息）
- * 挂载于 App.vue；由 stores/ui.js 的 toast() 驱动
+ * 挂载于 App.vue；由 stores/ui.ts 的 toast() 驱动
  */
 <template>
   <Teleport to="body">
@@ -17,7 +17,7 @@
 </template>
 
 <script setup>
-import { ui, dismissToast } from '@/stores/ui.js'
+import { ui, dismissToast } from '@/stores/ui.ts'
 
 function iconClass(type) {
   if (type === 'success') return 'i-lucide-check'

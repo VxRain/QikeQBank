@@ -147,11 +147,11 @@ import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import TiptapDocEditor from './TiptapDocEditor.vue'
 import QuestionForm from './QuestionForm.vue'
 import PasteBox from './PasteBox.vue'
-import { settings } from '@/stores/settings.js'
+import { settings } from '@/stores/settings.ts'
 import { QUESTION_TYPES, QUESTION_TYPE_MAP, CHILD_QUESTION_TYPES as CHILD_TYPES, typeLabel } from '@/constants/questions.js'
 import { createDefaultQuestion } from '@/utils/gradeQuestion.ts'
 import { valueOf } from '@/utils/domEvent.ts'
-import { toast } from '@/stores/ui.js'
+import { toast } from '@/stores/ui.ts'
 import {
   childIdSeed, childIdForAppend, dedupeChildIds, moveChild, canMoveChild, removeChildAt,
   insertionIndexFromY, insertIndexToMoveTarget, edgeScrollDelta

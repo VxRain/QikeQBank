@@ -339,16 +339,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { practicePool, recordAnswer, stats as fetchStats, recordsOverview } from '@/api/practice.ts'
 import { expandQuestions } from '@/api/assets.ts'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
-import { bankStore, loadBanks, resolveBankFilter, persistBankFilter, bankExists } from '@/stores/bank.js'
-import { settings } from '@/stores/settings.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter, bankExists } from '@/stores/bank.ts'
+import { settings } from '@/stores/settings.ts'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.ts'
 import { gradeQuestion } from '@/utils/gradeQuestion.ts'
-import { ui, toast } from '@/stores/ui.js'
-import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.js'
+import { ui, toast } from '@/stores/ui.ts'
+import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.ts'
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { QUESTION_TYPE_KEYS, TYPE_FULL_LABELS } from '@/constants/questions.js'
-import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { loadRunConfig, saveRunConfig, availableCountOf, plannedCountOf, MAX_PER_ROUND } from '@/stores/runConfig.ts'
 import { elapsedMsOf, fmtClock, weakPracticeEntry, doneLinks } from '@/utils/practiceLoop.ts'
 import { blankAnswersOf, fmtDurationCn, dedupeShuffle, buildRunItems } from '@/utils/questionDisplay.ts'
 
@@ -666,7 +666,7 @@ const SNAP_MODE = 'practice'
 const answers = reactive({}) // key → { selected, picked, fillValues, shortText, selfGrade, showRef, graded }
 
 // FE-P0-06 练习导航：标记待定 / 跳过的题
-// 两者都按「本轮内的 item key」记录，不存题面（与 stores/session.js 同口径）
+// 两者都按「本轮内的 item key」记录，不存题面（与 stores/session.ts 同口径）
 const flaggedKeys = ref(new Set())
 const skippedKeys = ref(new Set())
 const isFlagged = computed(() => !!cur.value && flaggedKeys.value.has(itemKeyOf(cur.value)))

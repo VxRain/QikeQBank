@@ -1,3 +1,12 @@
+/** 题库最小形状（本模块排序/筛选只读 id 与 name） */
+export interface BankLike {
+  id: string
+  name?: string
+  created_at?: string
+  question_count?: number
+  [k: string]: any
+}
+
 /**
  * 题库页列表逻辑（FE-P1-02）：搜索 / 排序 / 拖拽自定义顺序
  *
@@ -52,10 +61,8 @@ export function normalizeBankSort(v) {
  * - `ids` 里有、`banks` 里没有 → 丢弃（题库可能已被删）
  * - `banks` 里有、`ids` 里漏掉 → 追加到末尾（拖拽期间可能新建了题库）
  *
- * @param {Array<{id:string}>} banks
- * @param {string[]} ids
  */
-export function applyIdOrder(banks, ids) {
+export function applyIdOrder(banks: Array<{ id: string }> | null | undefined, ids: string[] | null | undefined) {
   const list = Array.isArray(banks) ? banks : []
   const want = Array.isArray(ids) ? ids : []
   const map = new Map(list.map((b) => [b.id, b]))
@@ -78,10 +85,15 @@ export function applyIdOrder(banks, ids) {
  * `customOrder` 是持久化的 id 顺序；为空表示「还没拖过」→ custom 退化为
  * created_asc（后端默认顺序），避免首次进入时列表顺序看起来是随机的。
  *
- * @param {Array<object>} banks
- * @param {{sort?: string, query?: string, customOrder?: string[]}} opts
  */
-export function sortAndFilterBanks(banks, { sort = DEFAULT_BANK_SORT, query = '', customOrder = [] } = {}) {
+export function sortAndFilterBanks(
+  banks: BankLike[] | null | undefined,
+  {
+    sort = DEFAULT_BANK_SORT,
+    query = '',
+    customOrder = []
+  }: { sort?: string; query?: string; customOrder?: string[] } = {}
+) {
   let list = Array.isArray(banks) ? banks.slice() : []
   const q = String(query || '').trim().toLowerCase()
   if (q) {
@@ -138,10 +150,10 @@ export function canDragBanks({ sort = DEFAULT_BANK_SORT, query = '' } = {}) {
  * 各写一份必然漂移（一边越界原地不动、另一边抛异常），而这类分歧手测发现不了，
  * 所以只留一个实现，并由单测逐项对照两边的输出。
  *
- * @returns {string[]|null} 新 id 顺序；from/to 非法或原地不动返回 null
- *   （调用方据此跳过持久化，避免写一堆无变化的 localStorage）
+ * 返回新 id 顺序；from/to 非法或原地不动返回 null
+ * （调用方据此跳过持久化，避免写一堆无变化的 localStorage）
  */
-export function moveId(ids, from, to) {
+export function moveId(ids: string[], from: number, to: number): string[] | null {
   return moveItem(ids, from, to)
 }
 
@@ -151,12 +163,20 @@ export function moveId(ids, from, to) {
  * 关键：拖拽只在无搜索时允许（见 canDragBanks），所以这里看似可以直接用
  * 可见列表 —— 但题库可能在拖拽期间被删除/新建，仍然走 applyIdOrder 兜底。
  *
- * @param {{banks:Array, sort:string, query:string, customOrder:string[]}} s
- * @param {number} from 可见列表中的源位置
- * @param {number} to 可见列表中的目标位置
- * @returns {string[]|null} 新的全量 id 顺序
+ * @param from 可见列表中的源位置
+ * @param to 可见列表中的目标位置
+ * 返回新的全量 id 顺序（无法拖拽时 null）。
  */
-export function reorderIds({ banks, sort, query, customOrder }, from, to) {
+export function reorderIds(
+  {
+    banks,
+    sort,
+    query,
+    customOrder
+  }: { banks: BankLike[]; sort: string; query: string; customOrder: string[] },
+  from: number,
+  to: number
+): string[] | null {
   if (!canDragBanks({ sort, query })) return null
   const visible = sortAndFilterBanks(banks, { sort, query, customOrder })
   const visibleIds = visible.map((b) => b.id)

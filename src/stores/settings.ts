@@ -5,7 +5,7 @@ import { leaveAfterOf } from '../utils/wrongRules.ts'
 // 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。
 // localStorage 仅作写透缓存，DB 为准（同步地基 §6）。
 const KEY = 'qbank.settings.v1'
-// 与 stores/bank.js 的 FILTER_KEY_PREFIX 必须是同一个字符串。
+// 与 stores/bank.ts 的 FILTER_KEY_PREFIX 必须是同一个字符串。
 // 为什么不直接 import clearBankFilters：bank.js 已 import 本模块（读 rememberBankFilter），
 // 反向 import 会成环，表现为「恢复默认」时 clearBankFilters is not defined。
 const BANK_FILTER_KEY_PREFIX = 'qbank.bankFilter.'
@@ -255,7 +255,7 @@ watch(
 
 // ── FE-P1-10 恢复默认 ──
 
-/** 清掉各页已记的题库筛选（口径与 stores/bank.js::clearBankFilters 一致） */
+/** 清掉各页已记的题库筛选（口径与 stores/bank.ts::clearBankFilters 一致） */
 export function clearBankFilterCache() {
   try {
     Object.keys(localStorage)
@@ -278,9 +278,9 @@ export function clearBankFilterCache() {
  * 后者会把 `fsrs` 整体替换成冻结对象，之后 `settings.fsrs.x = …` 静默失败
  * （严格模式下抛错），表现为「改了复习参数但不生效」。
  *
- * @returns {string[]} 被重置的键（供调用方做影响面提示）
+ * 返回被重置的键（供调用方做影响面提示）。
  */
-export function resetSettingsToDefault() {
+export function resetSettingsToDefault(): string[] {
   const d = DEFAULTS
   settings.keepContentOnTypeChange = d.keepContentOnTypeChange
   settings.autoNextOnCorrect = d.autoNextOnCorrect

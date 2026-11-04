@@ -226,8 +226,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { list, get, remove, batchUpdate, batchRemove } from '@/api/questions.ts'
-import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
-import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
+import { bankStore, loadBanks, bankExists } from '@/stores/bank.ts'
+import { toast, confirmDialog, selectDialog } from '@/stores/ui.ts'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
@@ -245,7 +245,7 @@ import {
   loadFilter,
   saveFilter,
   clampPage
-} from '@/stores/listFilter.js'
+} from '@/stores/listFilter.ts'
 
 const route = useRoute()
 const router = useRouter()

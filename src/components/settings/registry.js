@@ -22,8 +22,8 @@
  *     placeholder / width           输入框占位与宽度
  *     component / props             custom 类型渲染的组件
  */
-import { settings, normalizeSteps, validateSteps } from '@/stores/settings.js'
-import { clearBankFilters } from '@/stores/bank.js'
+import { settings, normalizeSteps, validateSteps } from '@/stores/settings.ts'
+import { clearBankFilters } from '@/stores/bank.ts'
 import S3SyncPanel from '@/components/S3SyncPanel.vue'
 import AboutPanel from '@/components/settings/AboutPanel.vue'
 

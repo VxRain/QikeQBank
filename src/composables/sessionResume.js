@@ -3,10 +3,10 @@
  *
  * 全应用只有这一处「继续上次 / 放弃」的文案与清理逻辑：
  * Practice / Review 进入时调用 promptResume(mode)，Exam 的草稿恢复自己控制时机，
- * 但同样走 stores/session.js 的 load/clear。
+ * 但同样走 stores/session.ts 的 load/clear。
  */
-import { confirmDialog, toast } from '@/stores/ui.js'
-import { load, clear, progressOf } from '@/stores/session.js'
+import { confirmDialog, toast } from '@/stores/ui.ts'
+import { load, clear, progressOf } from '@/stores/session.ts'
 
 /**
  * 有上次会话就问一句：继续（返回快照）/ 放弃（清掉并返回 null）。

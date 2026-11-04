@@ -72,6 +72,6 @@ describe('错题本（FE-P0-11）接线守卫', () => {
 
   test('页码收敛复用 clampPage（与 List 同一套）', () => {
     assert.match(vue, /clampPage\(page\.value, total\.value, PAGE_SIZE\)/)
-    assert.match(vue, /from '@\/stores\/listFilter\.js'/)
+    assert.match(vue, /from '@\/stores\/listFilter\.ts'/)
   })
 })

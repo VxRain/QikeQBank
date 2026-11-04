@@ -14,7 +14,7 @@ export default {
   // 快捷键弹层也是同一批文件 —— 改这些任何一个都该跑这个模块。
   owns: [
     'src/components/search/',
-    'src/stores/search.js',
+    'src/stores/search.ts',
     'src/components/ui/ShortcutsDialog.vue',
     'src/components/settings/registry.js',
     'src/components/settings/SettingsDialog.vue',

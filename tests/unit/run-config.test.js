@@ -26,7 +26,7 @@ const {
   clearRunConfig,
   availableCountOf,
   plannedCountOf
-} = await import('../../src/stores/runConfig.js')
+} = await import('../../src/stores/runConfig.ts')
 
 const ALL = ['single', 'multi', 'judge', 'fill', 'short', 'material']
 

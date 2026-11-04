@@ -149,7 +149,7 @@ import { validateQuestion } from '@/utils/validate.ts'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.ts'
 import { remove } from '@/api/questions.ts'
 import QuestionPreview from '@/components/QuestionPreview.vue'
-import { toast, confirmDialog } from '@/stores/ui.js'
+import { toast, confirmDialog } from '@/stores/ui.ts'
 
 const templates = [
   { file: 'MD模板.md', title: 'MD模板.md', desc: '记事本手写：每题以【单选/多选/判断/填空/问答/材料】开头，适合少量精编' },

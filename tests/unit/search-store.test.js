@@ -1,5 +1,5 @@
 /**
- * stores/search.js 单测（FE-P0-08）
+ * stores/search.ts 单测（FE-P0-08）
  *
  * 覆盖契约里点名的行为：分组构造、题目首屏 summary:true、展开触发 get(id)、
  * ↑/↓ 边界环绕、最近 5 条去重与上限、Esc 两级状态。
@@ -39,7 +39,7 @@ import {
   expandQuestion,
   resetResults,
   searchStore
-} from '../../src/stores/search.js'
+} from '../../src/stores/search.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')

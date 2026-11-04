@@ -15,10 +15,85 @@
  *   保证全仓库仍只有一套设置搜索逻辑。
  * - **题目结果先 summary**：`questions_list` 传 `summary: true` 只取摘要字段，
  *   展开某条时才 `questions_get(id)` 取全文并缓存（同一 id 不重复请求）。
- * - **最近搜索只落 localStorage**：与 stores/runConfig.js / listFilter.js 同判断，
+ * - **最近搜索只落 localStorage**：与 stores/runConfig.ts / listFilter.js 同判断，
  *   属「本机行为偏好」，不进 SQLite、不进同步契约。
  */
 import { reactive } from 'vue'
+
+/** 面板里的一条结果（题目 / 题库 / 页面 / 设置 共用） */
+export interface SearchItem {
+  kind: 'question' | 'bank' | 'page' | 'setting' | 'viewAll'
+  key: string
+  id: string
+  title: string
+  desc: string
+  to?: string
+  order?: number | string
+  raw?: any
+  sectionId?: string
+}
+
+/** 题库最小形状 */
+export interface BankLike {
+  id: string
+  name?: string
+  question_count?: number
+}
+
+/** 路由最小形状 */
+export interface RouteLike {
+  path: string
+  meta?: { title?: string; nav?: { order?: number } }
+}
+
+/** 设置分区最小形状 */
+export interface SettingSectionLike {
+  id: string
+  title: string
+  items?: any[]
+}
+
+/** 面板运行时状态 */
+export interface SearchStore {
+  open: boolean
+  query: string
+  loading: boolean
+  error: string
+  questions: SearchItem[]
+  questionTotal: number
+  expandedId: string
+  expanded: Record<string, any>
+  expandedLoading: boolean
+  banks: SearchItem[]
+  pages: SearchItem[]
+  settings: SearchItem[]
+  activeIndex: number
+  recent: string[]
+  pendingSettingsQuery: string
+}
+
+/** runQuestionSearch / expandQuestion 的注入依赖（便于 node 下单测） */
+export interface SearchDeps {
+  listQuestions?: (params: Record<string, any>) => Promise<any>
+  getQuestion?: (id: string) => Promise<any>
+  store?: SearchStore
+  routes?: RouteLike[]
+  banks?: BankLike[]
+  sections?: SettingSectionLike[]
+  match?: (item: any, section: any, needle: string) => boolean
+  isVisible?: (item: any) => boolean
+}
+
+/** buildRows 的入参 */
+export interface BuildRowsOpts {
+  questions?: SearchItem[]
+  banks?: SearchItem[]
+  pages?: SearchItem[]
+  settings?: SearchItem[]
+  kw?: string
+  questionTotal?: number
+}
+
 
 /** 单次面板最多取回多少条题目（「查看全部」交给列表页） */
 export const QUESTION_LIMIT = 8
@@ -55,14 +130,14 @@ export const GROUP_ORDER = Object.freeze([
   Object.freeze({ kind: 'setting', label: '设置' })
 ])
 
-export function normalizeKeyword(kw) {
+export function normalizeKeyword(kw: unknown): string {
   return String(kw ?? '').replace(/\s+/g, ' ').trim()
 }
 
 /* ────────────────────────── 最近搜索 ────────────────────────── */
 
 /** 读最近搜索：脏数据（非数组/非字符串/空串）一律过滤，读失败给空数组 */
-export function loadRecent(storage = globalThis.localStorage) {
+export function loadRecent(storage: Storage | undefined = globalThis.localStorage): string[] {
   try {
     const raw = storage?.getItem(RECENT_KEY)
     if (!raw) return []
@@ -81,7 +156,7 @@ export function loadRecent(storage = globalThis.localStorage) {
 }
 
 /** 写最近搜索：写失败（隐私模式 / 配额）静默忽略，不能阻断搜索 */
-export function saveRecent(list, storage = globalThis.localStorage) {
+export function saveRecent(list: unknown[] | null | undefined, storage: Storage | undefined = globalThis.localStorage): string[] {
   const clean = []
   for (const v of list || []) {
     const kw = normalizeKeyword(v)
@@ -100,15 +175,17 @@ export function saveRecent(list, storage = globalThis.localStorage) {
  * 记一条最近搜索：去重（大小写不敏感）+ 置顶 + 截断到 RECENT_LIMIT。
  * 纯函数，返回新数组（不改入参），调用方负责落地。
  */
-export function pushRecent(kw, list = [], storage = globalThis.localStorage) {
+export function pushRecent(kw: unknown, list: unknown[] = [], storage: Storage | undefined = globalThis.localStorage): string[] {
   const needle = normalizeKeyword(kw)
-  const rest = (list || []).filter((v) => normalizeKeyword(v).toLowerCase() !== needle.toLowerCase())
-  const next = needle ? [needle, ...rest].slice(0, RECENT_LIMIT) : rest.slice(0, RECENT_LIMIT)
+  const rest = (list || [])
+    .map((v) => normalizeKeyword(v))
+    .filter((v) => v && v.toLowerCase() !== needle.toLowerCase())
+  const next: string[] = needle ? [needle, ...rest].slice(0, RECENT_LIMIT) : rest.slice(0, RECENT_LIMIT)
   saveRecent(next, storage)
   return next
 }
 
-export function clearRecent(storage = globalThis.localStorage) {
+export function clearRecent(storage: Storage | undefined = globalThis.localStorage): string[] {
   try {
     storage?.removeItem(RECENT_KEY)
   } catch {
@@ -123,7 +200,7 @@ export function clearRecent(storage = globalThis.localStorage) {
  * 题库分组：按名称模糊匹配，命中词高亮由组件负责。
  * 顺序保持 bankStore 的顺序（后端已按名称/创建序返回），不在这里二次排序。
  */
-export function buildBankResults(banks, kw) {
+export function buildBankResults(banks: BankLike[] | null | undefined, kw: unknown): SearchItem[] {
   const needle = normalizeKeyword(kw).toLowerCase()
   if (!needle) return []
   return (banks || [])
@@ -145,10 +222,12 @@ export function buildBankResults(banks, kw) {
  * 只收静态路径（含 `:param` 的路由是「编辑某题」这类入口，不能从面板直达），
  * 且按 meta.nav.order → title 排序，保证顺序稳定、可断言。
  *
- * @param {ReadonlyArray<{path:string, meta?:{title?:string, nav?:object}}>} routes 路由表原始数组
- *   （router.options.routes 是只读的，这里只读遍历，不拷贝不修改）
+ * @param routes 路由表原始数组（router.options.routes 是只读的，这里只读遍历，不拷贝不修改）
  */
-export function buildPageResults(routes, kw) {
+export function buildPageResults(
+  routes: ReadonlyArray<RouteLike> | null | undefined,
+  kw: unknown
+): SearchItem[] {
   const needle = normalizeKeyword(kw).toLowerCase()
   if (!needle) return []
   const out = []
@@ -182,7 +261,12 @@ export function buildPageResults(routes, kw) {
  * 依赖未满足的行（visible() 为 false）也返回，desc 里说明「需先开启」，
  * 与 SettingsDialog 的搜索态行为保持一致。
  */
-export function buildSettingResults(sections, kw, match, isVisible) {
+export function buildSettingResults(
+  sections: SettingSectionLike[] | null | undefined,
+  kw: unknown,
+  match?: (item: any, section: any, needle: string) => boolean,
+  isVisible?: (item: any) => boolean
+): SearchItem[] {
   const needle = normalizeKeyword(kw)
   if (!needle) return []
   const out = []
@@ -210,7 +294,19 @@ export function buildSettingResults(sections, kw, match, isVisible) {
  * 键盘高亮用扁平索引（不区分组），所以要保证「眼睛看到的顺序」=「↑/↓ 走的顺序」，
  * 唯一做法是渲染和遍历都从这一个函数取数。
  */
-export function buildGroups({ questions = [], banks = [], pages = [], settings = [], kw = '' } = {}) {
+export function buildGroups({
+  questions = [],
+  banks = [],
+  pages = [],
+  settings = [],
+  kw = ''
+}: {
+  questions?: SearchItem[]
+  banks?: SearchItem[]
+  pages?: SearchItem[]
+  settings?: SearchItem[]
+  kw?: string
+} = {}): Array<{ kind: string; label: string; items: SearchItem[] }> {
   const bucket = { question: questions, bank: banks, page: pages, setting: settings }
   return GROUP_ORDER
     .map((g) => ({ kind: g.kind, label: g.label, items: bucket[g.kind] || [] }))
@@ -218,7 +314,7 @@ export function buildGroups({ questions = [], banks = [], pages = [], settings =
 }
 
 /** 扁平行 = 所有分组项按分组顺序拼接（「查看全部」单列在最后，见 buildRows） */
-export function buildRows(opts = {}) {
+export function buildRows(opts: BuildRowsOpts = {}): SearchItem[] {
   const rows = []
   for (const g of buildGroups(opts)) {
     for (const item of g.items) rows.push(item)
@@ -240,7 +336,7 @@ export function buildRows(opts = {}) {
 /* ────────────────────────── 键盘 / 关闭语义 ────────────────────────── */
 
 /** ↑/↓：在 [0, len) 内**环绕**移动；len 为 0 时恒返回 -1 */
-export function nextActive(current, len, delta) {
+export function nextActive(current: number, len: number, delta: number): number {
   if (!len || len < 1) return -1
   const base = Number.isInteger(current) && current >= 0 && current < len ? current : (delta > 0 ? -1 : len)
   return ((base + delta) % len + len) % len
@@ -250,7 +346,7 @@ export function nextActive(current, len, delta) {
  * Esc 逐级（FE-P0-08 验收：先清关键词，再关面板）。
  * 返回下一步动作，由组件执行 —— 便于单测，不用挂 DOM。
  */
-export function escStep(query) {
+export function escStep(query: unknown): 'clear' | 'close' {
   return normalizeKeyword(query) ? 'clear' : 'close'
 }
 
@@ -264,7 +360,7 @@ export function escStep(query) {
  * - 命中区间合并，避免「ab」+「bc」重叠时切出碎片段；
  * - 空查询 / 无命中 → 单片段（hit=false），调用方不必分支。
  */
-export function splitHighlight(text, kw) {
+export function splitHighlight(text: unknown, kw: unknown): Array<{ text: string; hit: boolean }> {
   const src = String(text ?? '')
   const parts = normalizeKeyword(kw).toLowerCase().split(' ').filter(Boolean)
   if (!src || !parts.length) return [{ text: src, hit: false }]
@@ -297,7 +393,7 @@ export function splitHighlight(text, kw) {
 }
 
 /** 题干摘要：压平空白 + 截断（面板一行放不下整段） */
-export function snippet(text, max = 70) {
+export function snippet(text: unknown, max = 70): string {
   const s = String(text ?? '').replace(/\s+/g, ' ').trim()
   if (!s) return '(空题干)'
   return s.length > max ? s.slice(0, max) + '…' : s
@@ -306,14 +402,14 @@ export function snippet(text, max = 70) {
 /* ────────────────────────── 运行时状态 ────────────────────────── */
 
 /**
- * 面板运行时状态（单例，与 stores/settings.js 同风格）。
+ * 面板运行时状态（单例，与 stores/settings.ts 同风格）。
  *
  * 这里只放「界面要用」的状态；分组构造与键盘规则仍是上面的纯函数，
  * 组件每次渲染用 computed 调它们 —— 状态与规则分离，规则才可单测。
  */
-export const searchStore = reactiveState()
+export const searchStore: SearchStore = reactiveState()
 
-function reactiveState() {
+function reactiveState(): SearchStore {
   return reactive({
     open: false,
     query: '',
@@ -339,7 +435,7 @@ function reactiveState() {
 }
 
 /** 重置分组结果（换关键词 / 关闭面板时调用） */
-export function resetResults(store = searchStore) {
+export function resetResults(store: SearchStore = searchStore): void {
   store.questions = []
   store.questionTotal = 0
   store.banks = []
@@ -355,10 +451,8 @@ export function resetResults(store = searchStore) {
 /**
  * 执行一次题目搜索（summary 优先）。
  *
- * @param {string} kw
- * @param {{listQuestions?:Function, store?:object, routes?:Array, banks?:Array, sections?:Array, match?:Function, isVisible?:Function}} deps
  */
-export async function runQuestionSearch(kw, deps = {}) {
+export async function runQuestionSearch(kw: unknown, deps: SearchDeps = {}) {
   const store = deps.store || searchStore
   const needle = normalizeKeyword(kw)
   const listFn = deps.listQuestions
@@ -398,7 +492,7 @@ export async function runQuestionSearch(kw, deps = {}) {
  * 展开某题的全文：命中缓存直接返回，未命中才 questions_get(id)。
  * 返回全量题目（失败返回 null，由组件 toast）。
  */
-export async function expandQuestion(id, deps = {}) {
+export async function expandQuestion(id: string, deps: SearchDeps = {}) {
   const store = deps.store || searchStore
   if (!id) return null
   if (store.expanded[id]) return store.expanded[id]

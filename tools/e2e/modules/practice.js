@@ -44,7 +44,7 @@ async function finishRound(page) {
 export default {
   id: 'practice',
   label: '刷题：可用题量 / 导航 / 跳过 / 判分标色 / 完成闭环',
-  owns: ['src/views/Practice.vue', 'src/components/question/QuestionRunner.vue', 'src/stores/runConfig.js', 'src/utils/practiceLoop.ts', 'src/composables/'],
+  owns: ['src/views/Practice.vue', 'src/components/question/QuestionRunner.vue', 'src/stores/runConfig.ts', 'src/utils/practiceLoop.ts', 'src/composables/'],
   async run({ page, ok }) {
     // ── FE-P0-05：可用题量 ──
     await goto(page, '#/practice')

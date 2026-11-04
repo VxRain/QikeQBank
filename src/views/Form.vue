@@ -52,8 +52,8 @@ import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { get, create, update } from '@/api/questions.ts'
 import { expandQuestions, normalizeDocAssets } from '@/api/assets.ts'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.ts'
-import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
-import { toast, confirmDialog } from '@/stores/ui.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.ts'
+import { toast, confirmDialog } from '@/stores/ui.ts'
 import {
   draftKey,
   snapshotOf,
@@ -63,7 +63,7 @@ import {
   clearDraft,
   ageText,
   startDraftTimer
-} from '@/stores/formDraft.js'
+} from '@/stores/formDraft.ts'
 import QuestionEditor from '@/components/QuestionEditor.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { validateQuestion } from '@/utils/validate.ts'

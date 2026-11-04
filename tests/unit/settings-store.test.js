@@ -12,7 +12,7 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { setProvider } from '../../src/api/bridge.ts'
-import { settings, hydrateFromDb } from '../../src/stores/settings.js'
+import { settings, hydrateFromDb } from '../../src/stores/settings.ts'
 
 const settle = () => new Promise((r) => setImmediate(r))
 

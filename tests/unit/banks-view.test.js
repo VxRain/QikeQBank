@@ -1,7 +1,7 @@
 /**
  * 题库页列表逻辑（FE-P1-02）：搜索 / 排序 / 拖拽
  *
- * 这三件事互相干扰，组件里只能靠手测，所以逻辑全在 stores/banksView.js，
+ * 这三件事互相干扰，组件里只能靠手测，所以逻辑全在 stores/banksView.ts，
  * 这里逐条锁住：
  *   ① 阈值：题库数 >3 才显示搜索与排序
  *   ② 六档排序各自正确，非法值回落默认
@@ -29,7 +29,7 @@ import {
   saveCustomOrder,
   loadBankSort,
   saveBankSort
-} from '../../src/stores/banksView.js'
+} from '../../src/stores/banksView.ts'
 
 /** 最小 localStorage 假实现（单测不依赖浏览器） */
 function mockStorage() {

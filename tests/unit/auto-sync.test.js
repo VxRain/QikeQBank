@@ -8,8 +8,8 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { setProvider } from '../../src/api/bridge.ts'
-import { normalizeSyncInterval, settings } from '../../src/stores/settings.js'
-import { appliedRows, autoSync, initAutoSync, retryDelayMs, STARTUP_DELAY_MS } from '../../src/stores/autoSync.js'
+import { normalizeSyncInterval, settings } from '../../src/stores/settings.ts'
+import { appliedRows, autoSync, initAutoSync, retryDelayMs, STARTUP_DELAY_MS } from '../../src/stores/autoSync.ts'
 
 const MIN = 60_000
 const settle = () => new Promise((r) => setImmediate(r))

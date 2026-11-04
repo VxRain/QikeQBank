@@ -221,22 +221,22 @@ import { expandQuestions } from '@/api/assets.ts'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.ts'
 import { gradeQuestion } from '@/utils/gradeQuestion.ts'
-import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
-import { settings } from '@/stores/settings.js'
-import { ui, toast } from '@/stores/ui.js'
-import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.js'
+import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.ts'
+import { settings } from '@/stores/settings.ts'
+import { ui, toast } from '@/stores/ui.ts'
+import { itemKeyOf, parentIdsOf, save as saveSession, scheduleSave, flush as flushSession, clear as clearSession, clampSnapshot } from '@/stores/session.ts'
 import { promptResume, discardSession } from '@/composables/sessionResume.js'
 import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
 import { typeLabel } from '@/constants/questions.js'
 import { previewIntervals, revertPayloadOf, REVERT_WINDOW_MS } from '@/utils/reviewPreview.ts'
 import { randomUUID } from '@/utils/device.ts'
-import { loadRunConfig, saveRunConfig, MAX_PER_ROUND } from '@/stores/runConfig.js'
+import { loadRunConfig, saveRunConfig, MAX_PER_ROUND } from '@/stores/runConfig.ts'
 import { blankAnswersOf, fmtDurationCn, buildRunItems } from '@/utils/questionDisplay.ts'
 
 const phase = ref('due') // due | loading | card | done
 const bankId = ref('')
 // 题量：输入框（默认 20，钳制 1–500）；“全部”按钮把今日到期数回填进输入框
-// FE-P0-05：题量记忆——刷新后保持上次选择（localStorage，键统一在 stores/runConfig.js）
+// FE-P0-05：题量记忆——刷新后保持上次选择（localStorage，键统一在 stores/runConfig.ts）
 const countText = ref('20')
 const lastCount = ref(20)
 // 初值从记忆里取（脏数据已由 normalizeConfig 归一，不会把输入框打空）

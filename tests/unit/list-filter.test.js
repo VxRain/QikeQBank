@@ -20,7 +20,7 @@ import {
   saveFilter,
   clearFilter,
   clampPage
-} from '../../src/stores/listFilter.js'
+} from '../../src/stores/listFilter.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '../..')
@@ -245,7 +245,7 @@ describe('listFilter / 接线守卫（回退即失败）', () => {
   test('List.vue 通过 clampPage 收敛页码，而不是自己写死 Math.min', () => {
     // 必须精确到 fetchList 函数体：gotoPage 里也有 clampPage，只查全文会放过「拿数据后不收敛」的回退
     assert.match(vue, /clampPage\(/, '必须调用 clampPage 收敛页码')
-    assert.match(vue, /from '@\/stores\/listFilter\.js'/, '必须从 listFilter 引入')
+    assert.match(vue, /from '@\/stores\/listFilter\.ts'/, '必须从 listFilter 引入')
     const body = functionBody(vue, 'fetchList')
     assert.match(body, /clampPage\(page\.value, total\.value, pageSize\.value\)/,
       'fetchList 拿到 total 后必须用 clampPage 收敛')

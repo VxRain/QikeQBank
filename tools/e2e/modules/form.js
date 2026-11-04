@@ -12,7 +12,7 @@ export default {
   // P1：本模块要验 2000ms 草稿防抖。用 clock 快进而非真实等待（无 Date.now() 业务计算，无副作用）
   usesClock: true,
   label: '录题：脏徽章 / 离开确认 / Ctrl+S / 草稿',
-  owns: ['src/views/Form.vue', 'src/stores/formDraft.js', 'src/components/QuestionForm.vue', 'src/components/QuestionEditor.vue', 'src/components/TiptapDocEditor.vue'],
+  owns: ['src/views/Form.vue', 'src/stores/formDraft.ts', 'src/components/QuestionForm.vue', 'src/components/QuestionEditor.vue', 'src/components/TiptapDocEditor.vue'],
   async run({ page, ok }) {
     // ── FE-P0-03：脏徽章 / 离开确认 / Ctrl+S / 保存后清草稿 ──
     await goto(page, '#/create?bank=bank_default')

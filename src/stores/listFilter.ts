@@ -14,6 +14,16 @@
  *   后端 Err」的死角——所以这里导出一份常量供 api 层与测试共用。
  */
 
+/** 列表筛选条件（difficulty 以字符串存，'' = 全部） */
+export interface ListFilter {
+  query: string
+  type: string
+  difficulty: string
+  status: string
+  sort: string
+  pageSize: number
+}
+
 export const LIST_FILTER_VERSION = 1
 
 const KEY_PREFIX = 'qbank.listFilter.v1.'
@@ -43,40 +53,40 @@ export const STATUS_OPTIONS = Object.freeze([
 export const PAGE_SIZE_CHOICES = Object.freeze([20, 50, 100])
 export const DEFAULT_PAGE_SIZE = 50
 
-export function emptyFilter() {
+export function emptyFilter(): ListFilter {
   return { query: '', type: '', difficulty: '', status: '', sort: DEFAULT_SORT, pageSize: DEFAULT_PAGE_SIZE }
 }
 
 /**
  * 归一化筛选条件。任何非法值 → 该字段回落默认，其余字段保留。
- * @param {object|null} raw
- * @returns {{query:string,type:string,difficulty:string,status:string,sort:string,pageSize:number}}
  */
-export function normalizeFilter(raw) {
+export function normalizeFilter(raw: unknown): ListFilter {
   const out = emptyFilter()
   if (!raw || typeof raw !== 'object') return out
+  // 逐字段判型后再赋值（raw 来自 localStorage JSON，任何字段都可能缺失或类型错）
+  const r = raw as Partial<Record<string, unknown>>
 
-  if (typeof raw.query === 'string') out.query = raw.query
-  if (typeof raw.type === 'string') out.type = raw.type
-  if (typeof raw.status === 'string' && STATUS_OPTIONS.some((o) => o.value === raw.status)) {
-    out.status = raw.status
+  if (typeof r.query === 'string') out.query = r.query
+  if (typeof r.type === 'string') out.type = r.type
+  if (typeof r.status === 'string' && STATUS_OPTIONS.some((o) => o.value === r.status)) {
+    out.status = r.status
   }
   // 难度以字符串存（<select> 的 value 是字符串，'' = 全部）
-  const d = raw.difficulty === '' || raw.difficulty == null ? '' : Number(raw.difficulty)
+  const d = r.difficulty === '' || r.difficulty == null ? '' : Number(r.difficulty)
   out.difficulty = typeof d === 'number' && DIFFICULTY_CHOICES.includes(d) ? String(d) : ''
 
-  if (SORT_KEYS.includes(raw.sort)) out.sort = raw.sort
-  const ps = Number(raw.pageSize)
+  if (typeof r.sort === 'string' && (SORT_KEYS as readonly string[]).includes(r.sort)) out.sort = r.sort
+  const ps = Number(r.pageSize)
   if (PAGE_SIZE_CHOICES.includes(ps)) out.pageSize = ps
   return out
 }
 
-export function filterKey(page, bankId) {
+export function filterKey(page: string, bankId?: string | null): string {
   return `${KEY_PREFIX}${page}:${bankId || '-'}`
 }
 
 /** 读筛选：无记录 / 坏 JSON / 版本不符 / 无 bankId → 默认空筛选 */
-export function loadFilter(page, bankId) {
+export function loadFilter(page: string, bankId?: string | null): ListFilter {
   const s = typeof localStorage === 'undefined' ? null : localStorage
   if (!s || !bankId) return emptyFilter()
   let raw
@@ -97,7 +107,7 @@ export function loadFilter(page, bankId) {
 }
 
 /** 写筛选：全默认时不落键（避免攒一堆无意义条目）；写失败静默 */
-export function saveFilter(page, bankId, filter) {
+export function saveFilter(page: string, bankId: string | null | undefined, filter: unknown): boolean {
   const s = typeof localStorage === 'undefined' ? null : localStorage
   if (!s || !bankId) return false
   const norm = normalizeFilter(filter)
@@ -115,7 +125,7 @@ export function saveFilter(page, bankId, filter) {
   }
 }
 
-export function clearFilter(page, bankId) {
+export function clearFilter(page: string, bankId?: string | null): void {
   const s = typeof localStorage === 'undefined' ? null : localStorage
   if (!s || !bankId) return
   try {
@@ -127,12 +137,9 @@ export function clearFilter(page, bankId) {
 
 /**
  * 页码收敛：删除/筛选后当前页可能越界（「第 3 / 2 页」的来源）。
- * @param {number} page 期望页
- * @param {number} total 当前条件下的总条数
- * @param {number} pageSize
- * @returns {number} 有效页（total=0 时返回 1）
+ * total=0 时返回 1。
  */
-export function clampPage(page, total, pageSize) {
+export function clampPage(page: number, total: number, pageSize: number | string): number {
   const size = Number(pageSize) > 0 ? Number(pageSize) : DEFAULT_PAGE_SIZE
   const count = Math.max(0, Number(total) || 0)
   const lastPage = Math.max(1, Math.ceil(count / size))

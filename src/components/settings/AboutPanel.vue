@@ -44,7 +44,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { openDataDir as openDataDirApi, isPortableMode } from '@/api/practice.ts'
 import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.ts'
-import { toast } from '@/stores/ui.js'
+import { toast } from '@/stores/ui.ts'
 
 const REPO = 'VxRain/QikeQBank'
 const RELEASES_URL = `https://github.com/${REPO}/releases`

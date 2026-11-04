@@ -18,7 +18,7 @@ const {
   moveChild, moveChildUp, moveChildDown, canMoveChild, removeChildAt,
   insertionIndexFromY, insertIndexToMoveTarget, edgeScrollDelta
 } = await import('../../src/utils/materialChildren.ts')
-const { moveId } = await import('../../src/stores/banksView.js')
+const { moveId } = await import('../../src/stores/banksView.ts')
 
 const child = (n, extra = {}) => ({
   id: `q1_c${n}`,

@@ -4,31 +4,37 @@
  * 职责边界：
  * - 脏判定：把「挂载后的基线快照」与「当前表单」按稳定序列化比对（键序无关），
  *   避免把 JSON.stringify 的键顺序差异误判成用户改动。
- * - 草稿兜底：每 30 秒把表单写 sessionStorage（与 stores/session.js 同思路：
+ * - 草稿兜底：每 30 秒把表单写 sessionStorage（与 stores/session.ts 同思路：
  *   只在 sessionStorage、不落库、不进同步），页面崩溃/误关后可恢复。
  *
  * 只存表单对象本身，不做任何字段解释；恢复后的合法性仍由 utils/validate.ts 判定。
  */
 
 const KEY_PREFIX = 'qbank.formDraft.v1:'
+/** 草稿键上下文：编辑态按题目 id，新建态按归属题库 */
+export interface DraftCtx {
+  isEdit?: boolean
+  id?: string
+  bankId?: string
+}
+
 export const DRAFT_TTL_MS = 12 * 60 * 60 * 1000 // 12 小时：跨过一次工作时段即可，不做长期档案
 
-function storage() {
+function storage(): Storage | null {
   if (typeof sessionStorage === 'undefined') return null
   return sessionStorage
 }
 
 /**
  * 草稿键：编辑态按题目 id，新建态按归属题库（换库即换草稿，避免串题）。
- * @param {{isEdit?:boolean, id?:string, bankId?:string}} ctx
  */
-export function draftKey({ isEdit, id, bankId } = {}) {
+export function draftKey({ isEdit, id, bankId }: DraftCtx = {}): string {
   if (isEdit && id) return `${KEY_PREFIX}edit:${id}`
   return `${KEY_PREFIX}new:${bankId || 'unassigned'}`
 }
 
 /** 稳定序列化：对象键排序，数组保序。undefined 视为缺失（与 JSON 语义一致）。 */
-export function stableStringify(value) {
+export function stableStringify(value: unknown): string {
   const seen = new WeakSet()
   const walk = (v) => {
     if (v === null || typeof v !== 'object') {
@@ -58,7 +64,7 @@ export function stableStringify(value) {
 }
 
 /** 深拷贝快照（只保留可序列化数据，顺带切断与响应式代理的联系） */
-export function snapshotOf(form) {
+export function snapshotOf(form: unknown): Record<string, any> | null {
   if (form == null) return null
   try {
     return JSON.parse(JSON.stringify(form))
@@ -69,19 +75,16 @@ export function snapshotOf(form) {
 
 /**
  * 是否脏：与基线不同即脏。基线缺失（加载失败/尚未建立）时不算脏，避免误拦。
- * @param {object|null} baseline 挂载时建立的快照
- * @param {object|null} current 当前表单
  */
-export function isDirty(baseline, current) {
+export function isDirty(baseline: unknown, current: unknown): boolean {
   if (!baseline || !current) return false
   return stableStringify(baseline) !== stableStringify(current)
 }
 
 /**
  * 写草稿。序列化失败（含循环引用）静默返回 false —— 草稿是兜底能力，不能反过来阻断录题。
- * @returns {boolean} 是否写入成功
  */
-export function saveDraft(key, form, now = Date.now()) {
+export function saveDraft(key: string, form: unknown, now: number = Date.now()): boolean {
   const s = storage()
   if (!s || !key) return false
   const snap = snapshotOf(form)
@@ -96,9 +99,11 @@ export function saveDraft(key, form, now = Date.now()) {
 
 /**
  * 读草稿。过期或结构不符一律当作没有，并顺手清掉脏数据。
- * @returns {{form:object, savedAt:number}|null}
  */
-export function loadDraft(key, { now = Date.now(), ttl = DRAFT_TTL_MS } = {}) {
+export function loadDraft(
+  key: string,
+  { now = Date.now(), ttl = DRAFT_TTL_MS }: { now?: number; ttl?: number } = {}
+): { form: Record<string, any>; savedAt: number } | null {
   const s = storage()
   if (!s || !key) return null
   let raw
@@ -123,7 +128,7 @@ export function loadDraft(key, { now = Date.now(), ttl = DRAFT_TTL_MS } = {}) {
   return { form: parsed.form, savedAt }
 }
 
-export function clearDraft(key) {
+export function clearDraft(key: string): void {
   const s = storage()
   if (!s || !key) return
   try {
@@ -134,7 +139,7 @@ export function clearDraft(key) {
 }
 
 /** 距上次保存的友好描述（弹窗文案用） */
-export function ageText(since, now = Date.now()) {
+export function ageText(since: number, now: number = Date.now()): string {
   const ms = Math.max(0, now - Number(since || 0))
   if (ms < 60_000) return '几秒前'
   const min = Math.floor(ms / 60_000)
@@ -151,12 +156,13 @@ export function ageText(since, now = Date.now()) {
  * 没动过的表单不需要备份——否则每 30 秒凭空造一份，下次进入还会弹
  * 「恢复未保存的录入内容？」，用户从没编辑过却被告知有未保存内容。
  *
- * @param {string} key
- * @param {object|(()=>object)} getForm
- * @param {{interval?:number, shouldSave?:()=>boolean}} [opts]
- *   shouldSave：额外门槛（Form.vue 传脏判定），返回 false 则本次跳过
+ * shouldSave：额外门槛（Form.vue 传脏判定），返回 false 则本次跳过
  */
-export function startDraftTimer(key, getForm, { interval = 30_000, shouldSave } = {}) {
+export function startDraftTimer(
+  key: string,
+  getForm: (() => Record<string, any> | null) | Record<string, any> | null,
+  { interval = 30_000, shouldSave }: { interval?: number; shouldSave?: () => boolean } = {}
+): () => void {
   if (typeof setInterval !== 'function') return () => {}
   const id = setInterval(() => {
     if (typeof shouldSave === 'function') {
@@ -171,7 +177,8 @@ export function startDraftTimer(key, getForm, { interval = 30_000, shouldSave } 
   }, interval)
   // Node 单测里别把进程吊住；浏览器返回 number（无 unref）。
   // 浏览器下 setInterval 返回 number，Node 下返回 Timeout 对象；窄化成对象且方法存在才调用。
-  const handle = /** @type {any} */ (id)
+  // 浏览器下 setInterval 返回 number，Node 下返回 Timeout 对象（有 unref）
+  const handle = id as any
   if (handle && typeof handle.unref === 'function') handle.unref()
   return () => clearInterval(id)
 }

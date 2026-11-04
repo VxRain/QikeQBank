@@ -18,7 +18,7 @@ import { setProvider } from '../../src/api/bridge.ts'
 setProvider({ invoke: async () => ({ success: true, data: [] }) })
 
 const { settings, DEFAULTS, resetSettingsToDefault, clearBankFilterCache } = await import(
-  '../../src/stores/settings.js'
+  '../../src/stores/settings.ts'
 )
 
 const settle = () => new Promise((r) => setImmediate(r))
@@ -79,7 +79,7 @@ test('键集合双向一致：settings 与 DEFAULTS 不能有一方多出一个�
 test('DEFAULTS 的每个值都是合法值（能通过各自归一化而不被改写）', async () => {
   // 若默认值本身不合法，首次启动就会被归一化成别的值，于是「刚装好」与
   // 「恢复默认」结果不同——后者用户看得见，前者没人看得见。
-  const m = await import('../../src/stores/settings.js')
+  const m = await import('../../src/stores/settings.ts')
   assert.equal(m.normalizeDelay(DEFAULTS.autoNextDelayMs), DEFAULTS.autoNextDelayMs)
   assert.equal(m.normalizeSyncInterval(DEFAULTS.autoSyncIntervalMin), DEFAULTS.autoSyncIntervalMin)
   assert.equal(m.normalizeRetention(DEFAULTS.fsrs.requestRetention), DEFAULTS.fsrs.requestRetention)

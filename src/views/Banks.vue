@@ -201,9 +201,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { bankStore, loadBanks } from '@/stores/bank.js'
+import { bankStore, loadBanks } from '@/stores/bank.ts'
 import { createBank, updateBank, removeBank } from '@/api/banks.ts'
-import { toast, confirmDialog } from '@/stores/ui.js'
+import { toast, confirmDialog } from '@/stores/ui.ts'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import {
   BANK_SORT_OPTIONS,
@@ -216,7 +216,7 @@ import {
   saveCustomOrder,
   loadBankSort,
   saveBankSort
-} from '@/stores/banksView.js'
+} from '@/stores/banksView.ts'
 
 const router = useRouter()
 
@@ -240,7 +240,7 @@ const totalCount = computed(() =>
 )
 
 // ── 搜索 / 排序 / 拖拽（FE-P1-02）──
-// 纯逻辑全在 stores/banksView.js（35 条单测），这里只做接线与持久化。
+// 纯逻辑全在 stores/banksView.ts（35 条单测），这里只做接线与持久化。
 const sortOptions = BANK_SORT_OPTIONS
 const query = ref('')
 const sort = ref(loadBankSort())

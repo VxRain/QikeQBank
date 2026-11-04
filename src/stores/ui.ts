@@ -6,14 +6,45 @@ import { reactive } from 'vue'
 
 let uid = 0
 
+export type ToastType = 'success' | 'error' | 'info'
+
+export interface Toast {
+  id: number
+  type: ToastType
+  text: string
+}
+
+export type DialogType = 'confirm' | 'prompt' | 'select'
+
+/** 弹层选项 */
+export interface SelectOption {
+  value: string
+  label: string
+}
+
+/** 弹层内部状态（由 DialogHost 渲染；resolve 决定调用方 await 的返回值类型） */
+export interface DialogState {
+  type: DialogType
+  title: string
+  message: string
+  okText: string
+  cancelText: string
+  danger: boolean
+  placeholder: string
+  initial: string
+  options?: SelectOption[]
+  resolve: (v: any) => void
+}
+
 export const ui = reactive({
-  toasts: [],
-  dialog: null // { type: 'confirm'|'prompt'|'select', title, message, okText, cancelText, danger, placeholder, initial, options, resolve }
+  toasts: [] as Toast[],
+  /** 当前弹层；null = 无 */
+  dialog: null as DialogState | null
 })
 
 /* ---------- Toast ---------- */
 
-export function toast(text, type = 'info', duration = 3000) {
+export function toast(text: string, type: ToastType = 'info', duration = 3000): number {
   const id = ++uid
   ui.toasts.push({ id, type, text })
   if (duration > 0) {
@@ -22,14 +53,42 @@ export function toast(text, type = 'info', duration = 3000) {
   return id
 }
 
-export function dismissToast(id) {
+export function dismissToast(id: number): void {
   const i = ui.toasts.findIndex((t) => t.id === id)
   if (i >= 0) ui.toasts.splice(i, 1)
 }
 
 /* ---------- Dialog ---------- */
 
-export function confirmDialog(opts = {}) {
+/** 确认框选项 */
+export interface ConfirmOpts {
+  title?: string
+  message?: string
+  okText?: string
+  cancelText?: string
+  danger?: boolean
+}
+
+/** 输入框选项 */
+export interface PromptOpts {
+  title?: string
+  message?: string
+  okText?: string
+  cancelText?: string
+  placeholder?: string
+  initial?: string | number
+}
+
+/** 下拉选择选项 */
+export interface SelectOpts {
+  title?: string
+  message?: string
+  okText?: string
+  cancelText?: string
+  options?: SelectOption[]
+}
+
+export function confirmDialog(opts: ConfirmOpts = {}): Promise<boolean> {
   return new Promise((resolve) => {
     ui.dialog = {
       type: 'confirm',
@@ -45,7 +104,7 @@ export function confirmDialog(opts = {}) {
   })
 }
 
-export function promptDialog(opts = {}) {
+export function promptDialog(opts: PromptOpts = {}): Promise<string | null> {
   return new Promise((resolve) => {
     ui.dialog = {
       type: 'prompt',
@@ -62,7 +121,7 @@ export function promptDialog(opts = {}) {
 }
 
 /** 关闭当前弹层：confirm → resolve(true/false)；prompt → resolve(字符串或 null)；select → resolve(选中 value 或 null) */
-export function closeDialog(value) {
+export function closeDialog(value?: unknown): void {
   const d = ui.dialog
   if (!d) return
   ui.dialog = null
@@ -79,7 +138,7 @@ export function closeDialog(value) {
  * 下拉选择弹层：options=[{value,label}]，resolve 选中 value，取消为 null
  * 用法：const bankId = await selectDialog({ title:'移动到', options: banks.map(...) })
  */
-export function selectDialog(opts = {}) {
+export function selectDialog(opts: SelectOpts = {}): Promise<string | null> {
   return new Promise((resolve) => {
     ui.dialog = {
       type: 'select',

@@ -84,7 +84,7 @@ export const flush = async (page, budget = 1000) => {
 /**
  * 等搜索面板真正出结果。
  *
- * 面板对题目请求做了 250ms 防抖（stores/search.js 的 SEARCH_DEBOUNCE），
+ * 面板对题目请求做了 250ms 防抖（stores/search.ts 的 SEARCH_DEBOUNCE），
  * 单靠 flush 只能等到「当前 inflight 归零」——防抖定时器还没到期，此时断言等于在空结果上跑。
  * 又不许写固定 sleep（仓库约定），所以等一个**可观察信号**：最近一次 questions_list
  * 请求的 query 已经等于目标关键词，且 inflight 归零。
