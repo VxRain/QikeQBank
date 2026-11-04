@@ -121,7 +121,7 @@
                       </span>
                     </span>
                     <span v-if="item.kind === 'question'" class="sp-row-act">
-                      <span class="badge badge-type">{{ typeLabel(item.raw?.type) }}</span>
+                      <span class="badge badge-type">{{ typeLabel(questionTypeOf(item)) }}</span>
                       <span
                         class="sp-expand"
                         :title="store.expandedId === item.id ? '收起预览（→）' : '预览题面（→）'"
@@ -203,6 +203,7 @@ import {
   loadRecent,
   nextActive,
   normalizeKeyword,
+  questionTypeOf,
   pushRecent,
   clearRecent,
   resetResults,

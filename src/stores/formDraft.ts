@@ -64,7 +64,7 @@ export function stableStringify(value: unknown): string {
 }
 
 /** 深拷贝快照（只保留可序列化数据，顺带切断与响应式代理的联系） */
-export function snapshotOf(form: unknown): Record<string, any> | null {
+export function snapshotOf(form: unknown): Record<string, unknown> | null {
   if (form == null) return null
   try {
     return JSON.parse(JSON.stringify(form))
@@ -103,7 +103,7 @@ export function saveDraft(key: string, form: unknown, now: number = Date.now()):
 export function loadDraft(
   key: string,
   { now = Date.now(), ttl = DRAFT_TTL_MS }: { now?: number; ttl?: number } = {}
-): { form: Record<string, any>; savedAt: number } | null {
+): { form: Record<string, unknown>; savedAt: number } | null {
   const s = storage()
   if (!s || !key) return null
   let raw
@@ -158,9 +158,10 @@ export function ageText(since: number, now: number = Date.now()): string {
  *
  * shouldSave：额外门槛（Form.vue 传脏判定），返回 false 则本次跳过
  */
+
 export function startDraftTimer(
   key: string,
-  getForm: (() => Record<string, any> | null) | Record<string, any> | null,
+  getForm: (() => Record<string, unknown> | null) | Record<string, unknown> | null,
   { interval = 30_000, shouldSave }: { interval?: number; shouldSave?: () => boolean } = {}
 ): () => void {
   if (typeof setInterval !== 'function') return () => {}
@@ -175,10 +176,16 @@ export function startDraftTimer(
     const form = typeof getForm === 'function' ? getForm() : getForm
     if (form) saveDraft(key, form)
   }, interval)
-  // Node 单测里别把进程吊住；浏览器返回 number（无 unref）。
-  // 浏览器下 setInterval 返回 number，Node 下返回 Timeout 对象；窄化成对象且方法存在才调用。
-  // 浏览器下 setInterval 返回 number，Node 下返回 Timeout 对象（有 unref）
-  const handle = id as any
-  if (handle && typeof handle.unref === 'function') handle.unref()
+  // Node 单测里别把进程吊住：浏览器下 setInterval 返回 number（无 unref），
+  // Node 下返回 Timeout 对象（有 unref）。
+  //
+  // 这里刻意用 `unknown` + `in` 收窄，而不是 `as any`：
+  //   · `as any` 会把「有无 unref」这件事变成不检查（写了就过，连拼错都过）；
+  //   · `unknown` + `'unref' in handle` 是 TS 原生收窄，既不需要 @types/node，
+  //     也不引入断言；`in` 判定本身就是那层「真的有这个方法吗」的运行时检查。
+  const handle: unknown = id
+  if (handle && typeof handle === 'object' && 'unref' in handle && typeof handle.unref === 'function') {
+    handle.unref()
+  }
   return () => clearInterval(id)
 }

@@ -25,6 +25,49 @@
 
 export const SESSION_VERSION = 1
 export const SESSION_MODES = Object.freeze(['practice', 'review', 'exam'])
+
+/** 本轮统计（含完成后的得分率 rate，仅 rounds[] 里带） */
+export interface SessionRound {
+  total: number
+  correct: number
+  wrongKeys: string[]
+  /** 已用时长（毫秒） */
+  ms: number
+  /** 得分率 0–100，仅 rounds[] 有（当前 round 不计算） */
+  rate?: number
+}
+
+/**
+ * 会话快照（v1）。`answers` 由各页面自定义形状（练习/复习/模考的作答状态不同），
+ * 这里保持 `unknown` 而非强行建模——收紧成一个共用形状只会造出假契约。
+ * `extra` 则是**页面共用**的那部分（标记/跳过/练习模式），值得建模：
+ * 原先它是 `Record<string, any>`，导致读 `extra.flaggedKeys.filter(...)` 时
+ * 类型是 unknown/any，写错字段名不会有任何提示。
+ */
+export interface SessionSnapshot {
+  v: number
+  mode: string
+  bankId: string
+  keys: string[]
+  curIdx: number
+  answers: Record<string, unknown>
+  round: SessionRound
+  rounds: SessionRound[]
+  startedAt: number
+  updatedAt: number
+  extra: SessionExtra
+}
+
+/** 页面共用部分的 extra（各模式可有自己额外的键，故保留索引签名） */
+export interface SessionExtra {
+  /** 练习模式：做题 / 背题 */
+  practiceMode?: 'practice' | 'recite'
+  /** 已标记的项 key */
+  flaggedKeys?: string[]
+  /** 已跳过的项 key */
+  skippedKeys?: string[]
+  [k: string]: unknown
+}
 const KEY_PREFIX = 'qbank.session.v1.'
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000 // 超过 24h 的快照视为过期（避免"继续上次"弹到上周的会话）
 
@@ -88,7 +131,7 @@ function normalizeRound(r) {
 export function normalizeSnapshot(raw: unknown, mode?: string) {
   if (!raw || typeof raw !== 'object') return null
   // raw 来自 localStorage JSON：逐字段判型后再读（下面每个字段都有独立兜底）
-  const r = raw as Record<string, any>
+  const r = raw as Record<string, unknown>
   if (asInt(r.v) !== SESSION_VERSION) return null
   if (mode && r.mode !== mode) return null
   if (!isMode(r.mode)) return null
@@ -148,7 +191,7 @@ export function load(mode: string, opts: { ttlMs?: number; now?: number } = {}) 
 export function save(mode: string, snap: unknown) {
   const s = storage()
   if (!s || !isMode(mode)) return null
-  const base = snap && typeof snap === 'object' ? (snap as Record<string, any>) : {}
+  const base = snap && typeof snap === 'object' ? (snap as Record<string, unknown>) : {}
   const normalized = normalizeSnapshot({ ...base, mode, v: SESSION_VERSION, updatedAt: Date.now() }, mode)
   if (!normalized) return null
   try {
@@ -217,7 +260,8 @@ export function clearAll() {
  * curIdx 收敛到有效范围。返回新的快照与缺失 key 列表（供 UI 提示）。
  * @param availableKeys 恢复后真实存在的 key（顺序与快照一致）
  */
-export function clampSnapshot(snap: any, availableKeys: string[] | null | undefined) {
+export function clampSnapshot(snap: SessionSnapshot | null | undefined, availableKeys: string[] | null | undefined) {
+  if (!snap) return { snapshot: null, missing: [] as string[] }
   const available = new Set(availableKeys || [])
   const keys = (snap?.keys || []).filter((k) => available.has(k))
   const missing = (snap?.keys || []).filter((k) => !available.has(k))

@@ -30,7 +30,7 @@ const NOTIFY_AFTER_FAILURES = 3
 /** runSync 的结果：skipped 表示「有意跳过」而非失败（不进入退避） */
 export interface SyncResult {
   ok: boolean
-  res?: Record<string, any>
+  res?: Record<string, unknown>
   error?: string
   skipped?: string
 }
@@ -52,13 +52,24 @@ export const autoSync = reactive({
 let timer = null
 
 function errText(e: unknown): string {
-  return (e as any)?.message || String(e || '未知错误')
+  // `as any` → `in` 收窄：err 可能是 Error、被 reject 的字符串、或后端 Err(String)。
+  //
+  // 注意取 message 的条件必须与旧实现 `(e && e.message) || String(...)` **等价**：
+  // 旧写法是「message 为真值就用它」，`{message: 123}` 会得到 `"123"`。
+  // 若这里收紧成 `typeof === 'string'`，同一条错误会变成 `"[object Object]"`，
+  // 提示从「数字码」退化成「看不懂的东西」——收紧类型不该改变可观察输出。
+  if (e && typeof e === 'object' && 'message' in e && e.message) {
+    return String(e.message)
+  }
+  return String(e || '未知错误')
 }
 
 /** applied 各表行数求和（排除统计键） */
 export function appliedRows(res: unknown): number {
-  // res 是后端 sync_s3_pull 的原始 JSON（形状属后端契约，这里只读 applied 表计数）
-  const applied = (res as any)?.applied
+  // res 是后端 sync_s3_pull 的原始 JSON（形状属后端契约，这里只读 applied 表计数）。
+  // 用 `in` 收窄而不是 `as any`：字段名写错时会报错，`as any` 则静默返回 0。
+  if (!res || typeof res !== 'object' || !('applied' in res)) return 0
+  const applied = res.applied
   if (!applied || typeof applied !== 'object') return 0
   let n = 0
   for (const [k, v] of Object.entries(applied)) {

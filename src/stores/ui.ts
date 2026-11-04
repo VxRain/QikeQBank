@@ -33,7 +33,11 @@ export interface DialogState {
   placeholder: string
   initial: string
   options?: SelectOption[]
-  resolve: (v: any) => void
+  /**
+   * 弹层关闭时把值交给调用方。`unknown` 而非 `any`：closeDialog 会对
+   * prompt/select/confirm 分别做收窄，这里若写 any 等于放弃那层检查。
+   */
+  resolve: (v: unknown) => void
 }
 
 export const ui = reactive({

@@ -15,10 +15,71 @@
  *   保证全仓库仍只有一套设置搜索逻辑。
  * - **题目结果先 summary**：`questions_list` 传 `summary: true` 只取摘要字段，
  *   展开某条时才 `questions_get(id)` 取全文并缓存（同一 id 不重复请求）。
- * - **最近搜索只落 localStorage**：与 stores/runConfig.ts / listFilter.js 同判断，
+ * - **最近搜索只落 localStorage**：与 stores/runConfig.ts / listFilter.ts 同判断，
  *   属「本机行为偏好」，不进 SQLite、不进同步契约。
  */
 import { reactive } from 'vue'
+
+/**
+ * 设置分区里的一个设置项。形状权威在 components/settings/registry.js，
+ * 那是 .js（未迁移），所以这里只声明「搜索用得到」的部分；
+ * 多出来的字段由 registry 自己的 match 函数读取。
+ */
+export interface SettingItemLike {
+  id?: string
+  key?: string
+  title?: string
+  desc?: string
+  category?: string
+  /** 依赖未满足时提示「需先开启 …」（registry.js 真实字段） */
+  dependsOn?: string
+  // 不写索引签名：写了会要求源类型（registry 的真实 item）也带，反而卡死赋值
+}
+
+/** 设置项匹配函数（注入 registry.matchItem） */
+export type MatchFn = (item: SettingItemLike, section: SettingSectionLike, needle: string) => boolean
+
+/** 设置项是否可见（依赖未满足时仍展示，但标注原因） */
+export type VisibleFn = (item: SettingItemLike) => boolean
+
+/** 取题目摘要列表的参数（api/questions.ts::ListParams 的子集） */
+export interface SearchListParams {
+  query?: string
+  limit?: number
+  summary?: boolean
+  bankId?: string
+}
+
+/**
+ * 题目摘要（questions_list summary=true）：不含 stem/options/answer/analysis。
+ *
+ * **不写索引签名**：`SearchListResult.items` 要能同时接住 api 层的
+ * `Question | QuestionSummary`（联合），带索引签名会要求两边都声明索引签名，
+ * 反而赋值失败。这里只列本模块真正读的字段。
+ */
+export interface QuestionSummaryLike {
+  id: string
+  type?: string
+  plain_text?: string
+  children_count?: number
+  children_score?: number
+}
+
+/** 取题目摘要列表的返回（api/questions.ts::list 的 data） */
+export interface SearchListResult {
+  total?: number
+  items?: QuestionSummaryLike[]
+}
+
+/** 展开的题目全文（本模块只读 id/type/stem 等展示字段，其余透传） */
+export interface QuestionDetailLike {
+  id?: string
+  type?: string
+  stem?: unknown
+  options?: unknown[]
+  answer?: unknown
+  plain_text?: string
+}
 
 /** 面板里的一条结果（题目 / 题库 / 页面 / 设置 共用） */
 export interface SearchItem {
@@ -29,8 +90,22 @@ export interface SearchItem {
   desc: string
   to?: string
   order?: number | string
-  raw?: any
+  /** 原始命中对象（题目/题库/设置项）。调用方按 kind 自行收窄，故为 unknown */
+  raw?: unknown
   sectionId?: string
+}
+
+/**
+ * 取题目结果里的题型（模板用）。
+ *
+ * `SearchItem.raw` 是 unknown：它可能是 QuestionSummary、Bank 或设置项。
+ * 模板表达式不是完整 TS 上下文，写不了断言，所以在**这里**做一次 `in` 收窄，
+ * 模板保持 `questionTypeOf(item)` 的可读写法。
+ */
+export function questionTypeOf(item: SearchItem | null | undefined): string {
+  const raw = item?.raw
+  if (!raw || typeof raw !== 'object' || !('type' in raw)) return ''
+  return typeof raw.type === 'string' ? raw.type : ''
 }
 
 /** 题库最小形状 */
@@ -50,7 +125,8 @@ export interface RouteLike {
 export interface SettingSectionLike {
   id: string
   title: string
-  items?: any[]
+  /** 分区内的设置项（形状由 registry.js 定义，本模块只透传给 match/isVisible） */
+  items?: SettingItemLike[]
 }
 
 /** 面板运行时状态 */
@@ -62,7 +138,8 @@ export interface SearchStore {
   questions: SearchItem[]
   questionTotal: number
   expandedId: string
-  expanded: Record<string, any>
+  /** 已展开题目的全文结果，按题目 id 索引 */
+  expanded: Record<string, QuestionDetailLike>
   expandedLoading: boolean
   banks: SearchItem[]
   pages: SearchItem[]
@@ -74,14 +151,16 @@ export interface SearchStore {
 
 /** runQuestionSearch / expandQuestion 的注入依赖（便于 node 下单测） */
 export interface SearchDeps {
-  listQuestions?: (params: Record<string, any>) => Promise<any>
-  getQuestion?: (id: string) => Promise<any>
+  /** 取题目摘要列表（注入 api/questions.ts 的 list，便于 node 下单测） */
+  listQuestions?: (params: SearchListParams) => Promise<SearchListResult>
+  /** 取单题全文（注入 api/questions.ts 的 get） */
+  getQuestion?: (id: string) => Promise<QuestionDetailLike>
   store?: SearchStore
   routes?: RouteLike[]
   banks?: BankLike[]
   sections?: SettingSectionLike[]
-  match?: (item: any, section: any, needle: string) => boolean
-  isVisible?: (item: any) => boolean
+  match?: MatchFn
+  isVisible?: VisibleFn
 }
 
 /** buildRows 的入参 */
@@ -264,8 +343,8 @@ export function buildPageResults(
 export function buildSettingResults(
   sections: SettingSectionLike[] | null | undefined,
   kw: unknown,
-  match?: (item: any, section: any, needle: string) => boolean,
-  isVisible?: (item: any) => boolean
+  match?: MatchFn,
+  isVisible?: VisibleFn
 ): SearchItem[] {
   const needle = normalizeKeyword(kw)
   if (!needle) return []
@@ -473,6 +552,7 @@ export async function runQuestionSearch(kw: unknown, deps: SearchDeps = {}) {
       key: `question:${q.id}`,
       id: q.id,
       title: snippet(q.plain_text),
+      // q 是 QuestionSummary（不含 stem/options/answer），raw 原样透传给组件
       desc: '',
       raw: q
     }))

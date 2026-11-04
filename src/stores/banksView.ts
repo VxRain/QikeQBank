@@ -4,7 +4,8 @@ export interface BankLike {
   name?: string
   created_at?: string
   question_count?: number
-  [k: string]: any
+  // 允许调用方传完整 Bank；多出的字段本模块不读，故不假装它们有类型
+  [k: string]: unknown
 }
 
 /**

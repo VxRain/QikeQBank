@@ -6,7 +6,7 @@ import { leaveAfterOf } from '../utils/wrongRules.ts'
 // localStorage 仅作写透缓存，DB 为准（同步地基 §6）。
 const KEY = 'qbank.settings.v1'
 // 与 stores/bank.ts 的 FILTER_KEY_PREFIX 必须是同一个字符串。
-// 为什么不直接 import clearBankFilters：bank.js 已 import 本模块（读 rememberBankFilter），
+// 为什么不直接 import clearBankFilters：bank.ts 已 import 本模块（读 rememberBankFilter），
 // 反向 import 会成环，表现为「恢复默认」时 clearBankFilters is not defined。
 const BANK_FILTER_KEY_PREFIX = 'qbank.bankFilter.'
 
