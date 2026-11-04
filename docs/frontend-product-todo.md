@@ -30,6 +30,7 @@
 ### 0.3 通用完成定义（DoD）
 
 - [ ] `pnpm build` 通过
+- [ ] `pnpm typecheck` 0 类型错误（`vue-tsc` + `checkJs`，覆盖 `src/**/*.js` 与 `*.vue`；增量约 2s）
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` 全绿
 - [ ] `pnpm lint`（clippy `-D warnings`）0 警告
 - [ ] `node tools/smoke-test.mjs` 通过
@@ -63,6 +64,11 @@
 - 不在 P0 完成前做社区、题库市场、AI 生成题。
 - 不在未更新 PLAN / Schema / 同步契约前，前端私自定义会进同步包的字段。
 - 不为“看起来高级”引入重型状态管理或全量 TypeScript 迁移；先解决重复实现与契约。
+  - **区分**：“全量 .js→.ts 迁移”仍是非目标（成本 50–100 人日，测试大量依赖 `readFileSync` 断言源码与硬编码 `.js` 路径）；
+    但“类型检查”已于本期落地：`checkJs: true` + `strict: false` + `pnpm typecheck` 进门禁，
+    不要求改文件名、不动运行时。**不追 TypeScript 7 / tsgo**：`vue-tsc` 依赖 TS 的 JS API，
+    TS 7 只发原生二进制且没有该 API，且 Vue 侧瓶颈在 SFC 解析管线（实测换 tsgo 无加速）；
+    待 `vue-tsc@4` 正式版 + 可复现 benchmark 再议，届时并行而非替换。
 
 **已评审否决的能力**（考虑过、决定不做。不要重新立项，除非产品定位变了）：
 
