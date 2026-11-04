@@ -138,7 +138,7 @@ async function main() {
 
     // ── 2) 预览：20 图题目的 renderDoc 同步耗时 ──
     result.preview = await page.evaluate(async () => {
-      const { renderDoc } = await import('/src/utils/render.js')
+      const { renderDoc } = await import('/src/utils/render.ts')
       const imageBlock = (i) => ({
         type: 'imageBlock',
         attrs: { src: `https://example.invalid/img${i}.png`, caption: `图 ${i}`, width: 600 }
@@ -208,7 +208,7 @@ async function main() {
 
     // ── 4) KaTeX：公式题面（渲染里最贵的一块）──
     result.math = await page.evaluate(async () => {
-      const { renderDoc } = await import('/src/utils/render.js')
+      const { renderDoc } = await import('/src/utils/render.ts')
       const content = []
       for (let i = 0; i < 10; i++) {
         content.push({

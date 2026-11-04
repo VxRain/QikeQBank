@@ -55,7 +55,7 @@
           <span class="key font-700 text-primary shrink-0">{{ keyOf(i) }}</span>
           <span class="opt-body" v-html="optHtml(o)"></span>
           <!-- 判分后选项自身标绿/红（FE-P1-06）：不依赖下方答案对照行，
-               眼睛落在选项上就能看出对错。判定口径见 utils/practiceLoop.js -->
+               眼睛落在选项上就能看出对错。判定口径见 utils/practiceLoop.ts -->
           <i
             v-if="markOf(o.id) === 'correct'"
             class="i-lucide-circle-check shrink-0 text-[15px] text-success ml-auto"
@@ -99,9 +99,9 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { renderDoc, renderOptions } from '@/utils/render.js'
-import { optionMarkOf } from '@/utils/practiceLoop.js'
-import { valueOf } from '@/utils/domEvent.js'
+import { renderDoc, renderOptions } from '@/utils/render.ts'
+import { optionMarkOf } from '@/utils/practiceLoop.ts'
+import { valueOf } from '@/utils/domEvent.ts'
 
 const props = defineProps({
   // { q, parent, isChild, childIdx, childCount, uid }
@@ -192,7 +192,7 @@ function isPicked(id) {
 
 /**
  * 判分后该选项的标记（FE-P1-06）：'correct' | 'wrong' | ''
- * 口径与判分一致，详见 utils/practiceLoop.js::optionMarkOf（含「未判分恒空」）。
+ * 口径与判分一致，详见 utils/practiceLoop.ts::optionMarkOf（含「未判分恒空」）。
  */
 function markOf(id) {
   // picked 由 defineProps 的 `type: Array` 推断为 unknown[]，实际是选项 id 数组

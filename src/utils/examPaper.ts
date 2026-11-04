@@ -20,8 +20,20 @@
  * **如实报不可达并给出理由，绝不静默返回一张差几分的卷子**——
  * 那样跨场次成绩不可比，用户会以为是自己考差了。
  */
-import { fullScoreOf } from './grading.js'
+import { fullScoreOf } from './grading.ts'
 import { QUESTION_TYPE_KEYS } from '../constants/questions.js'
+import type { GradableQuestion } from './grading.ts'
+
+/** 题池里的一项：题目 + 其分值折算成的整数单位 */
+export interface PoolEntry {
+  q: GradableQuestion
+  units: number
+}
+
+/** 补位项：额外带题型，供回填 byType */
+export interface SpareEntry extends PoolEntry {
+  type: string
+}
 
 /**
  * 默认卷面满分（仅作为 `total` 参数的缺省值，不是业务约束）。
@@ -40,7 +52,7 @@ export const DEFAULT_MIX = Object.freeze({
 })
 
 /** 分值 → 整数单位（0.5 分粒度）。至少 1 单位，避免 0 分题占位死循环 */
-function toUnits(score) {
+function toUnits(score: unknown): number {
   return Math.max(1, Math.round((Number(score) || 0) * 2))
 }
 
@@ -51,11 +63,8 @@ function toUnits(score) {
  * 等价做法：DP 记录到达每个分值的最少题数，回溯时自然倾向小分值题。
  * 题目按分值升序预先排好，同分时按 id 排，保证结果可复现。
  *
- * @param {Array<{q:object, units:number}>} pool
- * @param {number} targetUnits
- * @returns {Array<{q:object, units:number}>|null} 存在解返回组合，否则 null
  */
-export function subsetSum(pool, targetUnits) {
+export function subsetSum<T extends { units: number }>(pool: T[], targetUnits: number): T[] | null {
   if (targetUnits <= 0) return []
   // best[u] = 凑出 u 单位所需最少题数；from[u] = 最后一步用的 pool 下标
   const best = new Array(targetUnits + 1).fill(Infinity)
@@ -89,12 +98,8 @@ export function subsetSum(pool, targetUnits) {
  *
  * 配比之和不必等于 total（用户可能只想调某几项）：按比例缩放到 total，
  * 再把 `floor` 产生的零头补给原始配比最大的项，保证各项之和**严格等于** total。
- *
- * @param {Record<string, number>} mix
- * @param {number} total
- * @returns {Record<string, number>} 各题型目标分值（整数，合计 == total）
  */
-export function normalizeMix(mix, total = DEFAULT_TOTAL) {
+export function normalizeMix(mix: Record<string, number>, total = DEFAULT_TOTAL): Record<string, number> {
   const raw = {}
   let sum = 0
   for (const t of QUESTION_TYPE_KEYS) {
@@ -103,8 +108,7 @@ export function normalizeMix(mix, total = DEFAULT_TOTAL) {
     raw[t] = n
     sum += n
   }
-  /** @type {Record<string, number>} */
-  const out = {}
+  const out: Record<string, number> = {}
   if (sum <= 0) return out
   let acc = 0
   let largest = ''
@@ -128,26 +132,27 @@ export function normalizeMix(mix, total = DEFAULT_TOTAL) {
 /**
  * 组一张 100 分标准卷。
  *
- * @param {Array<object>} questions 候选题目（含 score / type / difficulty）
- * @param {{total?:number, mix?:Record<string,number>, difficulty?:number|string|null}} opts
- * @returns {{
- *   ok: boolean,
- *   picked: object[],
- *   total: number,
- *   target: number,
- *   byType: Record<string, {count:number, score:number, target:number}>,
- *   missing: Record<string, number>,
- *   reason: string
- * }}
+ * 返回值 ok=false 时 reason 一定有内容（绝不静默返回一张差几分的卷子）。
  */
-export function planStandardPaper(questions, opts = {}) {
+export function planStandardPaper(
+  questions: GradableQuestion[] | null | undefined,
+  opts: { total?: number; mix?: Record<string, number>; difficulty?: number | string | null } = {}
+): {
+  ok: boolean
+  picked: GradableQuestion[]
+  total: number
+  target: number
+  byType: Record<string, { count: number; score: number; target: number }>
+  missing: Record<string, number>
+  reason: string
+} {
   const target = Number(opts.total) > 0 ? Math.round(Number(opts.total)) : DEFAULT_TOTAL
   const mix = normalizeMix(opts.mix || DEFAULT_MIX, target)
   const diff = opts.difficulty == null || opts.difficulty === '' ? null : Number(opts.difficulty)
   const list = Array.isArray(questions) ? questions : []
 
   // 按题型分池；难度在这里筛（题目自身的 difficulty 是数据，卷面难度只是组卷取舍）
-  const pools = {}
+  const pools: Record<string, PoolEntry[]> = {}
   for (const q of list) {
     if (!q || !q.type) continue
     if (diff != null && Number(q.difficulty) !== diff) continue
@@ -158,12 +163,10 @@ export function planStandardPaper(questions, opts = {}) {
     pools[t].sort((a, b) => a.units - b.units || String(a.q.id).localeCompare(String(b.q.id)))
   }
 
-  /** @type {Record<string, {count:number, score:number, target:number}>} */
-  const byType = {}
-  /** @type {Record<string, number>} */
-  const missing = {}
-  const picked = []
-  const usedIds = new Set()
+  const byType: Record<string, { count: number; score: number; target: number }> = {}
+  const missing: Record<string, number> = {}
+  const picked: GradableQuestion[] = []
+  const usedIds = new Set<string>()
 
   // 第一轮：各题型按目标分值各自做子集和
   for (const t of Object.keys(mix)) {
@@ -185,14 +188,13 @@ export function planStandardPaper(questions, opts = {}) {
   // 用户不该因为某一个题型少两道题就被迫换整卷。
   let deficit = Object.values(missing).reduce((s, v) => s + v, 0)
   if (deficit > 0) {
-    /** @type {Array<{q:object, units:number, type:string}>} */
-    const spare = []
+    const spare: SpareEntry[] = []
     for (const t of Object.keys(pools)) {
       for (const x of pools[t]) if (!usedIds.has(x.q.id)) spare.push({ ...x, type: t })
     }
     spare.sort((a, b) => a.units - b.units || String(a.q.id).localeCompare(String(b.q.id)))
-    /** 传入项额外带 type（用于回填 byType），subsetSum 不关心这个字段 */
-    const fill = /** @type {Array<{q:object, units:number, type:string}>|null} */ (subsetSum(spare, deficit * 2))
+    // 传入项额外带 type（用于回填 byType），subsetSum 只关心 units
+    const fill = subsetSum(spare, deficit * 2)
     if (fill) {
       for (const x of fill) {
         picked.push(x.q)
@@ -228,13 +230,14 @@ export function planStandardPaper(questions, opts = {}) {
 
 /**
  * 卷面分值统计（准备页预览 / 成绩单显示用）。
- * @param {Array<object>} questions
- * @returns {{total:number, count:number, byType:Record<string,{count:number, score:number}>}}
  */
-export function paperScoreSummary(questions) {
+export function paperScoreSummary(questions: GradableQuestion[] | null | undefined): {
+  total: number
+  count: number
+  byType: Record<string, { count: number; score: number }>
+} {
   const list = Array.isArray(questions) ? questions : []
-  /** @type {Record<string, {count:number, score:number}>} */
-  const byType = {}
+  const byType: Record<string, { count: number; score: number }> = {}
   let total = 0
   for (const q of list) {
     const s = fullScoreOf(q)

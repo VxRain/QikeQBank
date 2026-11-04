@@ -9,15 +9,43 @@
  * 抽到这里之后：单一实现、可单测、改一处全生效。
  */
 
+/** 题目最小形状（本模块只读展示相关字段） */
+export interface QuestionLike {
+  id?: string
+  type?: string
+  stem?: any
+  children?: QuestionLike[]
+  options?: Array<{ id?: string; content?: any }>
+  answer?: {
+    ids?: string[]
+    blanks?: Array<{ id: string; answers?: string[] }>
+  } | null
+  plain_text?: string
+  plainText?: string
+  [k: string]: any
+}
+
+/** 可作答项（材料题按子题展开；母题自身不入队） */
+export interface RunItem {
+  q: QuestionLike
+  parent: QuestionLike | null
+  isChild: boolean
+  childIdx: number
+  childCount: number
+  uid: string
+}
+
 /**
  * 题干纯文本提取：优先用后端算好的 plain_text（列表摘要模式不带富文本），
  * 退化为从 Tiptap doc 里抽文字。
  *
- * @param {object|null} q 题目
- * @param {(doc:object)=>string} extract 从 doc 抽文字的辅助函数（各页已有，注入避免循环依赖）
- * @returns {string} 空题返回 '-'（列表/错题本都不能出现空白单元格）
+ * @param q 题目
+ * @param extract 从 doc 抽文字的辅助函数（各页已有，注入避免循环依赖）
  */
-export function plainTextOf(q, extract) {
+export function plainTextOf(
+  q: QuestionLike | null | undefined,
+  extract?: (doc: any) => string
+): string {
   if (!q) return '-'
   // 取文本，再统一加装饰——装饰不能只在 stem 分支里做：
   // 否则「有 plain_text 的材料题」会丢掉子题数，看起来和普通题一样。
@@ -41,11 +69,8 @@ export function plainTextOf(q, extract) {
  * 空值口径统一为 **'—'**：三处原本不一致（两处空串、一处「—」），
  * 空串会在界面上留下一个看不见的空位，用户以为答案丢了。
  *
- * @param {object|null} q 题目
- * @param {string} id 空 id
- * @returns {string}
  */
-export function blankAnswersOf(q, id) {
+export function blankAnswersOf(q: QuestionLike | null | undefined, id: string): string {
   const b = (q?.answer?.blanks || []).find((x) => x?.id === id)
   const list = Array.isArray(b?.answers) ? b.answers.filter((a) => String(a ?? '').trim()) : []
   return list.length ? list.join(' / ') : '—'
@@ -55,11 +80,10 @@ export function blankAnswersOf(q, id) {
  * 选项 id 数组 → 字母（['o2'] → 'B'）。
  *
  * 依据选项在题目中的**位置**，不是 id 里的数字：导入的题目 id 可能是任意字符串。
- * @param {object|null} q
- * @param {string[]} ids
- * @returns {string} 例：'A' / 'AC' / '—'（无匹配时）
+ *
+ * 返回例：'A' / 'AC' / '—'（无匹配时）
  */
-export function lettersOf(q, ids) {
+export function lettersOf(q: QuestionLike | null | undefined, ids: string[] | null | undefined): string {
   const opts = Array.isArray(q?.options) ? q.options : []
   const want = Array.isArray(ids) ? ids : []
   const out = []
@@ -72,7 +96,7 @@ export function lettersOf(q, ids) {
 
 /**
  * 毫秒 → 「N时N分N秒」/「N分N秒」/「N秒」（做题用时的人读形式）。
- * 与 `utils/practiceLoop.js::fmtClock` 的区别：那个是 mm:ss 的秒表，这个是中文叙述。
+ * 与 `utils/practiceLoop.ts::fmtClock` 的区别：那个是 mm:ss 的秒表，这个是中文叙述。
  */
 export function fmtDurationCn(ms) {
   const s = Math.max(0, Math.round((Number(ms) || 0) / 1000))
@@ -90,13 +114,13 @@ export function fmtDurationCn(ms) {
  * 无 id 的题直接丢弃：没有 id 就无法建 session 快照、无法记流水，
  * 混进队列只会在判分时静默失败。
  *
- * @template T
- * @param {T[]} list
- * @param {(item:T)=>string} idOf
- * @param {() => number} [rand] 注入随机源，便于单测锁定洗牌结果
- * @returns {T[]}
+ * @param rand 注入随机源，便于单测锁定洗牌结果
  */
-export function dedupeShuffle(list, idOf, rand = Math.random) {
+export function dedupeShuffle<T>(
+  list: T[] | null | undefined,
+  idOf: (item: T) => string | null | undefined,
+  rand: () => number = Math.random
+): T[] {
   const seen = new Set()
   const out = []
   for (const item of list || []) {
@@ -119,10 +143,8 @@ export function dedupeShuffle(list, idOf, rand = Math.random) {
  * `uid` 用「题 id + 序号」而不是纯题 id：同一题在一轮里出现两次（重练错题）时，
  * 作答缓存与标记都靠它区分。
  *
- * @param {object[]} questions
- * @returns {Array<{q:object, parent:object|null, isChild:boolean, childIdx:number, childCount:number, uid:string}>}
  */
-export function buildRunItems(questions) {
+export function buildRunItems(questions: QuestionLike[] | null | undefined): RunItem[] {
   const items = []
   for (const q of questions || []) {
     if (q?.type === 'material' && Array.isArray(q.children) && q.children.length) {

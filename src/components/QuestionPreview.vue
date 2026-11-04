@@ -4,7 +4,7 @@
 
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue'
-import { renderDoc, renderMaterial, renderOptions } from '@/utils/render.js'
+import { renderDoc, renderMaterial, renderOptions } from '@/utils/render.ts'
 import { expandQuestions, hasAssetRefs, allAssetsResolved, assetCacheGen } from '@/api/assets.ts'
 
 const props = defineProps({

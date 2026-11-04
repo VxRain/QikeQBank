@@ -22,7 +22,7 @@ import {
   parseAnswerIds,
   parseFillBlanks,
   judgeValue,
-} from './parseTemplate.js'
+} from './parseTemplate.ts'
 
 // 列下标（A=0）：ID0 题目1 题型2 分数3 难度4 选项A-E 5..9 答案10 解析11
 const C = { ID: 0, STEM: 1, TYPE: 2, SCORE: 3, DIFF: 4, OPT_A: 5, OPT_E: 9, ANSWER: 10, ANALYSIS: 11 }
@@ -138,8 +138,7 @@ export function parseSheetRows(rows) {
   const data = all.slice(headIdx + 1)
   const rawRow = (row) => row.map((c) => cell({ 0: c }, 0)).join(' | ')
   // 材料父题占位：子行按引用追加，天然保持行序
-  /** @type {{intId:string, item:any, rowIdx:number}|null} */
-  let openMaterial = null // { intId, item, rowIdx }
+  let openMaterial: { intId: string; item: any; rowIdx: number } | null = null // { intId, item, rowIdx }
 
   const pushSingle = (rowIdx, row, { stripNum = false, attachTo = null } = {}) => {
     const index = blocks.length + 1

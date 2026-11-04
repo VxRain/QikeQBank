@@ -21,7 +21,7 @@ import {
   gradeExamQuestion,
   buildExamDetail,
   summarizePaper
-} from '../../src/utils/grading.js'
+} from '../../src/utils/grading.ts'
 
 describe('normFillValue / fillBlankCorrect', () => {
   it('trim + 大小写 + 全角→半角', () => {

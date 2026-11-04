@@ -19,7 +19,7 @@ import {
   getScheduler,
   withDefaults,
   FSRS_DEFAULTS,
-} from '../../src/utils/fsrs.js'
+} from '../../src/utils/fsrs.ts'
 
 const T0 = new Date('2026-09-17T12:00:00.000Z')
 

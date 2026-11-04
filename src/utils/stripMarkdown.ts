@@ -5,9 +5,9 @@
  */
 
 /** 单块 md 清洗（splitQuestions 之后对每块调用也安全） */
-export function stripMarkdown(src) {
+export function stripMarkdown(src: unknown): string {
   const lines = String(src || '').split('\n')
-  const out = []
+  const out: string[] = []
   let inFence = false
   for (const raw of lines) {
     // 代码围栏：去围栏行，内容原样保留
@@ -36,7 +36,7 @@ export function stripMarkdown(src) {
     out.push(s)
   }
   // 收尾：压缩 3+ 连续空行为 2 个（保留段落感，不合并题块）
-  const compact = []
+  const compact: string[] = []
   let empties = 0
   for (const l of out) {
     if (!l) {

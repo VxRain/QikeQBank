@@ -9,7 +9,7 @@
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseDocxHtml } from '../../src/utils/parseDocxTemplate.js'
+import { parseDocxHtml } from '../../src/utils/parseDocxTemplate.ts'
 
 // mammoth 风格扁平 HTML
 const P = (s) => `<p>${s}</p>`

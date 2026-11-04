@@ -1,7 +1,7 @@
 // 本机设备身份：墓碑 actor 与未来同步游标用。localStorage 持久化，懒创建。
 const KEY = 'qbank.device_id.v1'
 
-function randomId() {
+function randomId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID()
@@ -13,14 +13,14 @@ function randomId() {
   return `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-let cached = null
+let cached: string | null = null
 
-// 通用 UUID（模考记录/场次 id 等客户端幂等场景，非设备身份）
-export function randomUUID() {
+/** 通用 UUID（模考记录/场次 id 等客户端幂等场景，非设备身份） */
+export function randomUUID(): string {
   return randomId()
 }
 
-export function getDeviceId() {
+export function getDeviceId(): string {
   if (cached) return cached
   try {
     const saved = localStorage.getItem(KEY)

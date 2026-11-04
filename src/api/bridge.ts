@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { getDeviceId } from '../utils/device.js'
+import { getDeviceId } from '../utils/device.ts'
 import type { ApiEnvelope } from './types.ts'
 
 /**

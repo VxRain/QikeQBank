@@ -231,9 +231,9 @@ import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
-import { rowStats, rateClass, rateText, fmtDate, fmtDuration, truncate } from '@/utils/listFormat.js'
-import { plainTextOf } from '@/utils/questionDisplay.js'
-import { checkedOf } from '@/utils/domEvent.js'
+import { rowStats, rateClass, rateText, fmtDate, fmtDuration, truncate } from '@/utils/listFormat.ts'
+import { plainTextOf } from '@/utils/questionDisplay.ts'
+import { checkedOf } from '@/utils/domEvent.ts'
 import {
   SORT_OPTIONS,
   DIFFICULTY_CHOICES,
@@ -472,7 +472,7 @@ async function onBatchMove() {
   await moveQuestions([...selected.value])
 }
 
-// 行内统计与格式化已抽到 utils/listFormat.js（纯函数，可单测）：
+// 行内统计与格式化已抽到 utils/listFormat.ts（纯函数，可单测）：
 // rowStats / rateClass / rateText / fmtDate / fmtDuration / truncate
 
 function extractFromDoc(doc) {

@@ -149,13 +149,13 @@ import QuestionForm from './QuestionForm.vue'
 import PasteBox from './PasteBox.vue'
 import { settings } from '@/stores/settings.js'
 import { QUESTION_TYPES, QUESTION_TYPE_MAP, CHILD_QUESTION_TYPES as CHILD_TYPES, typeLabel } from '@/constants/questions.js'
-import { createDefaultQuestion } from '@/utils/gradeQuestion.js'
-import { valueOf } from '@/utils/domEvent.js'
+import { createDefaultQuestion } from '@/utils/gradeQuestion.ts'
+import { valueOf } from '@/utils/domEvent.ts'
 import { toast } from '@/stores/ui.js'
 import {
   childIdSeed, childIdForAppend, dedupeChildIds, moveChild, canMoveChild, removeChildAt,
   insertionIndexFromY, insertIndexToMoveTarget, edgeScrollDelta
-} from '@/utils/materialChildren.js'
+} from '@/utils/materialChildren.ts'
 
 const props = defineProps({ modelValue: Object })
 const emit = defineEmits(['update:modelValue'])
@@ -181,7 +181,7 @@ function createDoc(text){
     ? { type:'doc', content:[{ type:'paragraph', content:[{type:'text', text:t}]}]}
     : { type:'doc', content:[{ type:'paragraph' }]}
 }
-// 各题型默认模板的唯一实现在 utils/gradeQuestion.js（注册表 createDefault），这里只做分发；
+// 各题型默认模板的唯一实现在 utils/gradeQuestion.ts（注册表 createDefault），这里只做分发；
 // 未知题型保留历史兜底（1 个选项的单选），避免将来脏数据把编辑器打空。
 function createDefault(type){
   if (QUESTION_TYPE_MAP[type]) return createDefaultQuestion(type)
@@ -418,7 +418,7 @@ function onChildTypeChange(cIdx, newType){
 function addChild(type){
   const def = createDefault(type)
   // 只有已持久化的题才前端发号；新建题交给后端 ensure_child_ids 按新父 id 分配，
-  // 否则写死 q_c1 会让所有新建材料题的子题撞号（详见 utils/materialChildren.js）
+  // 否则写死 q_c1 会让所有新建材料题的子题撞号（详见 utils/materialChildren.ts）
   const newId = childIdForAppend(local, local.children)
   if (newId) def.id = newId
   def.stem = createDoc(`子题${local.children.length+1}`)
@@ -593,7 +593,7 @@ function normalizeChildIdsInPlace() {
 
 /**
  * 移动子题：上移/下移/拖拽三路共用 moveChild（底层是 utils/arrayMove.ts::moveItem）。
- * 只挪位置，不重编 id —— 见 utils/materialChildren.js 文件头的取舍说明。
+ * 只挪位置，不重编 id —— 见 utils/materialChildren.ts 文件头的取舍说明。
  */
 function moveChildTo(from, to) {
   const next = moveChild(local.children || [], from, to)

@@ -21,7 +21,7 @@ const read = (p) => readFileSync(resolve(ROOT, p), 'utf8').replace(/\r\n/g, '\n'
 const {
   optionMarkOf, elapsedMsOf, fmtClock, rankWeakTypes, weakPracticeEntry, doneLinks,
   WEAK_MIN_ATTEMPTS, WEAK_RATE_THRESHOLD
-} = await import('../../src/utils/practiceLoop.js')
+} = await import('../../src/utils/practiceLoop.ts')
 
 describe('判分后的选项标色（optionMarkOf）', () => {
   const q = { answer: { ids: ['o1', 'o3'] } }

@@ -17,8 +17,8 @@ import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
 import {
   textToDoc,
   optionMatch,
-} from './parseTemplate.js'
-import { buildOne, applyScoreDiff } from './parseSheet.js'
+} from './parseTemplate.ts'
+import { buildOne, applyScoreDiff } from './parseSheet.ts'
 
 // 章节关键词（具体优先于"选择"）：返回 single/multi/judge/fill/short/material/'choice'/null
 function detectSection(text) {
@@ -354,7 +354,9 @@ function assembleChunk(chunk, section, blocks, openMatItem) {
     blocks.push({ index, type, typeLabel, stemText, raw, question: null, error: r.error })
     return
   }
-  const q = r.question
+  // r.question 是「按题型构造」的联合类型，score/difficulty 只在部分分支上声明；
+  // 这里统一按可扩展的题目对象处理（分值/难度是所有题型的公共可写字段）。
+  const q: Record<string, any> = r.question
   if (chunk.scoreRaw) {
     const n = Number(String(chunk.scoreRaw).trim())
     if (Number.isFinite(n) && n > 0) q.score = n

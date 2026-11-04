@@ -20,7 +20,7 @@ import {
   LEAVE_AFTER_MAX,
   LEAVE_AFTER_DEFAULT,
   LEAVE_AFTER_NEVER,
-} from '../../src/utils/wrongRules.js'
+} from '../../src/utils/wrongRules.ts'
 
 test('leaveAfterOf：0 是合法值（永不自动移出），不是非法输入', () => {
   assert.equal(LEAVE_AFTER_NEVER, 0)

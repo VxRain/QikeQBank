@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 const { rateOf, buildTrend, trendSummary, buildReviewRows, CHART } =
-  await import('../../src/utils/examTrend.js')
+  await import('../../src/utils/examTrend.ts')
 
 const s = (id, at, score, full) => ({ exam_id: id, started_at: at, score, full_score: full })
 

@@ -191,12 +191,12 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.ts'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
-import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.js'
-import { checkedOf } from '@/utils/domEvent.js'
-import { truncate } from '@/utils/listFormat.js'
+import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.ts'
+import { checkedOf } from '@/utils/domEvent.ts'
+import { truncate } from '@/utils/listFormat.ts'
 import { settings } from '@/stores/settings.js'
-import { leaveRuleText, leaveRuleHint as leaveRuleHintOf } from '@/utils/wrongRules.js'
-import { renderDoc } from '@/utils/render.js'
+import { leaveRuleText, leaveRuleHint as leaveRuleHintOf } from '@/utils/wrongRules.ts'
+import { renderDoc } from '@/utils/render.ts'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { QUESTION_TYPES, typeLabel } from '@/constants/questions.js'
 import { clampPage } from '@/stores/listFilter.js'
@@ -239,7 +239,7 @@ const isFiltered = computed(
 // 重练全部的真实数量：不能拿 total 直接用（total 是当前筛选结果，且后端上限 500）
 const retryCount = computed(() => Math.min(total.value, MAX_RETRY))
 
-// ── FE-P1-08 移出规则徽章（口径见 utils/wrongRules.js）──
+// ── FE-P1-08 移出规则徽章（口径见 utils/wrongRules.ts）──
 const leaveRuleBadge = computed(() => leaveRuleText(settings.wrongLeaveAfterCorrect))
 const leaveRuleHint = computed(() => leaveRuleHintOf(settings.wrongLeaveAfterCorrect))
 

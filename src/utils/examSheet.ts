@@ -16,17 +16,42 @@ export function hasAnswerEntry(a) {
   return false
 }
 
+/** 答题卡条目（Exam 组卷产物） */
+export interface SheetItemInput {
+  uid: string
+  q?: any
+  parent?: any
+  isChild?: boolean
+  childIdx?: number
+  childCount?: number
+  /** 全局题序（从 0 起）；由 Exam 组装 items 时写入 */
+  idx?: number
+  /** 该题是否已作答 */
+  answered?: boolean
+  /** 是否被标记（存疑） */
+  flagged?: boolean
+  [k: string]: any
+}
+
+/** 答题卡分组：材料题子题归一组，其余独立成组 */
+export interface SheetGroup {
+  key: string
+  isMaterial: boolean
+  parentIndex: number
+  items: SheetItemInput[]
+}
+
 /**
  * 分组：材料题的子题按 parent.id 归并成一组（不依赖子题在 items 中相邻），
  * 其余每项各自成组，顺序与 items 一致。
  *
- * @param {Array} items [{ uid, q, parent, isChild, childIdx, childCount }]
- * @param {Object} answers uid → 作答
- * @param {Object} flagged uid → true
- * @returns {Array<{key:string, isMaterial:boolean, parentIndex:number, items:Array}>}
  */
-export function groupSheetItems(items, answers = {}, flagged = {}) {
-  const out = []
+export function groupSheetItems(
+  items: SheetItemInput[] | null | undefined,
+  answers: Record<string, any> = {},
+  flagged: Record<string, boolean> = {}
+): SheetGroup[] {
+  const out: SheetGroup[] = []
   const byParent = new Map()
   const list = Array.isArray(items) ? items : []
   for (let i = 0; i < list.length; i++) {
@@ -74,10 +99,8 @@ export function cellStateOf(entry) {
 
 /**
  * 首个未答项下标（答题卡「跳到首个未答」）；全答完返回 -1。
- * @param {Array} items
- * @param {Object} answers
  */
-export function firstUnansweredIndex(items, answers = {}) {
+export function firstUnansweredIndex(items: SheetItemInput[] | null | undefined, answers: Record<string, any> = {}): number {
   const list = Array.isArray(items) ? items : []
   for (let i = 0; i < list.length; i++) {
     if (!hasAnswerEntry(answers[list[i].uid])) return i
@@ -91,12 +114,11 @@ export function firstUnansweredIndex(items, answers = {}) {
  * uid 形如 `<题目id>_<序号>`：题目被删后序号会前移，所以只能按题目 id 重映射，
  * 不能用 uid 字符串直接比。
  *
- * @param {string[]} oldUids 草稿里存的旧 uid 列表
- * @param {Array} items 重建后的 items
- * @returns {Object} 新 uid → true
+ * @param oldUids 草稿里存的旧 uid 列表
+ * @param items 重建后的 items
  */
-export function remapFlaggedUids(oldUids, items) {
-  const out = {}
+export function remapFlaggedUids(oldUids: string[] | null | undefined, items: SheetItemInput[] | null | undefined): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
   const list = Array.isArray(items) ? items : []
   const qidOf = (uid) => String(uid).replace(/_\d+$/, '')
   const byQid = new Map()

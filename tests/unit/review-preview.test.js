@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 const { previewIntervals, formatInterval, revertPayloadOf, RATING_GRADES, REVERT_WINDOW_MS } =
-  await import('../../src/utils/reviewPreview.js')
+  await import('../../src/utils/reviewPreview.ts')
 
 const NOW = new Date('2026-09-10T12:00:00.000Z')
 

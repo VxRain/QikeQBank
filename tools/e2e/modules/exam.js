@@ -10,7 +10,7 @@ import { flush, goto } from '../helpers.js'
 export default {
   id: 'exam',
   label: '模考：答题卡 / 交卷 / 历史回看',
-  owns: ['src/views/Exam.vue', 'src/components/exam/', 'src/utils/examSheet.js', 'src/utils/examTrend.js'],
+  owns: ['src/views/Exam.vue', 'src/components/exam/', 'src/utils/examSheet.ts', 'src/utils/examTrend.ts'],
   async run({ page, ok }) {
     // ── FE-P0-07：答题卡 + 回看 ──
     await goto(page, '#/exam')
@@ -109,7 +109,7 @@ export default {
     await page.locator('select').first().selectOption('')
     await flush(page)
 
-    // 注：「按分值组卷」的算法层（utils/examPaper.js）仍是基础设施，但暂时没有 UI
+    // 注：「按分值组卷」的算法层（utils/examPaper.ts）仍是基础设施，但暂时没有 UI
     // 调用它（「100 分标准卷」的产品外壳已移除 —— 满分可能是 120/135/150，
     // 写死 100 不成立）。算法本身由 tests/unit/exam-paper.test.js 的 35 条单测
     // 覆盖（含 120/135/150 分卷），不在 e2e 里重复。

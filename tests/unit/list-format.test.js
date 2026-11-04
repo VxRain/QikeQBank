@@ -13,7 +13,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 
 const { rowStats, rateClass, rateText, fmtDate, fmtDuration, truncate } =
-  await import('../../src/utils/listFormat.js')
+  await import('../../src/utils/listFormat.ts')
 
 describe('rowStats：后端 stats → 展示对象', () => {
   test('没作答过：rate 为 null（不是 0）', () => {

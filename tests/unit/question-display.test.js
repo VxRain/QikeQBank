@@ -11,7 +11,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 
 const { plainTextOf, blankAnswersOf, lettersOf, fmtDurationCn, dedupeShuffle, buildRunItems } =
-  await import('../../src/utils/questionDisplay.js')
+  await import('../../src/utils/questionDisplay.ts')
 
 /** 假的 doc 抽取器：模拟各页的 extractFromDoc */
 const extract = (doc) => doc?.text || ''

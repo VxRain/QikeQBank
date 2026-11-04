@@ -2,7 +2,7 @@
  * 判分基元层（纯函数，零依赖，node:test 可直接回归）。
  *
  * 分工（FE-ARCH-03）：本文件只提供"算法零件"——归一化、逐空判定、四档映射、满分/得分；
- * 按题型的分发、默认值、校验与作答片段统一由 utils/gradeQuestion.js 的注册表负责。
+ * 按题型的分发、默认值、校验与作答片段统一由 utils/gradeQuestion.ts 的注册表负责。
  * 页面不要直接拼这些零件（否则又会出现三套口径）。
  *
  * 得分率 → grade 映射与后端 resolve_grade('exam') 的四档一一对应：
@@ -14,8 +14,69 @@
  * 材料题满分 = 子题满分合计。得分 = 满分 × 得分率，四舍五入到 0.5 分。
  */
 
+/** 题目最小形状（判分只读这些字段；完整结构见 api/types.ts::Question） */
+export interface GradableQuestion {
+  type?: string
+  score?: number | null
+  /** 题目自身难度（组卷按难度筛题时用；判分不读） */
+  difficulty?: number | null
+  answer?: {
+    ids?: string[]
+    blanks?: Array<{ id: string; answers?: string[] }>
+  } | null
+  children?: GradableQuestion[]
+  id?: string
+}
+
+/** 我的作答（各题型只用到其中一部分） */
+export interface AnswerInput {
+  selected?: string
+  picked?: string[]
+  fillValues?: Record<string, string>
+  shortSelf?: string
+  shortText?: string
+  /**
+   * 材料题按子题 id 索引的作答。调用方（Exam 组卷）在此处用的是普通对象，
+   * 故同时放宽为 Record<string, any> 而不是严格的 Record<string, AnswerInput>。
+   */
+  children?: Record<string, any>
+}
+
+/** 判分选项 */
+export interface GradeOpts {
+  multiRule?: 'partial' | 'strict'
+}
+
+/** 落库用的 exam detail meta */
+export interface ExamDetailMeta {
+  examId?: string
+  seq?: number
+  childIndex?: number
+  parentId?: string
+  timeout?: boolean
+  bankId?: string
+}
+
+/** 逐空判分结果 */
+export interface BlankResult {
+  id: string
+  value: string
+  correct: boolean
+}
+
+/** 单题判分结果 */
+export interface GradeResult {
+  ratio: number
+  full: number
+  earned: number
+  unanswered?: boolean
+  subset?: boolean
+  blanks?: BlankResult[] | null
+  children?: GradeResult[]
+}
+
 // 填空归一：trim + 全角→半角 + 小写。练习/复习/模考判分共用（Practice/Review 也走这里）。
-export function normFillValue(raw) {
+export function normFillValue(raw: unknown): string {
   const s = String(raw ?? '').trim()
   return s
     .replace(/\u3000/g, ' ')
@@ -24,21 +85,21 @@ export function normFillValue(raw) {
 }
 
 // 单个空的判定：归一后与任一可接受答案相等；空值必错
-export function fillBlankCorrect(blank, value) {
+export function fillBlankCorrect(blank: { answers?: string[] } | null | undefined, value: unknown): boolean {
   const norm = normFillValue(value)
   if (!norm) return false
   return (blank?.answers || []).some((a) => normFillValue(a) === norm)
 }
 
 // 单选/判断：全对满分
-export function gradeSingle(q, picked) {
+export function gradeSingle(q: GradableQuestion | null | undefined, picked?: string): { ratio: number; unanswered: boolean } {
   const ids = q?.answer?.ids || []
   const correct = !!picked && ids.length === 1 && picked === ids[0]
   return { ratio: correct ? 1 : 0, unanswered: !picked }
 }
 
 // 多选：全对满分；错选 0 分；漏选按规则——partial=按选中比例给分，strict=0 分
-export function gradeMulti(q, pickedIds, rule = 'partial') {
+export function gradeMulti(q: GradableQuestion | null | undefined, pickedIds: string[] | null | undefined, rule: 'partial' | 'strict' = 'partial'): { ratio: number; unanswered?: boolean; subset?: boolean } {
   const ids = q?.answer?.ids || []
   const sel = (pickedIds || []).filter(Boolean)
   if (!sel.length) return { ratio: 0, unanswered: true }
@@ -49,7 +110,7 @@ export function gradeMulti(q, pickedIds, rule = 'partial') {
 }
 
 // 填空：逐空判对（全角→半角归一），按空得分率折算；整题未作答 = 0 分
-export function gradeFill(q, values) {
+export function gradeFill(q: GradableQuestion | null | undefined, values: Record<string, string> | null | undefined): { ratio: number; unanswered?: boolean; results: BlankResult[] } {
   const blanks = q?.answer?.blanks || []
   if (!blanks.length) return { ratio: 0, results: [] }
   const results = blanks.map((b) => ({
@@ -63,12 +124,12 @@ export function gradeFill(q, values) {
 }
 
 // 简答：无自动判分，自评（会 = 满分 / 不会 = 0）
-export function gradeShort(selfGrade) {
+export function gradeShort(selfGrade?: string): { ratio: number; unanswered?: boolean } {
   if (!selfGrade) return { ratio: 0, unanswered: true }
   return { ratio: selfGrade === '会' ? 1 : 0 }
 }
 
-export function ratioToGrade(ratio) {
+export function ratioToGrade(ratio: number): 'easy' | 'good' | 'hard' | 'again' {
   if (ratio >= 1) return 'easy'
   if (ratio >= 0.6) return 'good'
   if (ratio > 0) return 'hard'
@@ -76,7 +137,7 @@ export function ratioToGrade(ratio) {
 }
 
 // 题目满分（材料题 = 子题合计）
-export function fullScoreOf(q) {
+export function fullScoreOf(q: GradableQuestion | null | undefined): number {
   if (!q || !q.type) return 0
   if (q.type === 'material') return (q.children || []).reduce((s, c) => s + fullScoreOf(c), 0)
   const n = Number(q.score)
@@ -84,7 +145,7 @@ export function fullScoreOf(q) {
 }
 
 // 得分：满分 × 得分率，四舍五入到 0.5 分（避免 3.75 这类碎分）
-export function earnedOf(fullScore, ratio) {
+export function earnedOf(fullScore: number, ratio: number): number {
   if (!(fullScore > 0) || !(ratio > 0)) return 0
   return Math.round(fullScore * ratio * 2) / 2
 }
@@ -94,7 +155,11 @@ export function earnedOf(fullScore, ratio) {
  * ans：{ selected, picked:[], fillValues:{}, shortSelf:'会'|'不会', shortText, children:{childId: ans} }
  * 返回：{ ratio, full, earned, unanswered, subset, blanks, children }（children 仅材料题有）
  */
-export function gradeExamQuestion(q, ans, opts = {}) {
+export function gradeExamQuestion(
+  q: GradableQuestion | null | undefined,
+  ans: AnswerInput | null | undefined,
+  opts: GradeOpts = {}
+): GradeResult {
   const a = ans || {}
   if (q?.type === 'material') {
     const children = (q.children || []).map((c) => gradeExamQuestion(c, a.children?.[c.id] || {}, opts))
@@ -129,9 +194,16 @@ export function gradeExamQuestion(q, ans, opts = {}) {
  * 落库 detail（practice_records.detail_json，mode='exam'）。
  * meta：{ examId, seq, childIndex?, parentId?, timeout? }——exam_id/exam_seq 供场次反查（exam_sessions 命令）。
  */
-export function buildExamDetail(q, ans, res, meta = {}) {
+export function buildExamDetail(
+  q: GradableQuestion | null | undefined,
+  ans: AnswerInput | null | undefined,
+  res: GradeResult,
+  meta: ExamDetailMeta = {}
+): Record<string, any> {
   const a = ans || {}
-  const d = {
+  // detail_json 是「题库自定义的稀疏字段袋」：各题型只写自己那几项，
+  // 故用索引签名而非逐个可选字段（后端也是 json! 动态拼装）。
+  const d: Record<string, any> = {
     type: q?.type,
     exam_id: meta.examId,
     exam_seq: meta.seq,
@@ -165,7 +237,7 @@ export function buildExamDetail(q, ans, res, meta = {}) {
 }
 
 // 成绩单汇总（母题级）：earned/full 求和、答对题数（得分率 ≥ 0.6）、未作答、错题清单（得分率 < 1）
-export function summarizePaper(entries) {
+export function summarizePaper(entries: Array<{ res: GradeResult }> | null | undefined) {
   let earned = 0
   let full = 0
   let correctCount = 0

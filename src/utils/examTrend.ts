@@ -10,9 +10,74 @@ export const CHART = Object.freeze({ w: 320, h: 120, padL: 34, padR: 10, padT: 1
 
 /**
  * 场次 → 得分率（0–100）。full_score 为 0 时按 0 处理（不产生 NaN）。
- * @param {{score:number, full_score:number}} s
  */
-export function rateOf(s) {
+/** 折线几何（buildTrend 的返回值；所有坐标已是 SVG 视口坐标） */
+export interface TrendGeometry {
+  width: number
+  height: number
+  points: Array<{ x: number; y: number; rate: number; examId: string; startedAt: string }>
+  path: string
+  areaPath: string
+  min: number
+  max: number
+  gridLines: Array<{ y: number; rate: number }>
+  first: number
+  last: number
+}
+
+/** 场次最小形状（exam_sessions.items 的子集，画图只读这几个字段） */
+export interface ExamSessionLike {
+  exam_id: string
+  started_at?: string
+  score?: number
+  full_score?: number
+}
+
+/**
+ * 回看行。前 17 项由 buildReviewRows 填充；
+ * 后 4 项（answerText/refHtml/options/childIndex）由调用方 ExamHistory 追加
+ * —— 它们需要题目完整对象与渲染器，放在 utils 里会让这层多依赖两个模块。
+ */
+export interface ReviewRow {
+  key: string
+  index: number
+  questionId?: string
+  missing: boolean
+  type: string
+  stemHtml: string
+  analysisHtml: string
+  selected: any[]
+  blanks: any[]
+  selfGrade: any
+  myAnswer: any
+  earned: number
+  full: number
+  ratio: number
+  unanswered: boolean
+  correct: boolean
+  elapsedMs: number
+  answeredAt: string
+  /** 选择题正确答案摘要（ExamHistory 追加） */
+  answerText?: string
+  /** 简答参考答案富文本（ExamHistory 追加） */
+  refHtml?: string
+  /** 选项表，用于「作答 id → 字母」映射（ExamHistory 追加） */
+  options?: any[]
+  /** 材料子题序号（ExamHistory 追加） */
+  childIndex?: number | null
+}
+
+/** exam_detail.items 的逐条记录（buildReviewRows 的输入） */
+export interface ReviewRowSource {
+  record_id?: string
+  question_id?: string
+  answered_at?: string
+  elapsed_ms?: number | null
+  detail?: Record<string, any> | null
+  question?: Record<string, any> | null
+}
+
+export function rateOf(s: { score?: number; full_score?: number } | null | undefined): number {
   const full = Number(s?.full_score)
   if (!Number.isFinite(full) || full <= 0) return 0
   const score = Number(s?.score) || 0
@@ -22,19 +87,11 @@ export function rateOf(s) {
 /**
  * 把场次列表（任意顺序）转成折线几何。
  *
- * @param {Array<{exam_id:string, started_at:string, score:number, full_score:number}>} sessions
- * @param {{width?:number, height?:number}} [opts]
- * @returns {null | {
- *   width:number, height:number,
- *   points: Array<{x:number, y:number, rate:number, examId:string, startedAt:string}>,
- *   path: string,
- *   areaPath: string,
- *   min:number, max:number,
- *   gridLines: Array<{y:number, rate:number}>,
- *   first:number, last:number
- * }}
  */
-export function buildTrend(sessions, opts = {}) {
+export function buildTrend(
+  sessions: ExamSessionLike[] | null | undefined,
+  opts: { width?: number; height?: number } = {}
+): TrendGeometry | null {
   const list = (Array.isArray(sessions) ? sessions : []).filter((s) => s && s.exam_id)
   if (!list.length) return null
   // 按时间升序（左旧右新）：输入可能是「最近在前」
@@ -83,9 +140,12 @@ export function buildTrend(sessions, opts = {}) {
 
 /**
  * 趋势摘要文案：最近一次 vs 上一次的变化。
- * @returns {{label:string, direction:'up'|'down'|'flat', delta:number}}
  */
-export function trendSummary(sessions) {
+export function trendSummary(sessions: ExamSessionLike[] | null | undefined): {
+  label: string
+  direction: 'up' | 'down' | 'flat'
+  delta: number
+} {
   const list = (Array.isArray(sessions) ? sessions : []).filter((s) => s && s.exam_id)
   if (list.length < 2) return { label: '至少两次模考后显示变化', direction: 'flat', delta: 0 }
   const ordered = [...list].sort((a, b) => String(a.started_at || '').localeCompare(String(b.started_at || '')))
@@ -104,11 +164,13 @@ export function trendSummary(sessions) {
  * 把 exam_detail 的逐题记录整理成回看行。
  * 不依赖当前内存中的 sheet：只吃后端返回的数据。
  *
- * @param {Array} items exam_detail.items
- * @param {(doc:any) => string} renderDoc 富文本渲染（由调用方注入，便于单测替换）
- * @returns {Array}
+ * @param items exam_detail.items
+ * @param renderDoc 富文本渲染（由调用方注入，便于单测替换）
  */
-export function buildReviewRows(items, renderDoc = () => '') {
+export function buildReviewRows(
+  items: ReviewRowSource[] | null | undefined,
+  renderDoc: (doc: any) => string = () => ''
+): ReviewRow[] {
   const list = Array.isArray(items) ? items : []
   return list.map((it, i) => {
     const d = it.detail || {}

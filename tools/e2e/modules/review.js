@@ -12,7 +12,7 @@ export default {
   // P1：本模块要验 5000ms 撤销窗口。clock 让我们能精确测「窗口内可撤销 / 越界即消失」
   usesClock: true,
   label: '复习：间隔预览 / 撤销 / 最后一题',
-  owns: ['src/views/Review.vue', 'src/utils/reviewPreview.js'],
+  owns: ['src/views/Review.vue', 'src/utils/reviewPreview.ts'],
   async run({ page, ok }) {
     // ── FE-P0-06(Review)：间隔预览 + 撤销 ──
     await goto(page, '#/review')

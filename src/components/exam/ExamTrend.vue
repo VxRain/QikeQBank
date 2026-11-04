@@ -83,7 +83,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { buildTrend, trendSummary, CHART } from '@/utils/examTrend.js'
+import { buildTrend, trendSummary, CHART } from '@/utils/examTrend.ts'
 
 const props = defineProps({
   /** exam_sessions 的 items（任意顺序，内部按时间升序画） */

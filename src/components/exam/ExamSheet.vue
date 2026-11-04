@@ -81,7 +81,7 @@
  * 但用户心智里它是一道大题，所以分组标题用母题序号，格子用子题序号。
  */
 import { computed } from 'vue'
-import { groupSheetItems, countSheet, cellStateOf } from '@/utils/examSheet.js'
+import { groupSheetItems, countSheet, cellStateOf } from '@/utils/examSheet.ts'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -102,7 +102,8 @@ defineEmits(['close', 'jump', 'submit', 'jump-first-unanswered'])
  * 分组：材料题把连续子题折成一组（按 parent 引用归并，不依赖子题是否相邻）。
  * 非材料题各自成组，保证顺序与 items 一致。
  */
-const groups = computed(() => groupSheetItems(props.items, props.answers, props.flagged))
+// props.items 由 defineProps 的 `type: Array` 推断成 unknown[]，实际是 Exam 组装的答题卡条目
+const groups = computed(() => groupSheetItems(/** @type {any} */ (props.items), props.answers, props.flagged))
 
 const counts = computed(() => countSheet(props.items, props.answers, props.flagged))
 

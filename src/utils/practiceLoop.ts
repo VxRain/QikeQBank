@@ -12,8 +12,35 @@ export const WEAK_MIN_ATTEMPTS = 3
 /** 正确率低于此值才算弱项（与 Wrong / Home 概览的红色阈值同口径） */
 export const WEAK_RATE_THRESHOLD = 0.6
 
+/** 后端 by_type 统计行（review_stats / records_overview 的子集） */
+export interface TypeStat {
+  type: string
+  count?: number
+  correct?: number
+  avg_ms?: number
+  [k: string]: any
+}
+
+/** weakPracticeEntry 的输入：可直接给数组，也可给带 by_type 的对象 */
+export type WeakStatsInput = TypeStat[] | { by_type?: TypeStat[] } | null | undefined
+
+/** weakPracticeEntry 的选项 */
+export interface WeakEntryOpts {
+  bankId?: string
+  /** 题型 key -> 展示名，缺省原样返回 */
+  labelOf?: (type: string) => string
+  /** 各题型可用题量；null/缺省 = 不做可用性过滤 */
+  availableByType?: Record<string, number> | null
+}
+
+/** 我的作答（单选 selected / 多选 picked） */
+export interface AnswerLike {
+  selected?: string
+  picked?: string[]
+}
+
 /** 我的选择集合（单选 selected / 多选 picked 统一成 Set） */
-function mineSet(answer = {}) {
+function mineSet(answer: AnswerLike = {}): Set<string> {
   const set = new Set(Array.isArray(answer?.picked) ? answer.picked : [])
   if (answer?.selected) set.add(answer.selected)
   return set
@@ -28,13 +55,13 @@ function mineSet(answer = {}) {
  * ② 我选了但不在正确集合里 → wrong；
  * ③ **未判分恒返回 ''**，作答中绝不泄露答案（这是硬要求，有专门断言）。
  *
- * @param {{answer?: {ids?: string[]}}|null} q 题目
- * @param {string} id 选项 id
- * @param {{selected?: string, picked?: string[]}} answer 我的作答
- * @param {boolean} locked 已判分 / 已交卷
- * @returns {'correct'|'wrong'|''}
  */
-export function optionMarkOf(q, id, answer = {}, locked = false) {
+export function optionMarkOf(
+  q: { answer?: { ids?: string[] } | null } | null | undefined,
+  id: string,
+  answer: AnswerLike = {},
+  locked = false
+): 'correct' | 'wrong' | '' {
   if (!locked) return ''
   const ids = q?.answer?.ids
   if (!Array.isArray(ids) || !ids.length) return ''
@@ -48,12 +75,14 @@ export function optionMarkOf(q, id, answer = {}, locked = false) {
  * 不足 1 秒显示 0（一进页面就蹦出 00:00 是噪声）。
  * 取整到秒，避免每秒 tick 之间出现 00:01 / 00:01 抖动。
  *
- * @param {{base?: number, enteredAt?: number, now?: number}} cfg
- *   base      之前累计的毫秒（切走再切回时不清零）
- *   enteredAt 本次进入本题的时刻；0 表示不在计时（切走 / 已判分）
- * @returns {number} 毫秒
+ * base      之前累计的毫秒（切走再切回时不清零）
+ * enteredAt 本次进入本题的时刻；0 表示不在计时（切走 / 已判分）
  */
-export function elapsedMsOf({ base = 0, enteredAt = 0, now = 0 } = {}) {
+export function elapsedMsOf({
+  base = 0,
+  enteredAt = 0,
+  now = 0
+}: { base?: number; enteredAt?: number; now?: number } = {}): number {
   const b = Math.max(0, Number(base) || 0)
   const seg = Number(enteredAt) > 0 ? Math.max(0, (Number(now) || 0) - Number(enteredAt)) : 0
   const total = b + seg
@@ -76,8 +105,7 @@ export function fmtClock(ms) {
  * 排序优先级：正确率最低 → 同正确率时错题数多 → 仍相同则样本量大。
  * 门槛：作答数 ≥ 3 且正确率 < 0.6（1 题答错不算弱项；已达标的题型不推）。
  *
- * @param {Array<{type:string,count:number,correct:number}>|null} byType
- * @returns {{type:string, rate:number, count:number, wrong:number}[]} 按推荐程度降序
+ * 返回按推荐程度降序排列的弱项。
  */
 export function rankWeakTypes(byType) {
   const rows = Array.isArray(byType) ? byType : []
@@ -102,11 +130,11 @@ export function rankWeakTypes(byType) {
  * 推一个点了就报「题库中没有符合条件的试题」的入口，比不推更糟。
  * 传 null 表示不做可用性过滤（统计拉失败时不要把入口也一起弄没）。
  *
- * @param {Array|{by_type?:Array}|null} input
- * @param {{bankId?:string, labelOf?:Function, availableByType?:object|null}} [opts]
- * @returns {{type:string, rate:number, count:number, label:string, href:string}|null}
  */
-export function weakPracticeEntry(input, opts = {}) {
+export function weakPracticeEntry(
+  input: WeakStatsInput,
+  opts: WeakEntryOpts = {}
+): { type: string; rate: number; count: number; label: string; href: string } | null {
   const { bankId = '', labelOf = (t) => t, availableByType = null } = opts
   const byType = Array.isArray(input) ? input : input?.by_type
   const ranked = rankWeakTypes(byType).filter((row) => {
@@ -138,10 +166,8 @@ export function weakPracticeEntry(input, opts = {}) {
  * 复习队列/错题集，看起来像「练的题没进错题本」。目标页必须真的认这个参数
  * （Review.vue / Wrong.vue 把 route.query.bank 传给 resolveBankFilter）。
  *
- * @param {string} bankId
- * @returns {{review:string, wrong:string}}
  */
-export function doneLinks(bankId = '') {
+export function doneLinks(bankId = ''): { review: string; wrong: string } {
   const q = bankId ? `?bank=${encodeURIComponent(bankId)}` : ''
   return { review: `/review${q}`, wrong: `/wrong${q}` }
 }

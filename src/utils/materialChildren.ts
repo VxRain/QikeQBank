@@ -24,13 +24,19 @@
 
 import { moveItem } from './arrayMove.ts'
 
+/** 子题最小形状（本模块只关心 id；其余字段原样透传） */
+export interface ChildQuestion {
+  id?: string
+  [k: string]: any
+}
+
+
 /**
  * 子题 id 前缀：`<父 id>_c<n>`，与后端 `ensure_child_ids` 同格式。
  * 父 id 缺失（新建尚未保存的题）时用 `q` 兜底，保证 id 非空且唯一。
- * @param {object} q 题目对象
  */
-export function childIdSeed(q) {
-  const id = q && typeof q === 'object' ? q.id : null
+export function childIdSeed(q: unknown): string {
+  const id = q && typeof q === 'object' ? (q as ChildQuestion).id : null
   const s = id == null ? '' : String(id)
   return s || 'q'
 }
@@ -41,11 +47,8 @@ export function childIdSeed(q) {
  * 为什么不用 `_c{length+1}`：排序或删除后序号会有空洞（c1, c3），
  * 长度+1 会撞上已存在的 id（c3 在长度=2 时算出 c3）。所以取「现有最大序号 + 1」。
  *
- * @param {Array<object>} children 现有子题
- * @param {string} seed 见 childIdSeed
- * @returns {string}
  */
-export function nextChildId(children, seed) {
+export function nextChildId(children: ChildQuestion[] | null | undefined, seed: string): string {
   const prefix = `${seed}_c`
   let max = 0
   for (const c of Array.isArray(children) ? children : []) {
@@ -73,11 +76,8 @@ export function nextChildId(children, seed) {
  * （`clientY` 配 `getBoundingClientRect`），因为自动滚动会同时改变两者、
  * 保持可比；混用视口/文档坐标会让滚动方向与插入位方向相反。
  *
- * @param {number} pointerY 指针 y（与 tops 同坐标系）
- * @param {number[]} tops 每张卡片的中线 y（同样取视口坐标）
- * @returns {number} 插入位（0..tops.length，非整数输入返回 -1）
  */
-export function insertionIndexFromY(pointerY, tops) {
+export function insertionIndexFromY(pointerY: number, tops: number[]): number {
   if (!Number.isFinite(pointerY)) return -1
   const mids = Array.isArray(tops) ? tops : []
   let idx = 0
@@ -95,12 +95,8 @@ export function insertionIndexFromY(pointerY, tops) {
  *   从 0 插到末尾（插入位 3）→ 实际 to 应该是 length-1 = 2。
  * 直接拿插入位当 to 会越界（moveItem 返回 null），表现为拖到末尾无效。
  *
- * @param {number} from 源下标
- * @param {number} insertAt 插入位（来自 insertionIndexFromY）
- * @param {number} total 元素总数
- * @returns {number} moveChild 的 to；无需移动（插入位等于原位）返回 from
  */
-export function insertIndexToMoveTarget(from, insertAt, total) {
+export function insertIndexToMoveTarget(from: number, insertAt: number, total: number): number {
   if (!Number.isInteger(from) || !Number.isInteger(insertAt) || !Number.isInteger(total)) return from
   if (total <= 0) return from
   const clamped = Math.min(Math.max(insertAt, 0), total)
@@ -116,14 +112,9 @@ export function insertIndexToMoveTarget(from, insertAt, total) {
  * 在这个页面上会失控（实测从 scrollY 138 冲到 3288，目标区块被甩出视口），
  * 所以自己算：靠近边缘才滚，且速度随靠近程度递增（0..1 线性）。
  *
- * @param {number} pointerY
- * @param {number} top 可视区上沿
- * @param {number} bottom 可视区下沿
- * @param {number} maxSpeed 每帧最大滚动像素（16ms 一帧 → 60px/帧 ≈ 3750px/s，
  *   足够在 1s 内跨过一张 1227px 的卡片；太慢会让用户以为拖不动）
- * @returns {number} 正数向下、负数向上、0 不滚
  */
-export function edgeScrollDelta(pointerY, top, bottom, maxSpeed = 60) {
+export function edgeScrollDelta(pointerY: number, top: number, bottom: number, maxSpeed = 60): number {
   if (![pointerY, top, bottom, maxSpeed].every(Number.isFinite)) return 0
   if (bottom <= top) return 0
   const zone = Math.min(120, Math.max(40, (bottom - top) * 0.18))
@@ -153,12 +144,9 @@ export function edgeScrollDelta(pointerY, top, bottom, maxSpeed = 60) {
  *    children=[p_c1, p_c3]，新子题落在下标 3 → 补 p_c3 → 与现有 p_c3 撞号。
  *    用 max+1 则得 p_c4，安全。
  *
- * @param {object} question 当前题目（看它有没有 id）
- * @param {Array<object>} children 现有子题
- * @returns {string|null} null 表示「交给后端分配」
  */
-export function childIdForAppend(question, children) {
-  const hasParentId = !!(question && typeof question === 'object' && question.id)
+export function childIdForAppend(question: unknown, children: ChildQuestion[] | null | undefined): string | null {
+  const hasParentId = !!(question && typeof question === 'object' && (question as ChildQuestion).id)
   if (!hasParentId) return null
   return nextChildId(children, childIdSeed(question))
 }
@@ -170,11 +158,11 @@ export function childIdForAppend(question, children) {
  * 为什么重复必须修：同一材料里两道子题同号，`detail.child_id` 回看时
  * 只能命中第一个，成绩张冠李戴，而界面上看不出任何异常。
  *
- * @param {Array<object>} children
- * @param {string|null} parentId 有父 id 时给重复项重新发号；否则清空交给后端
- * @returns {Array<object>} 新数组
  */
-export function dedupeChildIds(children, parentId) {
+export function dedupeChildIds(
+  children: ChildQuestion[] | null | undefined,
+  parentId?: string | null
+): ChildQuestion[] {
   const list = Array.isArray(children) ? children : []
   const seen = new Set()
   let max = 0
@@ -214,38 +202,33 @@ export function dedupeChildIds(children, parentId) {
  *
  * 深浅：整棵子题对象原样搬，**id 随内容一起走**（见文件头说明）。
  *
- * @param {Array<object>} children
- * @param {number} from
- * @param {number} to
- * @returns {Array<object>|null} 新数组；越界或原地不动返回 null（调用方跳过 emitUpdate）
  */
-export function moveChild(children, from, to) {
+export function moveChild(
+  children: ChildQuestion[] | null | undefined,
+  from: number,
+  to: number
+): ChildQuestion[] | null {
   return moveItem(children, from, to)
 }
 
 /**
  * 上移一位：已在首位返回 null。
- * @returns {Array<object>|null}
  */
-export function moveChildUp(children, index) {
+export function moveChildUp(children: ChildQuestion[] | null | undefined, index: number): ChildQuestion[] | null {
   return moveChild(children, index, index - 1)
 }
 
 /**
  * 下移一位：已在末位返回 null。
- * @returns {Array<object>|null}
  */
-export function moveChildDown(children, index) {
+export function moveChildDown(children: ChildQuestion[] | null | undefined, index: number): ChildQuestion[] | null {
   return moveChild(children, index, index + 1)
 }
 
 /**
  * 按钮是否禁用。首/末位**禁用而非隐藏**：位置不跳动，用户不会追着按钮跑。
- * @param {number} index
- * @param {number} total
- * @param {-1|1} dir
  */
-export function canMoveChild(index, total, dir) {
+export function canMoveChild(index: number, total: number, dir: -1 | 1): boolean {
   if (!Number.isInteger(index) || !Number.isInteger(total)) return false
   if (index < 0 || index >= total) return false
   const target = index + dir
@@ -258,12 +241,12 @@ export function canMoveChild(index, total, dir) {
  * 拒绝删掉最后一个：材料题的子题清空后会变成「点不进去的空题」，
  * 而且这个状态在列表里看不出异常。调用方据 `reason` 提示用户改为切换题型。
  *
- * @param {Array<object>} children
- * @param {number} index
- * @returns {{children: Array<object>}|{error: 'empty'|'range'}}
  *   `empty` = 这是最后一个子题；`range` = index 非法
  */
-export function removeChildAt(children, index) {
+export function removeChildAt(
+  children: ChildQuestion[] | null | undefined,
+  index: number
+): { children: ChildQuestion[] } | { error: 'empty' | 'range' } {
   const list = Array.isArray(children) ? children : []
   if (!Number.isInteger(index) || index < 0 || index >= list.length) return { error: 'range' }
   if (list.length <= 1) return { error: 'empty' }

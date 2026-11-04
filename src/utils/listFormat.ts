@@ -10,15 +10,32 @@
  * 混成 0% 会让用户以为自己答错过这道题。
  */
 
+/** 后端附在题行上的 stats（FE-P1-04） */
+export interface QuestionStatsSource {
+  stats?: {
+    attempt_count?: number
+    correct_count?: number
+    last_answered_at?: string | null
+    avg_ms?: number
+  } | null
+}
+
+/** 展示用统计：rate=null 表示「没做过」（与「做过但全错」的 0 区分） */
+export interface RowStatsResult {
+  attempts: number
+  correct: number
+  rate: number | null
+  last: string | null
+  avgMs: number
+}
+
 /**
  * 后端 `stats` 字段 → 展示用统计对象。
  *
- * @param {{stats?: {attempt_count?:number, correct_count?:number, last_answered_at?:string|null, avg_ms?:number}}|null} q
- * @returns {{attempts:number, correct:number, rate:number|null, last:string|null, avgMs:number}|null}
- *   题目没有 stats 字段时返回 null（模板据此不渲染统计列），
- *   而有 stats 但没做过时返回 rate=null 的对象（渲染成「0 · —」）。
+ * 题目没有 stats 字段时返回 null（模板据此不渲染统计列），
+ * 而有 stats 但没做过时返回 rate=null 的对象（渲染成「0 · —」）。
  */
-export function rowStats(q) {
+export function rowStats(q: QuestionStatsSource | null | undefined): RowStatsResult | null {
   const st = q?.stats
   if (!st) return null
   // 负数归零：attempts 只可能来自后端计数，出现负值说明数据坏了。

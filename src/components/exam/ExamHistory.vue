@@ -129,8 +129,8 @@
  */
 import { ref, watch } from 'vue'
 import { examDetail } from '@/api/exam.ts'
-import { buildReviewRows } from '@/utils/examTrend.js'
-import { renderDoc } from '@/utils/render.js'
+import { buildReviewRows } from '@/utils/examTrend.ts'
+import { renderDoc } from '@/utils/render.ts'
 import { TYPE_FULL_LABELS } from '@/constants/questions.js'
 
 const props = defineProps({
@@ -206,7 +206,7 @@ async function load() {
     // 填空题的「正确答案」要合到逐空行里；这里把题目答案注入 detail.blanks
     const enriched = (d.items || []).map((it) => {
       // 材料题的流水挂在母题 id 上，真正的题面/选项/答案在子题里：
-      // detail.child_id 指向子题，parent_id 指向母题（见 utils/grading.js buildExamDetail）。
+      // detail.child_id 指向子题，parent_id 指向母题（见 utils/grading.ts buildExamDetail）。
       // 不在这里切到子题，回看就只会显示母题题面 + 盒内选项 id。
       const detail = it.detail || {}
       let q = it.question

@@ -7,7 +7,7 @@
  * - 草稿兜底：每 30 秒把表单写 sessionStorage（与 stores/session.js 同思路：
  *   只在 sessionStorage、不落库、不进同步），页面崩溃/误关后可恢复。
  *
- * 只存表单对象本身，不做任何字段解释；恢复后的合法性仍由 utils/validate.js 判定。
+ * 只存表单对象本身，不做任何字段解释；恢复后的合法性仍由 utils/validate.ts 判定。
  */
 
 const KEY_PREFIX = 'qbank.formDraft.v1:'

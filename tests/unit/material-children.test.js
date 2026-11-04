@@ -17,7 +17,7 @@ const {
   childIdSeed, childIdForAppend, dedupeChildIds, nextChildId,
   moveChild, moveChildUp, moveChildDown, canMoveChild, removeChildAt,
   insertionIndexFromY, insertIndexToMoveTarget, edgeScrollDelta
-} = await import('../../src/utils/materialChildren.js')
+} = await import('../../src/utils/materialChildren.ts')
 const { moveId } = await import('../../src/stores/banksView.js')
 
 const child = (n, extra = {}) => ({

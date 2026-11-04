@@ -6,7 +6,7 @@ import {
   createDefaultQuestion,
   validateByType,
   renderAnswer
-} from '../../src/utils/gradeQuestion.js'
+} from '../../src/utils/gradeQuestion.ts'
 import { QUESTION_TYPES, typeLabel, hasOptions } from '../../src/constants/questions.js'
 
 // FE-ARCH-03 守卫：六种题型全部注册、判分口径与既有页面逐条一致、扩展只需加注册项。

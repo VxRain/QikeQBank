@@ -129,7 +129,7 @@ export default {
       `stats 覆盖 ${statsIds.length} 个 id，当前渲染 ${rowCount} 行`)
 
     // 表格里的具体数字（3 · 67% / 1 · 0% / 0 · —）不再逐条断言：
-    // 那是 utils/listFormat.js 的口径，已由 tests/unit/list-format.test.js 的
+    // 那是 utils/listFormat.ts 的口径，已由 tests/unit/list-format.test.js 的
     // 19 条单测精确覆盖（含「没做过≠全错」这个关键区分）。
     // 这里只验单测做不到的一件事：**统计列真的渲染出来了，且三种状态并存**。
     const statCol = await page.evaluate(() => {

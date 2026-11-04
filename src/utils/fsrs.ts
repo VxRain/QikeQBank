@@ -5,14 +5,15 @@
  * 纯函数 + 可注入 now，保证 node:test 可测；不直接读 settings（调用方传入）。
  */
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from 'ts-fsrs'
+import type { Steps } from 'ts-fsrs'
 
 export { Rating, State }
 
 export const FSRS_DEFAULTS = {
   requestRetention: 0.9,
   maximumInterval: 36500,
-  learningSteps: ['1m', '10m'],
-  relearningSteps: ['10m'],
+  learningSteps: ['1m', '10m'] as Steps,
+  relearningSteps: ['10m'] as Steps,
   enableFuzz: false,
 }
 
@@ -23,13 +24,23 @@ const GRADE_TO_RATING = {
   easy: Rating.Easy,
 }
 
-/** 设置对象补全（缺键走默认值；调用方 settings.js 另做范围归一化） */
-export function withDefaults(s = {}) {
+/** FSRS 可调参数（缺键走默认值；调用方 stores/settings.ts 另做范围归一化） */
+export interface FsrsSettings {
+  requestRetention?: number
+  maximumInterval?: number
+  /** 形如 ['1m','10m']；ts-fsrs 的 StepUnit 模板字符串联合 */
+  learningSteps?: Steps
+  relearningSteps?: Steps
+  enableFuzz?: boolean
+}
+
+/** 设置对象补全（缺键走默认值） */
+export function withDefaults(s: FsrsSettings = {}) {
   return {
     requestRetention: s.requestRetention ?? FSRS_DEFAULTS.requestRetention,
     maximumInterval: s.maximumInterval ?? FSRS_DEFAULTS.maximumInterval,
-    learningSteps: s.learningSteps ?? [...FSRS_DEFAULTS.learningSteps],
-    relearningSteps: s.relearningSteps ?? [...FSRS_DEFAULTS.relearningSteps],
+    learningSteps: s.learningSteps ?? FSRS_DEFAULTS.learningSteps,
+    relearningSteps: s.relearningSteps ?? FSRS_DEFAULTS.relearningSteps,
     enableFuzz: s.enableFuzz ?? FSRS_DEFAULTS.enableFuzz,
   }
 }
@@ -37,13 +48,13 @@ export function withDefaults(s = {}) {
 let scheduler = null
 let schedulerKey = ''
 
-export function schedulerKeyOf(s = {}) {
+export function schedulerKeyOf(s: FsrsSettings = {}): string {
   const p = withDefaults(s)
   return JSON.stringify([p.requestRetention, p.maximumInterval, p.enableFuzz, p.learningSteps, p.relearningSteps])
 }
 
 /** 按设置取 scheduler（签名不变则复用，变则重建） */
-export function getScheduler(s = {}) {
+export function getScheduler(s: FsrsSettings = {}) {
   const key = schedulerKeyOf(s)
   if (!scheduler || schedulerKey !== key) {
     const p = withDefaults(s)
@@ -61,12 +72,27 @@ export function getScheduler(s = {}) {
   return scheduler
 }
 
-export function createEmpty(now = new Date()) {
+export function createEmpty(now: Date = new Date()) {
   return createEmptyCard(now)
 }
 
+/** 后端 review_state 行的最小形状（字段名与 Rust 侧一致） */
+export interface FsrsRow {
+  due_at?: string | null
+  stability?: number | null
+  difficulty?: number | null
+  scheduled_days?: number | null
+  learning_steps?: number | null
+  reps?: number | null
+  lapses?: number | null
+  state?: number | null
+  last_reviewed_at?: string | null
+  /** 上次评分档位（again/hard/good/easy）；撤销时原样带回 */
+  last_result?: string | null
+}
+
 /** 后端 fsrs 行（或 null）→ ts-fsrs Card。elapsed_days 已废弃：重建填 0，由调度器内部处理 */
-export function cardFromRow(row, now = new Date()) {
+export function cardFromRow(row: FsrsRow | null | undefined, now: Date = new Date()) {
   const card = createEmpty(now)
   if (!row) return card
   card.due = row.due_at ? new Date(row.due_at) : new Date(now)
@@ -82,7 +108,7 @@ export function cardFromRow(row, now = new Date()) {
 }
 
 /** ts-fsrs Card → 后端行（Date→ISO；last_result 为本次 grade 字符串） */
-export function toRow(card, lastResult) {
+export function toRow(card: any, lastResult?: string | null) {
   return {
     stability: card.stability,
     difficulty: card.difficulty,
@@ -102,8 +128,8 @@ export function toRow(card, lastResult) {
 }
 
 /** ReviewLog → fsrs_log 快照（只存有效字段，废弃的 elapsed_days/last_elapsed_days 不存） */
-export function toLog(log) {
-  const iso = (d) => (d instanceof Date ? d.toISOString() : new Date(d).toISOString())
+export function toLog(log: any) {
+  const iso = (d: Date | string) => (d instanceof Date ? d.toISOString() : new Date(d).toISOString())
   return {
     rating: log.rating,
     state: log.state,
@@ -120,7 +146,7 @@ export function toLog(log) {
  * 作答：grade ∈ again/hard/good/easy → { card, log }。
  * schedSettings 为 settings.fsrs（缺键自动补默认）。
  */
-export function answer(card, grade, schedSettings = {}, now = new Date()) {
+export function answer(card: any, grade: string, schedSettings: FsrsSettings = {}, now: Date = new Date()) {
   const rating = GRADE_TO_RATING[grade]
   if (rating == null) throw new Error(`invalid fsrs grade: ${grade}`)
   return getScheduler(schedSettings).next(card, now, rating)

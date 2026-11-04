@@ -9,7 +9,7 @@
  *   `ratio` 仍如实计算（填空按逐空比例），但 `correct` 只认 ratio ≥ 1。
  * - exam：按**得分率**，`ratio ≥ 0.6` 记正确（与后端 resolve_grade('exam') 的四档一致）；
  *   多选漏选按 `opts.multiRule`（partial=按比例 / strict=0 分）。
- * - 判分基元（归一化、逐空判定、四档映射、满分/得分）全部复用 utils/grading.js，
+ * - 判分基元（归一化、逐空判定、四档映射、满分/得分）全部复用 utils/grading.ts，
  *   注册表只负责按题型分发，避免出现第二套算法。
  *
  * 扩展方式：新增题型 = 一条注册项（key/label/hasOptions/createDefault/validate/grade/renderAnswer）
@@ -17,7 +17,7 @@
  */
 
 import { QUESTION_TYPES, typeLabel, hasOptions } from '../constants/questions.js'
-import { validateQuestion } from './validate.js'
+import { validateQuestion } from './validate.ts'
 import {
   fillBlankCorrect,
   gradeSingle,
@@ -28,7 +28,7 @@ import {
   ratioToGrade,
   fullScoreOf,
   earnedOf
-} from './grading.js'
+} from './grading.ts'
 
 /* ------------------------------- 默认题目模板 ------------------------------- */
 // 与编辑器既有默认值逐字段一致（QuestionEditor 曾自带一份）：改这里等于改「新建题目」的样子。
@@ -114,7 +114,8 @@ function answerDetail(q, answer) {
     }
   }
   if (type === 'short') {
-    const d = {}
+    // detail 是稀疏字段袋（各题型只写自己那几项），故用索引签名
+    const d: Record<string, any> = {}
     if (a.shortSelf) d.self_grade = a.shortSelf
     if (a.shortText) d.my_answer = a.shortText
     return d
@@ -153,23 +154,27 @@ function renderAnswerText(q, answer) {
 
 /* ---------------------------------- 注册表 ---------------------------------- */
 
-/**
- * 题型注册项（新增题型只需这一条 + 编辑器）
- * @typedef {Object} QuestionTypeEntry
- * @property {string} key
- * @property {string} label
- * @property {boolean} hasOptions
- * @property {() => Object} createDefault
- * @property {(q:Object) => {valid:boolean, errors:string[]}} validate
- * @property {(q:Object, answer:Object, opts?:Object) => {ratio:number, unanswered?:boolean, subset?:boolean}} grade
- * @property {(q:Object, answer:Object) => string} renderAnswer
- */
+/** 校验结果 */
+export interface ValidationResult {
+  valid: boolean
+  errors: string[]
+}
+
+/** 题型注册项（新增题型只需这一条 + 编辑器） */
+export interface QuestionTypeEntry {
+  key: string
+  label: string
+  hasOptions: boolean
+  createDefault: () => Record<string, any>
+  validate: (q: any) => ValidationResult
+  grade: (q: any, answer: any, opts?: any) => { ratio: number; unanswered?: boolean; subset?: boolean }
+  renderAnswer: (q: any, answer: any) => string
+}
 
 /**
  * 建一个注册表实例（默认导出单例；测试用独立实例，避免污染全局）。
- * @param {QuestionTypeEntry[]} entries
  */
-export function createTypeRegistry(entries) {
+export function createTypeRegistry(entries: QuestionTypeEntry[]) {
   const map = new Map()
   for (const e of entries) map.set(e.key, e)
 
@@ -240,10 +245,9 @@ export function createTypeRegistry(entries) {
     },
 
     /**
-     * 校验：先确认题型与注册项一致，再走 utils/validate.js 的 v2 schema 规则。
-     * @returns {{valid:boolean, errors:string[]}}
+     * 校验：先确认题型与注册项一致，再走 utils/validate.ts 的 v2 schema 规则。
      */
-    validate(key, q) {
+    validate(key: string, q: any): ValidationResult {
       if (!q || typeof q !== 'object') return { valid: false, errors: ['question must be object'] }
       if (q.type !== key) return { valid: false, errors: [`题型不匹配：期望 ${key}，实为 ${q.type ?? '空'}`] }
       const entry = map.get(key)
@@ -253,16 +257,10 @@ export function createTypeRegistry(entries) {
 
     /**
      * 统一判分。
-     * @param {Object} q 题目（材料题含 children）
-     * @param {Object} answer { selected, picked[], fillValues{}, shortSelf, shortText, children{} }
-     * @param {{mode?:'practice'|'review'|'exam', multiRule?:'partial'|'strict'}} [opts]
-     * @returns {{
-     *   supported:boolean, type:string, mode:string, correct:boolean, ratio:number,
-     *   unanswered:boolean, subset:boolean, earned:number, full:number,
-     *   children?:Array<Object>, detail:Object
-     * }}
+     * @param q 题目（材料题含 children）
+     * @param answer { selected, picked[], fillValues{}, shortSelf, shortText, children{} }
      */
-    grade(q, answer, opts = {}) {
+    grade(q: any, answer: any, opts: { mode?: 'practice' | 'review' | 'exam'; multiRule?: 'partial' | 'strict' } = {}) {
       const mode = opts.mode || 'practice'
       const a = answer || {}
       const type = q?.type
@@ -334,7 +332,7 @@ export function createDefaultQuestion(type) {
   return typeRegistry.createDefault(type)
 }
 
-/** 按题型校验（内部仍是 utils/validate.js 的 v2 schema） */
+/** 按题型校验（内部仍是 utils/validate.ts 的 v2 schema） */
 export function validateByType(type, q) {
   return typeRegistry.validate(type, q)
 }

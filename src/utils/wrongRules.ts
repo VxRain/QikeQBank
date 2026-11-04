@@ -29,7 +29,7 @@ export const LEAVE_AFTER_NEVER = 0
  * 若直接 `Number(raw)`，一个未配置的 `null` 会被静默解释成「永不移出」——
  * 恰好是本函数想防的那个失败方向。所以先按「是不是数字或数字字符串」判型。
  */
-export function leaveAfterOf(raw) {
+export function leaveAfterOf(raw: unknown): number {
   if (raw === null || raw === undefined || raw === '') return LEAVE_AFTER_DEFAULT
   if (typeof raw !== 'number' && typeof raw !== 'string') return LEAVE_AFTER_DEFAULT
   // 只认十进制数字字符串（拒绝 ' ' / '0x10' / '1e3' 之类的意外形态）
@@ -40,7 +40,7 @@ export function leaveAfterOf(raw) {
 }
 
 /** 是否永不自动移出 */
-export function isNeverLeave(raw) {
+export function isNeverLeave(raw: unknown): boolean {
   return leaveAfterOf(raw) === LEAVE_AFTER_NEVER
 }
 
@@ -51,13 +51,13 @@ export function isNeverLeave(raw) {
  * 设了「连对 3 次移出」的人，答对 2 次后看见题还在会以为功能坏了；
  * 设了「永不移出」的人，看见题一直在册会以为是脏数据。
  */
-export function leaveRuleText(raw) {
+export function leaveRuleText(raw: unknown): string {
   const n = leaveAfterOf(raw)
   return n === LEAVE_AFTER_NEVER ? '永不自动移出' : `连对 ${n} 次移出`
 }
 
 /** 徽章 hover 提示：补充「怎么改」与「例外情况」 */
-export function leaveRuleHint(raw) {
+export function leaveRuleHint(raw: unknown): string {
   const n = leaveAfterOf(raw)
   return n === LEAVE_AFTER_NEVER
     ? '错题只在你手动「移除」或再次答错时变动；可在设置 → 错题本里改'

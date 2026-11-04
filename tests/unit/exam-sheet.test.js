@@ -8,7 +8,7 @@ const {
   cellStateOf,
   firstUnansweredIndex,
   remapFlaggedUids
-} = await import('../../src/utils/examSheet.js')
+} = await import('../../src/utils/examSheet.ts')
 
 const q = (id, over = {}) => ({ id, type: 'single', ...over })
 

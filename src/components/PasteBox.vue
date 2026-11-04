@@ -16,8 +16,8 @@
 
 <script setup>
 import { ref } from 'vue'
-import { parsePureText } from '@/utils/parsePureText.js'
-import { validateQuestion } from '@/utils/validate.js'
+import { parsePureText } from '@/utils/parsePureText.ts'
+import { validateQuestion } from '@/utils/validate.ts'
 
 const emit = defineEmits(['parsed'])
 const text = ref('')

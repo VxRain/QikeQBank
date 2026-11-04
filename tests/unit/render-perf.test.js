@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderDoc, renderMaterial } from '../../src/utils/render.js'
+import { renderDoc, renderMaterial } from '../../src/utils/render.ts'
 
 // FE-ARCH-08 渲染性能守卫：图片必须懒加载 + 异步解码，否则长文档首屏会同步解码所有图。
 const imgAttrs = (html) => [...html.matchAll(/<img\b[^>]*>/g)].map((m) => m[0])

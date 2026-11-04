@@ -177,7 +177,14 @@ function tokenize(raw){
  * - blankHint 只在正文落入题干时记录 —— （ ）仅在无选项语境下才是填空信号。
  */
 function fsmCollect(tokens){
-  const acc = { stems: [], options: [], answerParts: [], analysisParts: [], blankHint: false }
+  // 逐区块累积态：options/stems 等由后续 push 填充，给显式类型避免 never[]
+  const acc: {
+    stems: string[]
+    options: Array<{ letter: string; text: string }>
+    answerParts: string[]
+    analysisParts: string[]
+    blankHint: boolean
+  } = { stems: [], options: [], answerParts: [], analysisParts: [], blankHint: false }
   let state = 'START'
   for(const tok of tokens){
     const type = tok.type
@@ -299,10 +306,11 @@ function assemble(acc){
       return { type:'judge', stem: textToDoc(stemText || '判断题'), options, answer:{ ids:[pickJudgeId(acc.options, answerText)] }, analysis }
     }
     // 答案长度决定 single/multi：抽字母去重，映射到存在的选项
-    const letters = new Set(acc.options.map(o=>o.letter))
-    const ids = [...new Set(answerText.toUpperCase().replace(/[^A-G]/g,''))]
-      .filter(c => letters.has(c))
-      .map(c => `o${c.charCodeAt(0)-64}`)
+    const letters = new Set(acc.options.map((o) => o.letter))
+    // answerText 是 string|null（由上面按是否命中 ANSWER 标记赋值）；这里已确认为字符串上下文
+    const ids = [...new Set(String(answerText || '').toUpperCase().replace(/[^A-G]/g, ''))]
+      .filter((c) => letters.has(c))
+      .map((c) => `o${c.charCodeAt(0) - 64}`)
     if(ids.length >= 2) return { type:'multi', stem: textToDoc(stemText || '选择题'), options, answer:{ ids }, analysis }
     return { type:'single', stem: textToDoc(stemText || '选择题'), options, answer:{ ids: ids.length ? [ids[0]] : ['o1'] }, analysis }
   }

@@ -13,7 +13,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 
 const { normalizeMix, planStandardPaper, paperScoreSummary, subsetSum, DEFAULT_MIX, DEFAULT_TOTAL } =
-  await import('../../src/utils/examPaper.js')
+  await import('../../src/utils/examPaper.ts')
 
 const q = (id, score, type = 'single', difficulty = 2) => ({ id, score, type, difficulty })
 const many = (prefix, score, n, type = 'single', difficulty = 2) =>

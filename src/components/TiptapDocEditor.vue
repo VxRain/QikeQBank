@@ -76,8 +76,8 @@ import { Color } from '@tiptap/extension-color'
 import { Node, mergeAttributes } from '@tiptap/core'
 import katex from 'katex'
 import { toast } from '@/stores/ui.js'
-import { compressImageFile } from '@/utils/image.js'
-import { valueOf } from '@/utils/domEvent.js'
+import { compressImageFile } from '@/utils/image.ts'
+import { valueOf } from '@/utils/domEvent.ts'
 import { putAsset, assetFileUrl } from '@/api/assets.ts'
 
 const props = defineProps({ modelValue: { type: Object, required: true }, showBlank: { type: Boolean, default: true }, compact: { type: Boolean, default: false } })
