@@ -1,7 +1,11 @@
 import { cmd, unwrap } from './bridge.js'
 
 // 以下统一经 unwrap 拆包（{success,data} → data），调用方只拿到业务数据
-/** @returns {Promise<import('./types.js').Question[]>} */
+/**
+ * 参数形状对齐 src-tauri/src/db/practice.rs::practice_pool（bank_id/ids 均可选）。
+ * @param {{limit?:number, type?:string, bankId?:string, ids?:string[]}} [opts]
+ * @returns {Promise<import('./types.js').Question[]>}
+ */
 export async function practicePool({ limit = 20, type = '', bankId, ids } = {}) {
   const args = { limit }
   if (type) args.typeFilter = type
@@ -24,14 +28,22 @@ export async function reviewRevert(items) {
   return unwrap(await cmd('review_revert', { items }))
 }
 
-/** @returns {Promise<import('./types.js').Question[]>} */
+/**
+ * @param {{limit?:number, bankId?:string}} [opts]
+ * @returns {Promise<import('./types.js').Question[]>}
+ */
 export async function reviewDue({ limit = 20, bankId } = {}) {
   const args = { limit }
   if (bankId) args.bankId = bankId
   return unwrap(await cmd('review_due', args))
 }
 
-/** @returns {Promise<{total:number, items:import('./types.js').Question[]}>} */
+/**
+ * 参数名保持前端 camelCase（invoke 时由 tauri 宏转 snake_case 查键），
+ * 形状对齐 src-tauri/src/db/practice.rs::wrong_list。
+ * @param {{limit?:number, offset?:number, bankId?:string, type?:string, leaveAfterCorrect?:number, query?:string, sort?:string, minWrongCount?:number}} [opts]
+ * @returns {Promise<{total:number, items:import('./types.js').Question[]}>}
+ */
 export async function wrongList({
   limit = 50,
   offset = 0,
@@ -54,6 +66,7 @@ export async function wrongList({
 
 /**
  * 错题本统计（FE-P0-11）：全库概览，不受当前筛选影响。
+ * @param {{leaveAfterCorrect?:number}} [opts]
  * @returns {Promise<{total:number, stubborn:number, by_bank:Record<string,number>, by_type:Record<string,number>}>}
  */
 export async function wrongStats({ leaveAfterCorrect } = {}) {

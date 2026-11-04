@@ -20,6 +20,11 @@ export function setProvider(p) {
 const ACTOR_COMMANDS = new Set(['banks_remove', 'questions_remove'])
 
 // 统一 invoke 封装：Err(String) 自动 reject 为 Error
+/**
+ * @param {string} name
+ * @param {Record<string, any>} [args] 命令参数（可被自动注入 actor / bundle.device_id）
+ * @returns {Promise<any>}
+ */
 export async function cmd(name, args = {}) {
   const a = { ...args }
   if (ACTOR_COMMANDS.has(name) && a.actor == null) {

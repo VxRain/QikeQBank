@@ -13,6 +13,7 @@
  * @property {boolean} success
  * @property {T} [data]
  * @property {string} [error]
+ * @property {string} [message] 历史/第三方 provider 兼容字段，后端 Err(String) 不走信封而是 reject
  */
 
 /** @typedef {'single'|'multi'|'judge'|'fill'|'short'|'material'} QuestionType */
@@ -125,8 +126,6 @@
  * @property {number} score
  * @property {number} full_score
  */
-
-/** records_overview @typedef {{days:Array<Object>, by_type:Array<Object>}} RecordsOverview */
 
 /** exam_detail 逐题回看 @typedef {Object} ExamDetailItem
  * @property {string} record_id
