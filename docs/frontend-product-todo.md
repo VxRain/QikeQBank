@@ -64,9 +64,11 @@
 - 不在 P0 完成前做社区、题库市场、AI 生成题。
 - 不在未更新 PLAN / Schema / 同步契约前，前端私自定义会进同步包的字段。
 - 不为“看起来高级”引入重型状态管理或全量 TypeScript 迁移；先解决重复实现与契约。
-  - **区分**：“全量 .js→.ts 迁移”仍是非目标（成本 50–100 人日，测试大量依赖 `readFileSync` 断言源码与硬编码 `.js` 路径）；
-    但“类型检查”已于本期落地：`checkJs: true` + `strict: false` + `pnpm typecheck` 进门禁，
-    不要求改文件名、不动运行时。**不追 TypeScript 7 / tsgo**：`vue-tsc` 依赖 TS 的 JS API，
+  - **区分**：“类型检查”已于本期落地：`checkJs: true` + `strict: false` + `pnpm typecheck` 进门禁。
+    `src/{api,stores,utils}` 共 **43 个文件**已迁为 `.ts`（其中 38 个重写了 JSDoc→原生类型，5 个只有后缀变化，见 §0.6），
+    收益与边界见 **§0.6**；仍**不追**全量 `.ts` 化的剩余部分（`.vue`、`components/`、`router/`、`composables/`、
+    `constants/`）。边界记忆点：迁移会连锁改 `tests/unit` 里 `readFileSync` 的硬编码路径与 `import '.js'`，
+    这类成本才是「50–100 人日」的来源，不是重写类型本身。**不追 TypeScript 7 / tsgo**：`vue-tsc` 依赖 TS 的 JS API，
     TS 7 只发原生二进制且没有该 API，且 Vue 侧瓶颈在 SFC 解析管线（实测换 tsgo 无加速）；
     待 `vue-tsc@4` 正式版 + 可复现 benchmark 再议，届时并行而非替换。
 
@@ -81,6 +83,64 @@
 | 错题本导出 MD·JSON、行内直接编辑 | 导出同上；编辑走「查看 → 编辑」两跳已足够 |
 | 设置导出 / 导入 | 同上（依赖落盘命令）；设置项有限，手工重设成本低 |
 | 模考「100 分标准卷」 | 满分可能是 120/135/150，把 100 写死只有「刚好 100 分的题库」用得上（按分值组卷的算法基建保留在 `utils/examPaper.ts`，当前无 UI 调用） |
+| tauri-specta 生成 `bindings.ts`（Rust 为类型唯一源） | 见 §0.5.1——技术上已验证可行，但收益不抵成本，且现在有更便宜的替代守卫 |
+
+#### 0.5.1 为什么不上 specta（`src/api/types.ts` 保持手写）
+
+背景：`plan-b/typescript` 分支上跑通过一次 Phase 0（commit `4130bad`，1 个提交 / 10 个文件）——`specta` + `tauri-specta` 精确 pin `=2.0.0-rc.25`、26 个命令加 `#[specta::specta]`、`Json(Value)` 包装绕开 serde_json 递归展开、`tests/export_bindings.rs` 生成 `src/bindings.ts`。**这条路技术上可行**，否决的不是可行性。
+
+否决理由（按权重排序）：
+
+1. **收益口径对不上现在的痛点。** specta 解决的是「前端手写类型与 Rust 返回结构漂移」。但目前 `src/api/*.ts` 只有 9 个文件、244 行 `types.ts`，且**漂移已经被单测挡住**的结构性证据是：`api-contract.test.js` 逐条断言命令名 + 参数形状；`list-filter` / `wrong-book` / `request-params-wiring` 三个守卫逐字校对前后端白名单。真实漂移面（`GuardedQueryParams`、`s3Pull`/`s3Status` 的 `Record<string, any>`）**恰恰是 specta 也生成不出精度的位置**——Rust 侧本来就返回 `Value`。
+2. **它不是免费的。** 需要：Rust 依赖 pin 在 rc 版本（`=2.0.0-rc.25`，pre-release，升级窗口跟着上游 rc 走）、`build.rs` 给测试目标补 comctl32 v6 manifest（否则 `cargo test` 启动即 `0xC0000139`）、`Json(Value)` 这种为绕开 specta 递归展开而引入的自定义包装类型、生成流程（`tests/export_bindings.rs` 跑测试才产出 `bindings.ts`，意味着"改 Rust 后忘了跑测试"会产生陈旧绑定）。**每一件都在账本上留疤**，换来的只是「不用手写 244 行」。
+3. **两条路线并存会互相打架。** `plan-b/typescript` 与 `feat/ts-typecheck` 从不同基点出发：前者要 `bindings.ts` 包裸 `invoke` 返回 `{status, data|error}`（与现有 `{success, data}` 信封**不兼容**，其文档自己写明 Phase 2 只用类型、调用仍走 `bridge`），后者已经把 `bridge.unwrap<T>()` 做成全项目唯一断言收口点。同时维护两套类型来源，等于把「唯一收口」的纪律拆成两处。
+
+**替代守卫（已落地，成本 0 依赖）**：`src/api/types.ts` 的字段形状由 `api-contract.test.js` 的形状断言 + `tests/unit/ts-import-guard.test.js` 的路径解析守卫共同兜底；Rust ↔ TS 的白名单类字段（排序键、状态值、错题口径）另有逐字校对守卫。**触发重新评估的条件**（写死，免得反复讨论）：`specta` 发 1.0 正式版 **且** `src/api/types.ts` 行数翻倍（>500 行）**且** Rust 侧迁出 `Value` 返回（命令返回具体 struct 而非 `serde_json::Value`）——三条同时满足才重开。
+
+#### 0.5.2 分支并存处置
+
+`plan-b/typescript` 分支**不合并、也不删除**：它是一次已验证的技术探索，`docs/plan-b-typescript.md` 里「specta 踩坑记录」（`Json(Value)` 的必要性、`Builder<Wry>` 与 MockRuntime 不兼容、测试目标 manifest）对将来真要走这条路的人有参考价值。该分支保持只读，不 rebase、不跟 main 同步；如需重启，从本文档这条否决理由出发重新评估，不要直接 cherry-pick `4130bad`（它会与现在的 `bridge.unwrap<T>` 收口冲突）。
+
+### 0.6 类型检查的边界（已落地，勿重复立项）
+
+`pnpm typecheck`（`vue-tsc`）已进 DoD 门禁，但**它的保护范围必须说清**，否则容易误以为「迁了 `.ts` = 类型安全了」。
+
+**当前配置**：`checkJs: true` + **`strict: false`** + `incremental`（`tsBuildInfoFile` 落 `node_modules/.tmp/`，已 gitignore）。
+
+**能挡住的**（这些都是真实发生过的）：
+
+- 字段名写错：`updateBank(id, { nmae: 'x' })` → TS2353（对象字面量多余属性）
+- 类型对不上：`const n: number = await listBanks()` → TS2322
+- SFC 模板里的方法不存在：`{{ (1).toUpperCase() }}` → TS2339（vue-tsc 真的检查模板，不是只看 `<script>`）
+- 迁移中挖出的真 bug：`List.vue` mathBlock 分支引用未定义的 `n`（运行期 ReferenceError）、`TiptapDocEditor` 的 `setContent(clean, false)` 在 Tiptap 3.x 语义变更后每次都多余 emit
+
+**挡不住的**（`strict: false` 的直接后果，别指望它）：
+
+- **不挡 undefined / null 访问**：`strictNullChecks: false`，`a.b.c` 里 `b` 可能不存在也照样通过
+- **不挡隐式 any**：`noImplicitAny: false`。打开这一个开关，**全项目 903 条错误**，分布：
+  - `src/utils/` 312 / `src/views/` 264 / `src/components/` 241 / `src/stores/` 76 / `src/constants/` 5 / `src/composables/` 2 / `App.vue` 3
+  - **已迁移三目录（utils+stores+api）合计 388 条**，`src/api/` 为 **0**（api 层是真标了类型）；未迁移的 `.vue` 贡献了其余 515 条
+  - 已迁移目录内按文件 Top6：`parseDocxTemplate.ts` 52 / `gradeQuestion.ts` 52 / `parsePureText.ts` 50 / `parseTemplate.ts` 38 / `parseSheet.ts` 37 / `session.ts` 34
+  - 错误码：TS7006（参数隐式 any）为主，其余 TS7053（下标）/ TS7005 / TS7018 / TS7034 各数十
+  - 复现：`tsconfig.json` 的 `compilerOptions` 加 `"noImplicitAny": true` 后跑 `pnpm typecheck`（探针配置用完即删，不落仓库）
+  - 注①（口径）：**任何单看某个目录的合计数都不能当成「全项目债务」**——388 是已迁移目录的，903 才是全量。
+  - 注②（不是棘轮）：这个数字会随收紧**下降**（显式 any 清掉后，隐式 any 的推断位置也跟着减少），别拿它做只降不升的基线。
+- **5 个文件只是改了后缀**，内容零改动，因此仍是隐式 any 语义：`utils/image.ts`（66 行）、`render.ts`（87）、`normalize.ts`（80）、`validate.ts`（85）、`parseTemplate.ts`（383）
+
+**显式 any 已清零并上了守卫**（`tests/unit/ts-import-guard.test.js` D 组）：`src/**/*.ts` 里不再有 `: any` / `as any` / `any[]` / `Record<string, any>`。清的过程**挖出了 4 处真契约缺口**（都属「any 掩盖了它」）：
+
+| 位置 | 真相 | 怎么暴露的 |
+|---|---|---|
+| `types.ts::FsrsState.last_result` | 标成 `number`，Rust 侧是 `Option<String>`（`again/hard/good/easy`），与 `utils/fsrs.ts::FsrsRow` 的定义**互相矛盾** | 把 `any` 换成真类型后 TS2322 |
+| `types.ts::QuestionAnswer` | 缺 `reference?: Doc`（简答题参考答案），`ExamHistory` 一直在读 `q.answer.reference` | TS2339 |
+| `practice_records.detail_json` | 被写成 `Record<string, any>`，实际是**真契约**（由 `grading.ts::buildExamDetail` 写、成绩单/回看/趋势读） | 收紧后 6 处 TS2339，遂建 `ExamDetailJson` |
+| `exam_detail.question` | 同上，回看时会被合并子题并补 `_parentStem/_parentType/_childIndex` | TS2353 |
+
+顺带把 ExamHistory 里的「材料题子题切换 + 填空正确答案注入」从 SFC 搬到 `utils/examTrend.ts::enrichReviewItems`（SFC 未加 `lang="ts"`，写不了类型注解，留原处只能永远靠静态推断），**并补上 `parseSheet` 的 7 条单测**——它此前零覆盖，而它的类型本次被改动过。
+
+**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。要往前走，下一步是 `noImplicitAny` 分文件清零（388 → 0），而不是继续改名。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
+
+**不建模块 shim**（`declare module '*.vue'`）：实测不加时模块类错误为 0；加了反而把 SFC 的 props/emits 推导顶成 `any`。`src/env.d.ts` 只做 `vue-router` 的 `RouteMeta` 增强。
 
 ---
 

@@ -785,7 +785,7 @@ pub fn exam_sessions(
     ok(exam_sessions_impl(&conn, limit, bank_id)?)
 }
 
-/// 场次题库来自 `detail.bank_id`（组卷时写入，见 `src/utils/grading.js`）。
+/// 场次题库来自 `detail.bank_id`（组卷时写入，见 `src/utils/grading.ts`）。
 ///
 /// 为什么放 detail 而不是加列：模考流水本身没有题库归属字段，而 detail_json
 /// 已在同步链里；加列会改 schema 并波及同步契约，与「schema 零改动」的边界冲突。

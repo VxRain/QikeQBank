@@ -11,7 +11,7 @@
 | 文档 | 定位 | 状态 | 什么时候看 |
 |---|---|---|---|
 | **`PLAN.md`（本文）** | 架构 / 表结构 / 命令契约 / 验证标准的唯一权威 | **生效** | 任何代码改动前 |
-| `docs/frontend-product-todo.md` | **近期**前端优化任务清单（P0–P2 + 架构重构），面向可勾选执行 | 执行清单 | 排近期迭代、认领前端任务 |
+| `docs/frontend-product-todo.md` | **近期**前端优化任务清单（P0–P2 + 架构重构 + §0.6 类型检查边界），面向可勾选执行 | 执行清单 | 排近期迭代、认领前端任务 |
 | `docs/platform-evolution.md` | **长期**平台化演进方向（本体模型 / 方向取舍 / AI 碰撞矩阵 / A–E 路线图）；附录 A 为 Schema v4 迁移草案 | 草案，**不构成契约** | 决定产品方向、动 schema 之前 |
 
 ### 0.1 裁决与同步规则
@@ -46,21 +46,21 @@ QikeQBank/
 ├── src/                           ← 前端
 │   ├── main.js  App.vue  router/index.js（路由 meta 驱动导航/标题）
 │   ├── constants/questions.js     ← 题型唯一权威（label/shortLabel/fullLabel/icon/hasOptions/默认分值/别名）
-│   ├── api/    bridge.js（cmd + 统一 unwrap）  types.js（JSDoc 契约 typedef）
-│   │           questions.js  practice.js  banks.js  exam.js  settings.js  sync.js  assets.js
-│   ├── stores/ bank.js（题库筛选） settings.js（FSRS 参数/记忆开关等） ui.js（弹层服务）
-│   │           session.js（练习/复习/模考统一会话快照） autoSync.js
-│   │           formDraft.js（录题脏判定 + 草稿兜底）  runConfig.js（三入口题型/题量记忆 + 可用题量）
-│   │           listFilter.js（列表筛选记忆 + 排序白名单 + 页码收敛 clampPage）
+│   ├── api/    bridge.ts（cmd + 统一 unwrap<T>）  types.ts（契约 interface）
+│   │           questions.ts  practice.ts  banks.ts  exam.ts  settings.ts  sync.ts  assets.ts
+│   ├── stores/ bank.ts（题库筛选） settings.ts（FSRS 参数/记忆开关等） ui.ts（弹层服务）
+│   │           session.ts（练习/复习/模考统一会话快照） autoSync.ts
+│   │           formDraft.ts（录题脏判定 + 草稿兜底）  runConfig.ts（三入口题型/题量记忆 + 可用题量）
+│   │           listFilter.ts（列表筛选记忆 + 排序白名单 + 页码收敛 clampPage）
 │   ├── composables/ sessionResume.js（全应用唯一的「继续上次/放弃」交互）
 │   │                sessionLeaveNotice.js（全应用唯一的「离开时告知进度已存」提示）
 │   ├── styles/ perf.css（content-visibility 等渲染性能辅助类）
-│   ├── utils/  gradeQuestion.js（题型注册表 + 统一判分入口）
-│   │           grading.js（判分基元，零依赖） fsrs.js image.js
-│   │           reviewPreview.js（复习四键间隔预览，只计算不写库）
-│   │           examSheet.js（答题卡分组/三态/标记重映射） examTrend.js（趋势坐标 + 回看行）
-│   │           parseTemplate.js parseDocxTemplate.js parseSheet.js render.js validate.js
-│   │           normalize.js parsePureText.js stripMarkdown.js device.js
+│   ├── utils/  gradeQuestion.ts（题型注册表 + 统一判分入口）
+│   │           grading.ts（判分基元，零依赖） fsrs.ts image.ts
+│   │           reviewPreview.ts（复习四键间隔预览，只计算不写库）
+│   │           examSheet.ts（答题卡分组/三态/标记重映射） examTrend.ts（趋势坐标 + 回看行）
+│   │           parseTemplate.ts parseDocxTemplate.ts parseSheet.ts render.ts validate.ts
+│   │           normalize.ts parsePureText.ts stripMarkdown.ts device.ts
 │   ├── components/  TiptapDocEditor（公式/图片/填空节点 + 编辑浮层） QuestionForm/QuestionEditor
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
 │   │               question/QuestionRunner.vue（练习/复习/模考/背题共用的答题渲染层）
@@ -572,7 +572,7 @@ export function persistBankFilter(page, id)
   - **性能约束**：新增用例若需要多视口 / 多状态，优先「一次导航 + 反复改状态」，不要反复 `page.reload()` —— `header` 模块去掉 7 次多余刷新后从 2.5s 降到 0.76s。
   - **等待约定（重要，别退回固定 sleep / 文案标记）**：`goto(page, hash)` 不接受任何标记参数，就绪判定统一走 `requireRoute()`：**`document.title === meta.title + ' · ' + APP_NAME` 且 `window.__inflight === 0`**。
     - 为什么不是界面文案：`meta.title` 是路由元数据（写在 `router/index.js`），改界面文案/布局不影响它；而 `/新建题库/` 这类文案一改就废。
-    - 为什么加 inflight：7 个视图的 `onMounted` 都经 `bridge.js` 发 IPC，归零即首屏数据到齐（mock 里用 try/finally 计数）。
+    - 为什么加 inflight：7 个视图的 `onMounted` 都经 `bridge.ts` 发 IPC，归零即首屏数据到齐（mock 里用 try/finally 计数）。
     - 实测：该组合 8/8 成功、平均 6~77ms；`goto` 超时**必抛**并附带实际 `title/inflight/hash/页面文本`。
     - 已禁用 `networkidle`（Playwright 官方标 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead"），也禁用 `waitForTimeout`（官方："Never wait for timeout in production"）。
     - **前置契约守卫**：跑 e2e 前自动执行 `tests/unit/e2e-ready-signal.test.js`（7 项），检测 `ROUTE_TITLE ↔ meta.title` 漂移、title 拼接格式、inflight 的 try/finally、无 networkidle、超时必抛；不过则 **exit 3 中止**（~0.3s），不会白跑 30s 超时。`--skip-guard` 仅排障用。

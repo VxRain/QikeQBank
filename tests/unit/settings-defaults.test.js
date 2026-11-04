@@ -14,7 +14,7 @@ import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { setProvider } from '../../src/api/bridge.ts'
 
-// 必须在 import store 之前挂 provider：settings.js 模块底部会立即 hydrateFromDb()
+// 必须在 import store 之前挂 provider：settings.ts 模块底部会立即 hydrateFromDb()
 setProvider({ invoke: async () => ({ success: true, data: [] }) })
 
 const { settings, DEFAULTS, resetSettingsToDefault, clearBankFilterCache } = await import(

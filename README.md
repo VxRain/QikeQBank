@@ -88,6 +88,11 @@
 
 ## 快速开始
 
+> **环境前提**：Node **≥ 22.18**（`engines` 已声明）+ pnpm。前端 `src/{api,stores,utils}` 用 `.ts` 书写，
+> 27 个单测文件直接加载 `src/*.ts`，依赖 Node 原生类型剥离；低于 22.18 跑 `pnpm test:unit` 会报
+> `ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension ".ts"`（不是代码坏了，是 Node 太旧）。
+> 另需 Rust stable（Tauri 2）。
+
 ```bash
 # 开发（双进程由 tauri 驱动：vite dev 5173 自动拉起）
 pnpm install
@@ -133,10 +138,10 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 
 ```
 ├── src/                    # Vue3 前端
-│   ├── api/                # bridge.js(invoke 封装) questions.js practice.js banks.js assets.js
+│   ├── api/                # bridge.ts(invoke 封装 + unwrap 泛型) questions.ts practice.ts banks.ts assets.ts types.ts(契约)
 │   ├── components/         # QuestionEditor / QuestionForm / TiptapDocEditor / QuestionPreview / ImportFileBox / S3SyncPanel / ui
-│   ├── stores/             # bank.js（题库） settings.js（FSRS 参数等） autoSync.js（自动同步定时） ui.js（弹层服务）
-│   ├── utils/              # fsrs.js render.js validate.js normalize.js parsePureText.js image.js
+│   ├── stores/             # bank.ts（题库） settings.ts（FSRS 参数等） autoSync.ts（自动同步定时） ui.ts（弹层服务）
+│   ├── utils/              # fsrs.ts render.ts validate.ts normalize.ts parsePureText.ts image.ts
 │   └── views/              # Home / Banks / List / Form / Practice / Review / Wrong
 ├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（45 个 command + FSRS 写入校验 + 统计 + 同步合并核/资产通道/S3 通道）
 │   └── src/db/             # 9 表 Schema / 迁移 / 单测（mod schema banks questions practice assets backup settings sync s3）

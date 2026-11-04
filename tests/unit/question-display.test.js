@@ -1,5 +1,5 @@
 /**
- * 跨页共用展示逻辑（questionDisplay.js）
+ * 跨页共用展示逻辑（questionDisplay.ts）
  *
  * 存在的理由：这些函数在 2~3 个视图里各有一份副本，且**已经漂移**——
  *   · `blankAnswersOf` 空值：Wrong.vue 给「—」，Practice/Review 给空串

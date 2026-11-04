@@ -1,5 +1,5 @@
 /**
- * grading.js 回归测试（node:test，无第三方依赖）：
+ * grading.ts 回归测试（node:test，无第三方依赖）：
  *  - 填空归一：trim / 大小写 / 全角→半角 / 空值必错
  *  - 多选口径：全对 / 漏选按比例（partial）/ 漏选 0 分（strict）/ 错选 0 / 未选
  *  - 得分率 → grade 四档映射（与后端 resolve_grade('exam') 语义对齐）

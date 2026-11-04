@@ -96,7 +96,7 @@ export function mockScript() {
     ]
   }
   window.__calls = []
-  // P2 就绪信号：在飞的 IPC 数量。7 个视图的 onMounted 都经 bridge.js 发 IPC，
+  // P2 就绪信号：在飞的 IPC 数量。7 个视图的 onMounted 都经 bridge.ts 发 IPC，
   // 因此「归零」等价于「首屏数据到齐」。零 src/ 改动。
   window.__inflight = 0
   window.__recorded = []

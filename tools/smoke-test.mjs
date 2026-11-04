@@ -28,8 +28,9 @@
  * 全部通过打印 "SMOKE PASS"（exit 0）；任一失败打印细节并 exit 1。
  *
  * 最小合法题的 Blocks JSON 结构对齐
- *   C:/Users/Administrator/Desktop/test/QBank/DB.json 实际数据
- *   与 shared/question.schema.json / shared/validate.js 的约束。
+ *   C:/Users/Administrator/Desktop/test/QBank/DB.json 实际数据（legacy QBank 工程，
+ *   其 shared/question.schema.json / shared/validate.js 未随本仓库迁移）。
+ *   本仓库内的唯一权威是 src/utils/validate.ts + src-tauri 侧写入校验。
  */
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';

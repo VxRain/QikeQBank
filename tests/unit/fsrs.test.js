@@ -1,5 +1,5 @@
 /**
- * fsrs.js 回归测试（node:test，无第三方依赖）：
+ * fsrs.ts 回归测试（node:test，无第三方依赖）：
  *  - 四键 grade→Rating 映射；非法 grade 抛错
  *  - cardFromRow↔toRow 往返（Date↔ISO、state、空 last_reviewed_at）
  *  - toLog 只存有效字段（废弃 elapsed_days 不存）
