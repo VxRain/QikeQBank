@@ -24,7 +24,10 @@
  */
 
 export const SESSION_VERSION = 1
-export const SESSION_MODES = Object.freeze(['practice', 'review', 'exam'])
+export const SESSION_MODES = Object.freeze(['practice', 'review', 'exam'] as const)
+
+/** 会话模式（由 SESSION_MODES 推导，避免常量与类型两处漂移） */
+export type SessionMode = (typeof SESSION_MODES)[number]
 
 /** 本轮统计（含完成后的得分率 rate，仅 rounds[] 里带） */
 export interface SessionRound {
@@ -71,12 +74,15 @@ export interface SessionExtra {
 const KEY_PREFIX = 'qbank.session.v1.'
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000 // 超过 24h 的快照视为过期（避免"继续上次"弹到上周的会话）
 
-const timers = {}
-const pending = {}
+/** 防抖句柄：浏览器下是 number，Node（单测）下是带 unref() 的 Timeout 对象 */
+type TimerHandle = ReturnType<typeof setTimeout>
+/** 模式 → 计时器 / 待写快照。键就是 mode，故用 Record 提供索引签名 */
+const timers: Record<string, TimerHandle | null> = {}
+const pending: Record<string, Record<string, unknown> | null> = {}
 
 /* ------------------------------- 基础工具 ------------------------------- */
 
-function storage() {
+function storage(): Storage | null {
   try {
     if (typeof sessionStorage === 'undefined') return null
     return sessionStorage
@@ -85,28 +91,44 @@ function storage() {
   }
 }
 
-function storageKey(mode) {
+function storageKey(mode: string) {
   return `${KEY_PREFIX}${mode}`
 }
 
-function isMode(mode) {
-  return SESSION_MODES.includes(mode)
+/** 是否合法模式（同时把 unknown 收窄成 SessionMode，后续 storageKey 等处不必再断言） */
+function isMode(mode: unknown): mode is SessionMode {
+  return typeof mode === 'string' && (SESSION_MODES as readonly string[]).includes(mode)
 }
 
-const asInt = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : fallback)
-const asStr = (v) => (typeof v === 'string' ? v : '')
+const asInt = (v: unknown, fallback = 0): number => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : fallback)
+const asStr = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/** 是否纯对象（快照里的 answers / extra 只接受对象，数组不算） */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/**
+ * 会话里的题目项（练习/复习/模考各自的 item 本模块只读这三个字段）。
+ * 材料子题才有 isChild/parent；普通题只有 q。
+ */
+export interface SessionItemLike {
+  isChild?: boolean
+  parent?: { id?: string } | null
+  q?: { id?: string } | null
+}
 
 /** 本轮作答项 key：材料子题 `<母题id>#<子题id>`，普通题 `<id>` */
-export function itemKeyOf(item) {
+export function itemKeyOf(item: SessionItemLike | null | undefined): string {
   if (!item) return ''
   if (item.isChild && item.parent && item.q) return `${item.parent.id}#${item.q.id}`
   return item.q?.id || ''
 }
 
 /** 从 keys 里抽出需要重拉的母题 id（去重、保序） */
-export function parentIdsOf(keys) {
-  const out = []
-  const seen = new Set()
+export function parentIdsOf(keys: readonly unknown[] | null | undefined): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
   for (const k of keys || []) {
     const id = String(k || '').split('#')[0]
     if (!id || seen.has(id)) continue
@@ -116,11 +138,24 @@ export function parentIdsOf(keys) {
   return out
 }
 
-function normalizeRound(r) {
+/** 快照里 round / rounds[] 的原始形状（来自 sessionStorage 的 JSON，逐字段判型后再用） */
+interface RoundLike {
+  total?: unknown
+  correct?: unknown
+  wrongKeys?: unknown
+  ms?: unknown
+  rate?: unknown
+}
+
+function normalizeRound(raw: unknown): SessionRound {
+  const r = raw as RoundLike | null | undefined
+  const rawWrongKeys = r?.wrongKeys
   return {
     total: Math.max(0, asInt(r?.total)),
     correct: Math.max(0, asInt(r?.correct)),
-    wrongKeys: Array.isArray(r?.wrongKeys) ? r.wrongKeys.filter((k) => typeof k === 'string' && k) : [],
+    wrongKeys: Array.isArray(rawWrongKeys)
+      ? rawWrongKeys.filter((k: unknown): k is string => typeof k === 'string' && !!k)
+      : [],
     ms: Math.max(0, asInt(r?.ms))
   }
 }
@@ -128,19 +163,22 @@ function normalizeRound(r) {
 /**
  * 规范化快照：结构不对就返回 null（宁可重开，也不拿半截数据恢复）。
  */
-export function normalizeSnapshot(raw: unknown, mode?: string) {
+export function normalizeSnapshot(raw: unknown, mode?: string): SessionSnapshot | null {
   if (!raw || typeof raw !== 'object') return null
   // raw 来自 localStorage JSON：逐字段判型后再读（下面每个字段都有独立兜底）
   const r = raw as Record<string, unknown>
   if (asInt(r.v) !== SESSION_VERSION) return null
   if (mode && r.mode !== mode) return null
   if (!isMode(r.mode)) return null
-  const keys = Array.isArray(r.keys) ? r.keys.filter((k) => typeof k === 'string' && k) : []
-  if (!keys.length) return null
-  const answers = r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers) ? r.answers : {}
-  const rounds = Array.isArray(r.rounds)
-    ? r.rounds.map((r) => ({ ...normalizeRound(r), rate: Math.max(0, Math.min(100, asInt(r?.rate))) }))
+  const keys = Array.isArray(r.keys)
+    ? r.keys.filter((k: unknown): k is string => typeof k === 'string' && !!k)
     : []
+  if (!keys.length) return null
+  const answers: Record<string, unknown> = isPlainObject(r.answers) ? r.answers : {}
+  const rounds: SessionRound[] = Array.isArray(r.rounds)
+    ? r.rounds.map((x: RoundLike) => ({ ...normalizeRound(x), rate: Math.max(0, Math.min(100, asInt(x?.rate))) }))
+    : []
+  const extra: SessionExtra = isPlainObject(r.extra) ? (r.extra as SessionExtra) : {}
   return {
     v: SESSION_VERSION,
     mode: r.mode,
@@ -152,7 +190,7 @@ export function normalizeSnapshot(raw: unknown, mode?: string) {
     rounds,
     startedAt: asInt(r.startedAt) || Date.now(),
     updatedAt: asInt(r.updatedAt) || Date.now(),
-    extra: r.extra && typeof r.extra === 'object' && !Array.isArray(r.extra) ? r.extra : {}
+    extra
   }
 }
 
@@ -161,10 +199,10 @@ export function normalizeSnapshot(raw: unknown, mode?: string) {
 /**
  * 读取快照。结构不符、版本不符、过期，一律返回 null。
  */
-export function load(mode: string, opts: { ttlMs?: number; now?: number } = {}) {
+export function load(mode: string, opts: { ttlMs?: number; now?: number } = {}): SessionSnapshot | null {
   const s = storage()
   if (!s || !isMode(mode)) return null
-  let raw
+  let raw: unknown
   try {
     const text = s.getItem(storageKey(mode))
     if (!text) return null
@@ -203,7 +241,7 @@ export function save(mode: string, snap: unknown) {
 }
 
 /** 防抖保存（连续输入时最多每 delay 毫秒写一次） */
-export function scheduleSave(mode, snap, delay = 400) {
+export function scheduleSave(mode: string, snap: Record<string, unknown>, delay = 400) {
   if (!isMode(mode)) return
   pending[mode] = { ...snap, mode, v: SESSION_VERSION }
   if (timers[mode]) clearTimeout(timers[mode])
@@ -213,12 +251,16 @@ export function scheduleSave(mode, snap, delay = 400) {
     pending[mode] = null
     if (p) save(mode, p)
   }, delay)
-  // node 环境下别把进程挂住
-  if (timers[mode] && typeof timers[mode].unref === 'function') timers[mode].unref()
+  // node 环境下别把进程挂住（浏览器下 setTimeout 返回 number，没有 unref）
+  //
+  // 与 stores/formDraft.ts 同写法：`unknown` + `'unref' in handle` 是 TS 原生收窄，
+  // 既不需要 @types/node，也不用 any 把「到底有没有这个方法」变成不检查。
+  const handle: unknown = timers[mode]
+  if (handle && typeof handle === 'object' && 'unref' in handle && typeof handle.unref === 'function') handle.unref()
 }
 
 /** 把待写快照立刻落盘（离开页面 / 路由切换 / 关闭前调用） */
-export function flush(mode) {
+export function flush(mode: string) {
   if (!isMode(mode)) return null
   if (timers[mode]) {
     clearTimeout(timers[mode])
@@ -229,7 +271,7 @@ export function flush(mode) {
   return p ? save(mode, p) : null
 }
 
-export function clear(mode) {
+export function clear(mode: string) {
   if (timers[mode]) {
     clearTimeout(timers[mode])
     timers[mode] = null
@@ -244,7 +286,7 @@ export function clear(mode) {
   }
 }
 
-export function has(mode) {
+export function has(mode: string) {
   return !!load(mode)
 }
 
@@ -260,8 +302,11 @@ export function clearAll() {
  * curIdx 收敛到有效范围。返回新的快照与缺失 key 列表（供 UI 提示）。
  * @param availableKeys 恢复后真实存在的 key（顺序与快照一致）
  */
-export function clampSnapshot(snap: SessionSnapshot | null | undefined, availableKeys: string[] | null | undefined) {
-  if (!snap) return { snapshot: null, missing: [] as string[] }
+export function clampSnapshot(
+  snap: SessionSnapshot | null | undefined,
+  availableKeys: string[] | null | undefined
+): { snapshot: SessionSnapshot | null; missing: string[] } {
+  if (!snap) return { snapshot: null, missing: [] }
   const available = new Set(availableKeys || [])
   const keys = (snap?.keys || []).filter((k) => available.has(k))
   const missing = (snap?.keys || []).filter((k) => !available.has(k))
@@ -276,7 +321,7 @@ export function clampSnapshot(snap: SessionSnapshot | null | undefined, availabl
       if (j >= 0) { curIdx = j; break }
     }
   }
-  const answers = {}
+  const answers: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(snap.answers || {})) {
     if (available.has(k)) answers[k] = v
   }
@@ -294,7 +339,7 @@ export function clampSnapshot(snap: SessionSnapshot | null | undefined, availabl
 }
 
 /** 已作答/已浏览进度（给「继续上次（第 X / Y）」提示用） */
-export function progressOf(snap) {
+export function progressOf(snap: SessionSnapshot | null | undefined): { index: number; total: number } {
   if (!snap) return { index: 0, total: 0 }
   return { index: Math.min(snap.curIdx + 1, snap.keys.length), total: snap.keys.length }
 }

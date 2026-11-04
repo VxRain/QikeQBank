@@ -201,6 +201,16 @@ export const PAGE_ALIASES = Object.freeze({
   '/review': '复习 复习计划 到期'
 })
 
+/**
+ * 别称表的动态查表视图。
+ *
+ * 上面的导出保持「字面量键」的精确类型（写错键名能报错，守卫测试也遍历其键）；
+ * 但这里要按路由表里的**任意 string ** path 查表，字面量键类型不允许用 string 索引
+ * （TS7053）。另挂一个 `Record<string, string>` 视图而不是改导出类型：
+ * 导出签名保持原样，也不用类型断言。运行时是同一个对象，不产生拷贝。
+ */
+const PAGE_ALIAS_LOOKUP: Readonly<Record<string, string>> = PAGE_ALIASES
+
 /** 结果分组顺序（面板渲染顺序 + 键盘遍历顺序，两处共用） */
 export const GROUP_ORDER = Object.freeze([
   Object.freeze({ kind: 'question', label: '试题' }),
@@ -222,7 +232,7 @@ export function loadRecent(storage: Storage | undefined = globalThis.localStorag
     if (!raw) return []
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
-    const out = []
+    const out: string[] = []
     for (const v of arr) {
       const kw = typeof v === 'string' ? normalizeKeyword(v) : ''
       if (kw && !out.includes(kw)) out.push(kw)
@@ -236,7 +246,7 @@ export function loadRecent(storage: Storage | undefined = globalThis.localStorag
 
 /** 写最近搜索：写失败（隐私模式 / 配额）静默忽略，不能阻断搜索 */
 export function saveRecent(list: unknown[] | null | undefined, storage: Storage | undefined = globalThis.localStorage): string[] {
-  const clean = []
+  const clean: string[] = []
   for (const v of list || []) {
     const kw = normalizeKeyword(v)
     if (kw && !clean.includes(kw)) clean.push(kw)
@@ -309,12 +319,17 @@ export function buildPageResults(
 ): SearchItem[] {
   const needle = normalizeKeyword(kw).toLowerCase()
   if (!needle) return []
-  const out = []
+  /**
+   * 页面行的 order 恒为数字（`meta.nav.order ?? 99`），单独收窄成本地行类型：
+   * `SearchItem.order` 是 `number | string`（设置分组把分区标题当 order 用），
+   * 直接 `SearchItem[]` 会让下面的数值排序变成 `number|string` 相减。
+   */
+  const out: Array<SearchItem & { order: number }> = []
   for (const r of routes || []) {
     const path = r?.path
     const title = r?.meta?.title
     if (!path || !title || path.includes(':')) continue
-    const alias = PAGE_ALIASES[path] || ''
+    const alias = PAGE_ALIAS_LOOKUP[path] || ''
     const hay = `${title} ${alias} ${path}`.toLowerCase()
     // 多个关键词按 AND 匹配（与 registry.matchItem 同语义，用户不必记全名）
     if (!needle.split(' ').every((part) => hay.includes(part))) continue
@@ -348,7 +363,7 @@ export function buildSettingResults(
 ): SearchItem[] {
   const needle = normalizeKeyword(kw)
   if (!needle) return []
-  const out = []
+  const out: SearchItem[] = []
   for (const section of sections || []) {
     for (const item of section?.items || []) {
       if (typeof match === 'function' && !match(item, section, needle)) continue
@@ -394,7 +409,7 @@ export function buildGroups({
 
 /** 扁平行 = 所有分组项按分组顺序拼接（「查看全部」单列在最后，见 buildRows） */
 export function buildRows(opts: BuildRowsOpts = {}): SearchItem[] {
-  const rows = []
+  const rows: SearchItem[] = []
   for (const g of buildGroups(opts)) {
     for (const item of g.items) rows.push(item)
   }

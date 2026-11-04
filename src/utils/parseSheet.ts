@@ -27,22 +27,73 @@ import {
 // 列下标（A=0）：ID0 题目1 题型2 分数3 难度4 选项A-E 5..9 答案10 解析11
 const C = { ID: 0, STEM: 1, TYPE: 2, SCORE: 3, DIFF: 4, OPT_A: 5, OPT_E: 9, ANSWER: 10, ANALYSIS: 11 }
 
-const cell = (row, i) => {
+/** SheetJS `sheet_to_json(header:1, defval:null)` 里的单元格：表格能出现的标量值 */
+type SheetCell = string | number | boolean | Date | null | undefined
+/** 表格一行 */
+type SheetRow = ReadonlyArray<SheetCell>
+/** 按数字下标取格的形状（整行数组与 `{ 0: cell }` 单格对象共用） */
+type CellRow = { readonly [i: number]: SheetCell }
+/** 分值/难度的原始值：数字单元格或数字文本 */
+type ScoreRaw = string | number | null | undefined
+
+/**
+ * 题型表按 string 索引取用：索引键来自表格文本（不可穷举），
+ * 查不到时照旧是 undefined —— 与直接索引字面量键表的运行期行为完全一致。
+ */
+const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, string>>
+/** key → 规范短名（缺键时调用方 `|| typeKey` 兜底，与改造前一致） */
+const TYPE_LABEL_OF = TYPE_LABELS as Readonly<Record<string, string>>
+
+const cell = (row: CellRow, i: number): string => {
   const v = row[i]
   if (v == null) return ''
   return String(v).replace(/\r\n/g, '\n').trim()
 }
-const numOr = (raw, fb, min, max) => {
+const numOr = (raw: ScoreRaw, fb: number, min: number, max: number): number => {
   const s = String(raw ?? '').trim()
   if (!s) return fb
   const n = Number(s)
   if (!Number.isFinite(n)) return fb
   return Math.min(max, Math.max(min, n))
 }
-const stripSubNum = (s) => String(s || '').replace(/^[(（]?\d{1,3}[)）]?[.、)]?\s*/, '')
+const stripSubNum = (s: string | null | undefined): string => String(s || '').replace(/^[(（]?\d{1,3}[)）]?[.、)]?\s*/, '')
 export { stripSubNum }
 
-export function applyScoreDiff(q, typeKey, scoreRaw, diffRaw) {
+/**
+ * 一个块里的题目对象（`ParseBlock.question` 的非空形态）。
+ * 保留宽松索引签名：分数/难度等公共字段由 `applyScoreDiff` 事后补写，
+ * 各题型的私有字段（options/answer/blanks…）形状不同。
+ */
+export interface ParseQuestion {
+  type: string
+  stem?: unknown
+  /** 材料子题（仅材料父题有；非材料题不写这个键） */
+  children?: Array<Record<string, unknown>>
+  analysis?: unknown
+  score?: number | null
+  difficulty?: number | null
+  [k: string]: unknown
+}
+
+/** buildOne 的入参（表格一行拆出来的题面片段） */
+export interface BuildOneInput {
+  type: string
+  typeLabel: string
+  stemText: string
+  optTexts: string[]
+  answerRaw: string | null | undefined
+  analysisRaw: string | null | undefined
+}
+
+/**
+ * 单题装配结果：成功带 question + stemText，失败只带 error。
+ * 形状与 parseTemplate 的 BuildResult 一致 —— `if (r.error)` 的真值判断就能收窄两个分支。
+ */
+type BuildResult =
+  | { question: ParseQuestion; stemText: string; error?: undefined }
+  | { error: string; question?: undefined; stemText?: undefined }
+
+export function applyScoreDiff(q: ParseQuestion, typeKey: string, scoreRaw: ScoreRaw, diffRaw: ScoreRaw): void {
   if (typeKey === 'judge') {
     if (!q.score) q.score = numOr(scoreRaw, 2, 0.5, 1000)
   } else if (!q.score) {
@@ -51,8 +102,8 @@ export function applyScoreDiff(q, typeKey, scoreRaw, diffRaw) {
   if (!q.difficulty) q.difficulty = numOr(diffRaw, 2, 1, 5)
 }
 
-export function buildOne({ type, typeLabel, stemText, optTexts, answerRaw, analysisRaw }, ctx) {
-  const err = (msg) => `${ctx}：${msg}`
+export function buildOne({ type, typeLabel, stemText, optTexts, answerRaw, analysisRaw }: BuildOneInput, ctx: string): BuildResult {
+  const err = (msg: string): string => `${ctx}：${msg}`
   if (!stemText) return { error: err(`【${typeLabel}】题干为空`) }
   const analysis = analysisRaw ? textToDoc(analysisRaw) : null
 
@@ -130,21 +181,16 @@ export interface ParseBlock {
   typeLabel: string
   stemText: string
   raw: string
-  question: {
-    type: string
-    stem?: unknown
-    children: Array<Record<string, unknown>>
-    analysis?: unknown
-    score?: number | null
-    difficulty?: number | null
-    [k: string]: unknown
-  } | null
+  question: ParseQuestion | null
   error: string | null
 }
 
-export function parseSheetRows(rows) {
-  const blocks = []
-  const all = Array.isArray(rows) ? rows : []
+/** pushSingle 的选项（默认值留在解构里，与改造前逐字一致） */
+type PushSingleOptions = { stripNum?: boolean; attachTo?: ParseBlock | null }
+
+export function parseSheetRows(rows: ReadonlyArray<SheetRow> | null | undefined): { blocks: ParseBlock[] } {
+  const blocks: ParseBlock[] = []
+  const all: ReadonlyArray<SheetRow> = Array.isArray(rows) ? rows : []
   // 表头定位：首个含 题目/题型 单元格的行（模板顶部可能有标题行）；找不到直接报错
   let headIdx = -1
   for (let i = 0; i < all.length; i++) {
@@ -158,23 +204,27 @@ export function parseSheetRows(rows) {
     return { blocks: [{ index: 1, type: '', typeLabel: '', stemText: '', raw: '', question: null, error: '未找到表头行（须含 ID/题目/题型/答案列）' }] }
   }
   const data = all.slice(headIdx + 1)
-  const rawRow = (row) => row.map((c) => cell({ 0: c }, 0)).join(' | ')
+  const rawRow = (row: SheetRow): string => row.map((c) => cell({ 0: c }, 0)).join(' | ')
   // 材料父题占位：子行按引用追加，天然保持行序
   let openMaterial: { intId: string; item: ParseBlock; rowIdx: number } | null = null
 
-  const pushSingle = (rowIdx, row, { stripNum = false, attachTo = null } = {}) => {
+  const pushSingle = (
+    rowIdx: number,
+    row: SheetRow,
+    { stripNum = false, attachTo = null }: PushSingleOptions = {}
+  ): ParseQuestion | null => {
     const index = blocks.length + 1
     const ctx = `行 ${rowIdx}`
     const raw = rawRow(row)
     const typeRaw = cell(row, C.TYPE)
-    const typeKey = TYPE_ALIASES[typeRaw]
+    const typeKey = ALIAS_TO_TYPE[typeRaw]
     const typeLabel = typeRaw || ''
     if (!typeKey || typeKey === 'material') {
       blocks.push({ index, type: '', typeLabel, stemText: '', raw, question: null, error: `${ctx}：题型须为 单选/多选/判断/填空/简答${attachTo ? '（子题不能是材料）' : ''}` })
       return null
     }
     const stemText = stripNum ? stripSubNum(cell(row, C.STEM)) : cell(row, C.STEM)
-    const optTexts = []
+    const optTexts: string[] = []
     for (let c = C.OPT_A; c <= C.OPT_E; c++) {
       const t = cell(row, c)
       if (t) optTexts.push(t)
@@ -195,7 +245,7 @@ export function parseSheetRows(rows) {
     const r = buildOne(
       {
         type: typeKey,
-        typeLabel: TYPE_LABELS[typeKey] || typeKey,
+        typeLabel: TYPE_LABEL_OF[typeKey] || typeKey,
         stemText,
         optTexts,
         answerRaw: cell(row, C.ANSWER),
@@ -243,7 +293,7 @@ export function parseSheetRows(rows) {
     }
     openMaterial = null
     const typeRaw = cell(row, C.TYPE)
-    const typeKey = TYPE_ALIASES[typeRaw]
+    const typeKey = ALIAS_TO_TYPE[typeRaw]
     if (!typeKey) {
       blocks.push({ index: blocks.length + 1, type: '', typeLabel: typeRaw, stemText: '', raw: rawRow(row), question: null, error: `行 ${rowIdx}：未知题型“${typeRaw}”（须为 单选/多选/判断/填空/简答/材料）` })
       return
@@ -258,7 +308,7 @@ export function parseSheetRows(rows) {
       blocks.push({ index, type: 'material', typeLabel: '材料', stemText: '', raw: rawRow(row), question: null, error: `行 ${rowIdx}：【材料】题干为空` })
       return
     }
-    const item = {
+    const item: ParseBlock = {
       index,
       type: 'material',
       typeLabel: '材料',
