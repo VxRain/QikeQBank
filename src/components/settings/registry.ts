@@ -17,17 +17,110 @@
  *     unit       可选，number 单位（秒 / 天 / 次）
  *     min/max/integer/invalidMsg   number 校验
  *     decimals   可选，number 小数位（默认整数）
+ *     step       可选，number 步进
  *     options    [{ value, label }]  select / segmented 选项
  *     normalize(text) → { ok, value } | { ok: false, msg }   text 校验
  *     placeholder / width           输入框占位与宽度
  *     component / props             custom 类型渲染的组件
+ *
+ * ── .js → .ts（2026-11）──
+ * 原文件用 JSDoc 描述结构。此前 21 条 noImplicitAny 全部来自
+ * `set: (v) => …` / `normalize: (text) => …` / `matchItem(item, section, q)`
+ * 这些回调的参数——没有上下文类型时一律隐式 any。
+ * 迁 .ts 后把上述结构写成 `SettingItem` / `SettingSection` interface，
+ * 回调参数即由上下文推断，无需逐个注解。
+ *
+ * `type` 用联合字面量而非 `string`：`SettingRow.vue` 里 `item.type === 'number'`
+ * 这类分支因此能收窄；`props` 用 `Record<string, unknown>`（v-bind 透传给组件）。
  */
-import { settings, normalizeSteps, validateSteps } from '@/stores/settings.ts'
-import { clearBankFilters } from '@/stores/bank.ts'
-import S3SyncPanel from '@/components/S3SyncPanel.vue'
-import AboutPanel from '@/components/settings/AboutPanel.vue'
+import { settings, normalizeSteps, validateSteps } from '../../stores/settings.ts'
+import { clearBankFilters } from '../../stores/bank.ts'
+import S3SyncPanel from '../S3SyncPanel.vue'
+import AboutPanel from './AboutPanel.vue'
+import type { Component } from 'vue'
 
-const RETENTION_OPTIONS = [
+/** 设置项的控件类型 */
+export type SettingType = 'switch' | 'number' | 'text' | 'select' | 'segmented' | 'custom' | 'note'
+
+/** select / segmented 的选项 */
+export interface SettingOption {
+  value: string | number
+  label: string
+}
+
+/**
+ * `normalize()` 的返回。
+ *
+ * `value` 与 `msg` 都写成可选、且不靠判别联合收窄：项目 `tsconfig` 是
+ * `strict:false`（无 `strictNullChecks`），判别联合在 `if (!r.ok)` /
+ * 三目里**不会收窄**，写窄了反而让 `r.msg` / `r.steps` 在另一侧报 TS2339。
+ *
+ * 运行期语义不变：`ok:true` 时必有 `value`、`ok:false` 时必有 `msg`
+ * （由 `validateSteps` 与调用点保证）。
+ */
+export interface NormalizeResult {
+  ok: boolean
+  /** 成功时的规整文本 */
+  value?: string
+  /** 失败时的提示文案 */
+  msg?: string
+}
+
+/** 一个设置项 */
+export interface SettingItem {
+  key: string
+  title: string
+  desc?: string
+  keywords?: string
+  type: SettingType
+  /** 读当前值（响应式） */
+  value?: () => unknown
+  /**
+   * 写值。
+   *
+   * 参数用 `boolean | number | string` 而非具体的单种：`SettingItem` 是一个
+   * 异构数组（`items: SettingItem[]`），`set` 的具体入参无法从外部收窄。
+   * 而 `SettingRow.vue` 的每个调用点确实只传对应控件的值（switch 传 boolean、
+   * number 传 number、select/segmented 传 `string | number`），实际调用不会被放宽影响。
+   */
+  set?: (v: boolean | number | string) => void
+  /** 返回 false 时本行隐藏 */
+  visible?: () => boolean
+  /** visible() 为 false 的因由，搜索态下提示「需先开启 …」 */
+  dependsOn?: string
+  /** 隐藏时的自定义提示（SettingRow 的 `hiddenHint`） */
+  hiddenHint?: string
+  /** 子项缩进 */
+  indent?: boolean
+  /** number 单位（秒 / 天 / 次） */
+  unit?: string
+  min?: number
+  max?: number
+  step?: number
+  integer?: boolean
+  decimals?: number
+  invalidMsg?: string
+  options?: SettingOption[]
+  /** text 校验：成功返回规整后的文本 */
+  normalize?: (text: string) => NormalizeResult
+  placeholder?: string
+  width?: string
+  /** custom 类型渲染的组件 */
+  component?: Component
+  /** custom 组件透传的 props */
+  props?: Record<string, unknown>
+}
+
+/** 一个设置分区 */
+export interface SettingSection {
+  id: string
+  title: string
+  icon: string
+  desc?: string
+  items: SettingItem[]
+}
+
+const RETENTION_OPTIONS: SettingOption[] = [
   { value: 0.75, label: '0.75 · 宽松' },
   { value: 0.8, label: '0.80 · 较轻' },
   { value: 0.85, label: '0.85 · 适中' },
@@ -35,7 +128,7 @@ const RETENTION_OPTIONS = [
   { value: 0.95, label: '0.95 · 严格' }
 ]
 
-export const SETTINGS_SECTIONS = [
+export const SETTINGS_SECTIONS: SettingSection[] = [
   {
     id: 'general',
     title: '常规',
@@ -49,7 +142,7 @@ export const SETTINGS_SECTIONS = [
         keywords: '题型 单选 多选 判断 选项 答案 解析 复用 重置',
         type: 'switch',
         value: () => settings.keepContentOnTypeChange,
-        set: (v) => {
+        set: (v: boolean) => {
           settings.keepContentOnTypeChange = v
         }
       },
@@ -60,7 +153,7 @@ export const SETTINGS_SECTIONS = [
         keywords: '题库 下拉 筛选 过滤 记忆 归属',
         type: 'switch',
         value: () => settings.rememberBankFilter,
-        set: (v) => {
+        set: (v: boolean) => {
           settings.rememberBankFilter = v
           // 关闭时顺手清掉各页记忆，下次全回默认全部题库
           if (!v) clearBankFilters()
@@ -81,7 +174,7 @@ export const SETTINGS_SECTIONS = [
         keywords: '自动 下一题 连刷 节奏 停留',
         type: 'switch',
         value: () => settings.autoNextOnCorrect,
-        set: (v) => {
+        set: (v: boolean) => {
           settings.autoNextOnCorrect = v
         }
       },
@@ -102,7 +195,7 @@ export const SETTINGS_SECTIONS = [
         visible: () => settings.autoNextOnCorrect,
         dependsOn: '答对自动下一题',
         value: () => settings.autoNextDelayMs / 1000,
-        set: (v) => {
+        set: (v: number) => {
           settings.autoNextDelayMs = Math.round(v * 1000)
         }
       }
@@ -122,7 +215,7 @@ export const SETTINGS_SECTIONS = [
         type: 'select',
         options: RETENTION_OPTIONS,
         value: () => settings.fsrs.requestRetention,
-        set: (v) => {
+        set: (v: string | number) => {
           settings.fsrs.requestRetention = Number(v)
         }
       },
@@ -134,12 +227,12 @@ export const SETTINGS_SECTIONS = [
         type: 'text',
         placeholder: '1m,10m',
         width: 'w-[120px]',
-        normalize: (text) => {
+        normalize: (text: string): NormalizeResult => {
           const r = validateSteps(text)
-          return r.ok ? { ok: true, value: r.steps.join(',') } : r
+          return r.ok ? { ok: true, value: r.steps.join(',') } : { ok: false, msg: r.msg }
         },
         value: () => settings.fsrs.learningSteps.join(','),
-        set: (text) => {
+        set: (text: string) => {
           settings.fsrs.learningSteps = normalizeSteps(text, ['1m', '10m'])
         }
       },
@@ -151,12 +244,12 @@ export const SETTINGS_SECTIONS = [
         type: 'text',
         placeholder: '10m',
         width: 'w-[120px]',
-        normalize: (text) => {
+        normalize: (text: string): NormalizeResult => {
           const r = validateSteps(text)
-          return r.ok ? { ok: true, value: r.steps.join(',') } : r
+          return r.ok ? { ok: true, value: r.steps.join(',') } : { ok: false, msg: r.msg }
         },
         value: () => settings.fsrs.relearningSteps.join(','),
-        set: (text) => {
+        set: (text: string) => {
           settings.fsrs.relearningSteps = normalizeSteps(text, ['10m'])
         }
       },
@@ -173,7 +266,7 @@ export const SETTINGS_SECTIONS = [
         width: 'w-[86px]',
         invalidMsg: '最大间隔请输入 30～36500 的整数（天）',
         value: () => settings.fsrs.maximumInterval,
-        set: (v) => {
+        set: (v: number) => {
           settings.fsrs.maximumInterval = Math.round(v)
         }
       },
@@ -184,7 +277,7 @@ export const SETTINGS_SECTIONS = [
         keywords: '抖动 随机 偏移 fuzz 分散',
         type: 'switch',
         value: () => settings.fsrs.enableFuzz,
-        set: (v) => {
+        set: (v: boolean) => {
           settings.fsrs.enableFuzz = v
         }
       },
@@ -199,7 +292,7 @@ export const SETTINGS_SECTIONS = [
           { value: 'wrong-only', label: '仅错题' }
         ],
         value: () => settings.fsrs.practiceScope,
-        set: (v) => {
+        set: (v: string) => {
           settings.fsrs.practiceScope = v
         }
       }
@@ -224,7 +317,7 @@ export const SETTINGS_SECTIONS = [
         width: 'w-[64px]',
         invalidMsg: '请输入 0～10 的整数（0 = 永不自动移出）',
         value: () => settings.wrongLeaveAfterCorrect,
-        set: (v) => {
+        set: (v: number) => {
           settings.wrongLeaveAfterCorrect = Math.round(v)
         }
       }
@@ -243,7 +336,7 @@ export const SETTINGS_SECTIONS = [
         keywords: '自动 同步 备份 后台 定时 云端 多设备 自动上传 自动下载',
         type: 'switch',
         value: () => settings.autoSyncEnabled,
-        set: (v) => {
+        set: (v: boolean) => {
           settings.autoSyncEnabled = v
         }
       },
@@ -264,7 +357,7 @@ export const SETTINGS_SECTIONS = [
         visible: () => settings.autoSyncEnabled,
         dependsOn: '自动同步',
         value: () => settings.autoSyncIntervalMin,
-        set: (v) => {
+        set: (v: number) => {
           settings.autoSyncIntervalMin = Math.round(v)
         }
       },
@@ -294,13 +387,41 @@ export const SETTINGS_SECTIONS = [
   }
 ]
 
-/** 一个设置项是否可见（未声明 visible() 即恒可见） */
-export function isItemVisible(item) {
+/**
+ * 宽松的设置项形状：只保证 `isItemVisible` / `matchItem` 真正读的字段。
+ *
+ * 为什么需要：`SettingRow.vue` / `SettingsDialog.vue` 的 props 来自
+ * `defineProps({ item: { type: Object } })`，被推断成 `Record<string, any>`；
+ * 两个 SFC 未加 `lang="ts"`，写不了精确 prop 类型。把这些函数的入参
+ * 收紧成 `SettingItem` 会报 TS2345（`any` 与具体 interface 无公共属性）。
+ *
+ * 注意不写索引签名：写了会要求源类型也带，反而卡死赋值。
+ */
+export interface SettingItemLike {
+  title?: string
+  desc?: string
+  keywords?: string
+  unit?: string
+  visible?: () => boolean
+  options?: Array<{ label?: string }>
+}
+
+/**
+ * 一个设置项是否可见（未声明 visible() 即恒可见）。
+ *
+ * 入参用 `SettingItemLike` 而非 `SettingItem`，理由见上方注释。
+ * 函数体只读 `visible` 一个字段，放宽不损失保护。
+ */
+export function isItemVisible(item: SettingItemLike): boolean {
   return typeof item.visible === 'function' ? !!item.visible() : true
 }
 
 /** 搜索匹配：标题 / 说明 / 分类名 / 关键词 / 单位；空查询视为全匹配 */
-export function matchItem(item, section, q) {
+export function matchItem(
+  item: SettingItemLike,
+  section: { title?: string; desc?: string } | undefined,
+  q: string
+): boolean {
   if (!q) return true
   const needle = q.trim().toLowerCase()
   if (!needle) return true

@@ -1,6 +1,6 @@
 /**
  * 设置弹窗（左右分栏 + 全局搜索）
- * 布局：左侧分类栏 / 右侧内容区，内容全部由 registry.js 驱动，
+ * 布局：左侧分类栏 / 右侧内容区，内容全部由 registry.ts 驱动，
  * 设置项涨到几十条时只需在 registry 里加 item，分类栏与搜索会自动跟随。
  */
 <template>
@@ -120,7 +120,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import SettingRow from './SettingRow.vue'
-import { SETTINGS_SECTIONS, isItemVisible, matchItem } from './registry.js'
+import { SETTINGS_SECTIONS, isItemVisible, matchItem } from './registry.ts'
 import { ui, confirmDialog, toast } from '@/stores/ui.ts'
 import { resetSettingsToDefault } from '@/stores/settings.ts'
 

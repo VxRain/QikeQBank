@@ -83,7 +83,25 @@ export function normalizeSteps(v: unknown, fallback: readonly StepUnit[]): StepU
   return out.length ? out : [...fallback]
 }
 // 步长文本校验：给设置页用精确错误提示（normalizeSteps 是静默兜底，不适合直接当反馈）
-export function validateSteps(v: unknown) {
+/**
+ * 步长文本校验：给设置页用精确错误提示（`normalizeSteps` 是静默兜底，不适合当反馈）。
+ *
+ * 返回类型用**可选字段的宽结构**而不是判别联合：项目 `tsconfig` 是
+ * `strict:false`（无 `strictNullChecks`），判别联合在 `if (!r.ok)` 与三目里
+ * **不会收窄**，写成 `{ok:false;msg} | {ok:true;steps}` 会让 `r.msg` / `r.steps`
+ * 在另一侧报 TS2339。改用 `ok` + 两个可选字段，两侧都能读。
+ *
+ * 运行期语义不变：`ok:false` 时必有 `msg`，`ok:true` 时必有 `steps`。
+ */
+export interface ValidateStepsResult {
+  ok: boolean
+  /** 失败时的提示文案 */
+  msg?: string
+  /** 成功时的合法步长列表 */
+  steps?: string[]
+}
+
+export function validateSteps(v: unknown): ValidateStepsResult {
   const list = (Array.isArray(v) ? v : String(v ?? '').split(','))
     .map((s) => String(s).trim())
     .filter(Boolean)

@@ -10,7 +10,7 @@
  * 设计取舍：
  * - **纯函数优先**：分组构造 / 键盘移动 / Esc 语义 / 关键词高亮全部是纯函数，
  *   入参只接受普通对象，不依赖 vue、不下发请求 → `node --test` 直接覆盖。
- *   registry.js 会 import .vue（node 无法解析），所以这里**不** import 它，
+ *   registry.ts 会 import .vue（node 无法解析），所以这里**不** import 它，
  *   设置分组由调用方注入 `sections` + `match`（组件传 registry 的 matchItem），
  *   保证全仓库仍只有一套设置搜索逻辑。
  * - **题目结果先 summary**：`questions_list` 传 `summary: true` 只取摘要字段，
@@ -21,7 +21,7 @@
 import { reactive } from 'vue'
 
 /**
- * 设置分区里的一个设置项。形状权威在 components/settings/registry.js，
+ * 设置分区里的一个设置项。形状权威在 components/settings/registry.ts，
  * 那是 .js（未迁移），所以这里只声明「搜索用得到」的部分；
  * 多出来的字段由 registry 自己的 match 函数读取。
  */
@@ -31,7 +31,7 @@ export interface SettingItemLike {
   title?: string
   desc?: string
   category?: string
-  /** 依赖未满足时提示「需先开启 …」（registry.js 真实字段） */
+  /** 依赖未满足时提示「需先开启 …」（registry.ts 真实字段） */
   dependsOn?: string
   // 不写索引签名：写了会要求源类型（registry 的真实 item）也带，反而卡死赋值
 }
@@ -125,7 +125,7 @@ export interface RouteLike {
 export interface SettingSectionLike {
   id: string
   title: string
-  /** 分区内的设置项（形状由 registry.js 定义，本模块只透传给 match/isVisible） */
+  /** 分区内的设置项（形状由 registry.ts 定义，本模块只透传给 match/isVisible） */
   items?: SettingItemLike[]
 }
 
@@ -347,7 +347,7 @@ export function buildPageResults(
 }
 
 /**
- * 设置分组：**复用 registry.js 的 matchItem**，不写第三套搜索逻辑。
+ * 设置分组：**复用 registry.ts 的 matchItem**，不写第三套搜索逻辑。
  *
  * match 由调用方注入（组件传 registry.matchItem）：registry 依赖 .vue 组件，
  * 这里若直接 import 会让本模块无法在 node 下单测。

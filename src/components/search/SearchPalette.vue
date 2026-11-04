@@ -14,7 +14,7 @@
  * - 题目：api/questions.ts 的 list()，首屏 `summary: true`
  * - 题库：stores/bank.ts 已加载的列表
  * - 页面：router 路由表（meta.title + PAGE_ALIASES 别称）
- * - 设置：components/settings/registry.js 的 matchItem / isItemVisible
+ * - 设置：components/settings/registry.ts 的 matchItem / isItemVisible
  */
 <template>
   <Teleport to="body">
@@ -214,7 +214,7 @@ import {
 import { bankStore } from '@/stores/bank.ts'
 import { list as listQuestions, get as getQuestion } from '@/api/questions.ts'
 import { toast } from '@/stores/ui.ts'
-import { SETTINGS_SECTIONS, isItemVisible, matchItem } from '@/components/settings/registry.js'
+import { SETTINGS_SECTIONS, isItemVisible, matchItem } from '@/components/settings/registry.ts'
 import QuestionPreview from '@/components/QuestionPreview.vue'
 import { typeLabel } from '@/constants/questions.ts'
 

@@ -16,7 +16,7 @@ export default {
     'src/components/search/',
     'src/stores/search.ts',
     'src/components/ui/ShortcutsDialog.vue',
-    'src/components/settings/registry.js',
+    'src/components/settings/registry.ts',
     'src/components/settings/SettingsDialog.vue',
     'src/router/index.js',
     'src/App.vue'

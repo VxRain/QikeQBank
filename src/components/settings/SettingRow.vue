@@ -1,6 +1,6 @@
 /**
  * 单个设置行的通用渲染器（switch / number / text / select / segmented / custom / note）
- * 只认 registry.js 里的 item 契约，自身不含任何具体业务，新增设置项无需改本文件
+ * 只认 registry.ts 里的 item 契约，自身不含任何具体业务，新增设置项无需改本文件
  */
 <template>
   <!-- 自定义面板：整块交给组件自己排版 -->
@@ -90,7 +90,7 @@
 import { computed, ref, watch } from 'vue'
 import InfoTip from '@/components/ui/InfoTip.vue'
 import ToggleSwitch from '@/components/ui/ToggleSwitch.vue'
-import { isItemVisible } from './registry.js'
+import { isItemVisible } from './registry.ts'
 import { toast } from '@/stores/ui.ts'
 
 const props = defineProps({

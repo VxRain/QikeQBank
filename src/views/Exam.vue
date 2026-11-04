@@ -381,7 +381,7 @@ import { lettersOf, fmtDurationCn, dedupeShuffle } from '@/utils/questionDisplay
 import { ui, confirmDialog, toast } from '@/stores/ui.ts'
 import { randomUUID } from '@/utils/device.ts'
 import { save as saveSession, scheduleSave, flush as flushSession, load as loadSession, clear as clearSession, parentIdsOf } from '@/stores/session.ts'
-import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.js'
+import { useSessionLeaveNotice } from '@/composables/sessionLeaveNotice.ts'
 import { buildExamDetail, summarizePaper, ratioToGrade } from '@/utils/grading.ts'
 import { gradeQuestion } from '@/utils/gradeQuestion.ts'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'

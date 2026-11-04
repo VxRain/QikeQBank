@@ -4,17 +4,33 @@
  * 全应用只有这一处「继续上次 / 放弃」的文案与清理逻辑：
  * Practice / Review 进入时调用 promptResume(mode)，Exam 的草稿恢复自己控制时机，
  * 但同样走 stores/session.ts 的 load/clear。
+ *
+ * ── .js → .ts（2026-11）──
+ * 原文件用 JSDoc 描述类型，迁移时改为原生类型。`mode` / `reason` 保持 `string`
+ * 而非 `SessionMode`：`session.ts` 的 `load` / `clear` 本身收 `string`（内部
+ * `normalizeSnapshot` 会校验 mode），收窄反而要在调用点加断言。
  */
-import { confirmDialog, toast } from '@/stores/ui.ts'
-import { load, clear, progressOf } from '@/stores/session.ts'
+import { confirmDialog, toast } from '../stores/ui.ts'
+import { load, clear, progressOf } from '../stores/session.ts'
+import type { SessionSnapshot } from '../stores/session.ts'
+
+/** 恢复提示的文案覆盖项 */
+export interface PromptResumeOpts {
+  title?: string
+  okText?: string
+  cancelText?: string
+}
 
 /**
  * 有上次会话就问一句：继续（返回快照）/ 放弃（清掉并返回 null）。
- * @param {'practice'|'review'|'exam'} mode
- * @param {{title?:string, okText?:string, cancelText?:string}} [opts]
- * @returns {Promise<Object|null>}
+ *
+ * @param mode 会话模式（practice / review / exam）
+ * @param opts 文案覆盖
  */
-export async function promptResume(mode, opts = {}) {
+export async function promptResume(
+  mode: string,
+  opts: PromptResumeOpts = {}
+): Promise<SessionSnapshot | null> {
   const snap = load(mode)
   if (!snap) return null
   const { index, total } = progressOf(snap)
@@ -30,7 +46,7 @@ export async function promptResume(mode, opts = {}) {
 }
 
 /** 恢复失败/题目全被删时统一收尾（清快照 + 可选提示） */
-export function discardSession(mode, reason) {
+export function discardSession(mode: string, reason?: string): void {
   clear(mode)
   if (reason) toast(reason, 'info')
 }
