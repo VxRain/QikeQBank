@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { rateOf, buildTrend, trendSummary, buildReviewRows, CHART } =
+const { rateOf, buildTrend, trendSummary, buildReviewRows, enrichReviewItems, CHART } =
   await import('../../src/utils/examTrend.ts')
 
 const s = (id, at, score, full) => ({ exam_id: id, started_at: at, score, full_score: full })
@@ -146,4 +146,100 @@ test('buildReviewRows：填空与简答形态', () => {
 test('空输入不抛错', () => {
   assert.deepEqual(buildReviewRows(null), [])
   assert.deepEqual(buildReviewRows(undefined), [])
+})
+
+/* ══════════════════════════════════════════════════════════════════
+ * enrichReviewItems：材料题子题切换 + 填空正确答案注入
+ *
+ * 这段逻辑原先写在 ExamHistory.vue 里（纯数据整理），迁到 examTrend.ts
+ * 才可能被单测覆盖——SFC 未加 lang="ts"，且一行断言都没法写进组件。
+ * 这里锁的是**回看的正确性**：切错子题 → 显示母题题面 + 裸选项 id；
+ * 不注入正确答案 → 逐空行只有「我的答案」，看不出错在哪。
+ * ══════════════════════════════════════════════════════════════════ */
+
+const materialItem = () => ({
+  record_id: 'r1',
+  question_id: 'q1',
+  answered_at: '2026-03-01T10:00:00.000Z',
+  elapsed_ms: 1200,
+  detail: { type: 'single', child_id: 'q1c2', child_index: 2 },
+  question: {
+    id: 'q1',
+    type: 'material',
+    stem: { type: 'doc', content: [{ t: '母题题面' }] },
+    children: [
+      { id: 'q1c1', type: 'single' },
+      { id: 'q1c2', type: 'multi', answer: { blanks: [{ id: 'b1', answers: ['甲', '乙'] }] } }
+    ]
+  }
+})
+
+test('enrichReviewItems：按 detail.child_id 切到子题，并保留母题标记', () => {
+  const [out] = enrichReviewItems([materialItem()])
+  assert.equal(out.question.id, 'q1c2', '必须切到 detail.child_id 指向的子题')
+  assert.equal(out.question.type, 'multi')
+  assert.deepEqual(out.question._parentStem, { type: 'doc', content: [{ t: '母题题面' }] }, '母题题面要带上（模板提示用）')
+  assert.equal(out.question._parentType, 'material')
+  assert.equal(out.question._childIndex, 2, 'child_index 原样带到 _childIndex')
+})
+
+test('enrichReviewItems：把 question.answer.blanks 的正确答案并进 detail.blanks', () => {
+  const [out] = enrichReviewItems([
+    {
+      ...materialItem(),
+      detail: { child_id: 'q1c2', child_index: 2, blanks: [{ id: 'b1', value: '甲' }] }
+    }
+  ])
+  const b = out.detail.blanks.find((x) => x.id === 'b1')
+  assert.equal(b.value, '甲', '我的作答要保留')
+  assert.deepEqual(b.answers, ['甲', '乙'], '正确答案要注入，否则逐空行看不出错在哪')
+})
+
+test('enrichReviewItems：无 child_id 时不切题（普通题原样返回）', () => {
+  const plain = {
+    record_id: 'r2',
+    question_id: 'q2',
+    detail: { type: 'judge' },
+    question: { id: 'q2', type: 'judge', stem: { type: 'doc' } }
+  }
+  const [out] = enrichReviewItems([plain])
+  assert.equal(out.question.id, 'q2')
+  assert.equal(out.question._parentStem, undefined, '普通题不应被塞母题字段')
+})
+
+test('enrichReviewItems：空输入 / null 返回空数组（不抛）', () => {
+  assert.deepEqual(enrichReviewItems([]), [])
+  assert.deepEqual(enrichReviewItems(null), [])
+  assert.deepEqual(enrichReviewItems(undefined), [])
+})
+
+test('enrichReviewItems：detail 为 null 时不炸，且 child 找不到时保留母题', () => {
+  const [out] = enrichReviewItems([
+    { record_id: 'r3', question_id: 'q3', detail: null, question: { id: 'q3', type: 'single' } }
+  ])
+  assert.equal(out.question.id, 'q3')
+  const [miss] = enrichReviewItems([
+    { ...materialItem(), detail: { child_id: 'nope', child_index: 1 } }
+  ])
+  assert.equal(miss.question.id, 'q1', '子题 id 对不上时不能把题面清空')
+})
+
+test('enrichReviewItems：null/缺失字段原样透传（与迁移前组件实现逐字等价）', () => {
+  // 迁移时曾把 `detail:null` 洗成 `{}`、`question 缺失` 洗成 `null`——
+  // 渲染看不出差别，但会改变下游的 `in` / `=== null` 判定。这里锁死等价性。
+  const cases = [
+    { name: 'detail 为 null', input: { record_id: 'r', question_id: 'q', detail: null, question: { id: 'q' } } },
+    { name: 'detail 缺失', input: { record_id: 'r', question_id: 'q', question: { id: 'q' } } },
+    { name: 'question 为 null', input: { record_id: 'r', question_id: 'q', detail: {}, question: null } },
+    { name: 'question 缺失', input: { record_id: 'r', question_id: 'q', detail: {} } }
+  ]
+  for (const { name, input } of cases) {
+    const [out] = enrichReviewItems([JSON.parse(JSON.stringify(input))])
+    // 逐字段比对「键是否存在」与「值是否为 null」
+    assert.deepEqual(
+      { hasDetail: 'detail' in out, detail: out.detail ?? null, hasQuestion: 'question' in out, question: out.question ?? null },
+      { hasDetail: 'detail' in input, detail: input.detail ?? null, hasQuestion: 'question' in input, question: input.question ?? null },
+      `${name}：字段存在性与 null 语义必须与输入一致`
+    )
+  }
 })

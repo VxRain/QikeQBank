@@ -129,7 +129,7 @@
  */
 import { ref, watch } from 'vue'
 import { examDetail } from '@/api/exam.ts'
-import { buildReviewRows } from '@/utils/examTrend.ts'
+import { buildReviewRows, enrichReviewItems } from '@/utils/examTrend.ts'
 import { renderDoc } from '@/utils/render.ts'
 import { TYPE_FULL_LABELS } from '@/constants/questions.js'
 
@@ -204,31 +204,10 @@ async function load() {
     detail.value = d
     rateText.value = rateOfDetail(d)
     // 填空题的「正确答案」要合到逐空行里；这里把题目答案注入 detail.blanks
-    const enriched = (d.items || []).map((it) => {
-      // 材料题的流水挂在母题 id 上，真正的题面/选项/答案在子题里：
-      // detail.child_id 指向子题，parent_id 指向母题（见 utils/grading.ts buildExamDetail）。
-      // 不在这里切到子题，回看就只会显示母题题面 + 盒内选项 id。
-      const detail = it.detail || {}
-      let q = it.question
-      if (detail.child_id && q?.children) {
-        const child = q.children.find((c) => c && c.id === detail.child_id)
-        if (child) {
-          q = {
-            ...child,
-            // 保留母题标记，模板可据此提示「材料题第 N 问」
-            _parentStem: q.stem,
-            _parentType: q.type,
-            _childIndex: detail.child_index ?? null
-          }
-        }
-      }
-      const blanks = detail.blanks
-      if (Array.isArray(blanks) && q?.answer?.blanks) {
-        const map = new Map(q.answer.blanks.map((b) => [b.id, b.answers || []]))
-        it.detail = { ...detail, blanks: blanks.map((b) => ({ ...b, answers: map.get(b.id) || [] })) }
-      }
-      return { ...it, question: q }
-    })
+    // 材料题子题切换 + 填空正确答案注入 = 纯数据整理，放 utils/examTrend.ts
+    // （enrichReviewItems，有单测）。SFC 未加 lang="ts"，写不了类型注解，留着这段
+    // 就只能永远靠静态推断了。
+    const enriched = enrichReviewItems(d.items || [])
     const built = buildReviewRows(enriched, renderDoc)
     // 选择题正确答案摘要（附在行上，避免模板里再算一遍）
     built.forEach((r, i) => {

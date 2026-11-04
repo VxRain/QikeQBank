@@ -32,8 +32,8 @@ const ACTOR_COMMANDS = new Set(['banks_remove', 'questions_remove'])
  * 返回值故意不标 `T`：这里拿到的还是 `{success, data}` 信封，必须经 unwrap 拆包。
  * 需要类型请在调用点写 `unwrap<T>(await cmd(...))`（见 src/api/*.ts）。
  */
-export async function cmd(name: string, args: Record<string, any> = {}): Promise<unknown> {
-  const a: Record<string, any> = { ...args }
+export async function cmd(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+  const a: Record<string, unknown> = { ...args }
   if (ACTOR_COMMANDS.has(name) && a.actor == null) {
     try {
       a.actor = getDeviceId()
@@ -41,11 +41,17 @@ export async function cmd(name: string, args: Record<string, any> = {}): Promise
       /* 无设备身份时不带 actor，后端按 None 处理 */
     }
   }
-  if (name === 'sync_push' && a.bundle && a.bundle.device_id == null) {
-    try {
-      a.bundle = { ...a.bundle, device_id: getDeviceId() }
-    } catch {
-      /* 同上 */
+  // sync_push 的 bundle 是后端契约对象（结构由 sync.rs 定义）；这里只做一次
+  // 「对象 + 缺 device_id」的判型，不把它当 any 直接点字段——写成 any 的话
+  // device_id 拼错（deviceId / deviceID）不会有任何提示，线上就是静默丢设备身份。
+  if (name === 'sync_push' && a.bundle && typeof a.bundle === 'object') {
+    const bundle = a.bundle as Record<string, unknown>
+    if (bundle.device_id == null) {
+      try {
+        a.bundle = { ...bundle, device_id: getDeviceId() }
+      } catch {
+        /* 同上 */
+      }
     }
   }
   return await currentProvider.invoke(name, a)

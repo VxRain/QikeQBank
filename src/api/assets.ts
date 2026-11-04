@@ -97,14 +97,23 @@ export function assetFileUrl(path: string): string | null {
   }
 }
 
-function walkNodes(v: any, visit: (node: any) => void): void {
+/**
+ * 深度遍历 Tiptap doc / 任意 JSON 节点。
+ *
+ * 刻意用 `unknown` + 递归收窄，而不是 `any`：
+ * 这里唯一的目的是「找到带 src 字符串的对象就地改写」，节点形状本来就不固定
+ * （PM 节点 / mark / attrs 都可能带 src）。写 `any` 的话，下面 collectShas 里
+ * `typeof v.src === 'string'` 这层判型也会被 any 吞掉，拼错成 `v.scr` 都不报错。
+ */
+function walkNodes(v: unknown, visit: (node: Record<string, unknown>) => void): void {
   if (Array.isArray(v)) {
     v.forEach((x) => walkNodes(x, visit))
     return
   }
   if (v && typeof v === 'object') {
-    visit(v)
-    Object.values(v).forEach((x) => walkNodes(x, visit))
+    const node = v as Record<string, unknown>
+    visit(node)
+    Object.values(node).forEach((x) => walkNodes(x, visit))
   }
 }
 

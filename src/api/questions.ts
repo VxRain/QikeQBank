@@ -21,7 +21,7 @@ export interface ListParams {
 }
 
 export function list(params: ListParams = {}): Promise<QuestionListResult> {
-  const args: Record<string, any> = {}
+  const args: Record<string, unknown> = {}
   if (params.query) args.query = params.query
   const tf = params.typeFilter ?? params.type
   if (tf) args.typeFilter = tf
@@ -63,7 +63,7 @@ export interface BatchFailure {
  * 批量修正字段（FE-P0-10）。单次 IPC + 单事务。
  * 白名单：bank_id / difficulty / status；其它字段后端会 Err。
  */
-export function batchUpdate(ids: string[], patch: Record<string, any>): Promise<{ updated: number; failed: BatchFailure[] }> {
+export function batchUpdate(ids: string[], patch: Record<string, unknown>): Promise<{ updated: number; failed: BatchFailure[] }> {
   return cmd('questions_batch_update', { ids, patch }).then((r) =>
     unwrap<{ updated: number; failed: BatchFailure[] }>(r)
   )
@@ -74,7 +74,7 @@ export function batchUpdate(ids: string[], patch: Record<string, any>): Promise<
  * 注意：恢复入口属于 FE-P0-02，尚未实现。
  */
 export function batchRemove(ids: string[], actor?: string): Promise<{ removed: number; failed: BatchFailure[] }> {
-  const args: Record<string, any> = { ids }
+  const args: Record<string, unknown> = { ids }
   if (actor) args.actor = actor
   return cmd('questions_batch_remove', args).then((r) =>
     unwrap<{ removed: number; failed: BatchFailure[] }>(r)

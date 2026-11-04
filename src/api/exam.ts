@@ -11,7 +11,7 @@ import type { ExamDetail, ExamSession } from './types.ts'
  *   ——不能把「不知道属于哪个库」当成「属于所有库」，否则用户会以为数据串了。
  */
 export async function examSessions(limit = 10, bankId?: string): Promise<{ items: ExamSession[] }> {
-  const args: Record<string, any> = { limit }
+  const args: Record<string, unknown> = { limit }
   if (bankId && String(bankId).trim()) args.bankId = String(bankId).trim()
   return unwrap<{ items: ExamSession[] }>(await cmd('exam_sessions', args))
 }

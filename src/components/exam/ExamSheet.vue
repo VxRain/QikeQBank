@@ -96,7 +96,7 @@ const props = defineProps({
 
 defineEmits(['close', 'jump', 'submit', 'jump-first-unanswered'])
 
-/** 与 Exam.vue 的 hasAnswer 同口径（判分前「有内容」即可，简答自评也算）——统一在 examSheet.js */
+/** 与 Exam.vue 的 hasAnswer 同口径（判分前「有内容」即可，简答自评也算）——统一在 examSheet.ts */
 
 /**
  * 分组：材料题把连续子题折成一组（按 parent 引用归并，不依赖子题是否相邻）。

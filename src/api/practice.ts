@@ -20,7 +20,7 @@ export interface PracticePoolOpts {
 }
 
 export async function practicePool({ limit = 20, type = '', bankId, ids }: PracticePoolOpts = {}): Promise<Question[]> {
-  const args: Record<string, any> = { limit }
+  const args: Record<string, unknown> = { limit }
   if (type) args.typeFilter = type
   if (bankId) args.bankId = bankId
   if (ids && ids.length) args.ids = ids
@@ -42,7 +42,7 @@ export interface ReviewDueOpts {
 }
 
 export async function reviewDue({ limit = 20, bankId }: ReviewDueOpts = {}): Promise<Question[]> {
-  const args: Record<string, any> = { limit }
+  const args: Record<string, unknown> = { limit }
   if (bankId) args.bankId = bankId
   return unwrap<Question[]>(await cmd('review_due', args))
 }
@@ -72,7 +72,7 @@ export async function wrongList({
   sort,
   minWrongCount,
 }: WrongListOpts = {}): Promise<{ total: number; items: Question[] }> {
-  const args: Record<string, any> = { limit, offset }
+  const args: Record<string, unknown> = { limit, offset }
   if (bankId) args.bankId = bankId
   if (type) args.typeFilter = type
   if (leaveAfterCorrect != null) args.leaveAfterCorrect = leaveAfterCorrect
@@ -91,7 +91,7 @@ export interface WrongStats {
 
 /** 错题本统计（FE-P0-11）：全库概览，不受当前筛选影响。 */
 export async function wrongStats({ leaveAfterCorrect }: { leaveAfterCorrect?: number } = {}): Promise<WrongStats> {
-  const args: Record<string, any> = {}
+  const args: Record<string, unknown> = {}
   if (leaveAfterCorrect != null) args.leaveAfterCorrect = leaveAfterCorrect
   return unwrap<WrongStats>(await cmd('wrong_stats', args))
 }
@@ -102,7 +102,7 @@ export async function wrongDismiss(questionId: string): Promise<unknown> {
 }
 
 export async function stats(bankId?: string): Promise<PracticeStats> {
-  const args: Record<string, any> = {}
+  const args: Record<string, unknown> = {}
   if (bankId) args.bankId = bankId
   return unwrap<PracticeStats>(await cmd('review_stats', args))
 }
@@ -112,7 +112,7 @@ export async function recordsOverview(): Promise<RecordsOverview> {
 }
 
 export async function importQuestions(items: unknown[], bankId?: string): Promise<ImportQuestionsResult> {
-  const args: Record<string, any> = { items }
+  const args: Record<string, unknown> = { items }
   if (bankId) args.bankId = bankId
   return unwrap<ImportQuestionsResult>(await cmd('import_questions', args))
 }

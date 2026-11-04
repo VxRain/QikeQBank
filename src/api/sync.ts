@@ -66,12 +66,12 @@ export async function s3Push(): Promise<S3PushResult> {
   return unwrap<S3PushResult>(await cmd('sync_s3_push'))
 }
 
-export async function s3Pull(): Promise<Record<string, any>> {
-  return unwrap<Record<string, any>>(await cmd('sync_s3_pull'))
+export async function s3Pull(): Promise<Record<string, unknown>> {
+  return unwrap<Record<string, unknown>>(await cmd('sync_s3_pull'))
 }
 
-export async function s3Status(): Promise<Record<string, any>> {
-  return unwrap<Record<string, any>>(await cmd('sync_s3_status'))
+export async function s3Status(): Promise<Record<string, unknown>> {
+  return unwrap<Record<string, unknown>>(await cmd('sync_s3_status'))
 }
 
 /** 显式补图：本地登记表 − 桶内已有，只上传缺失项；不扫描题库、不逐图 HEAD。 */
