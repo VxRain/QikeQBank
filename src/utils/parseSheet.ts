@@ -38,12 +38,14 @@ type CellRow = { readonly [i: number]: SheetCell }
 type ScoreRaw = string | number | null | undefined
 
 /**
- * 题型表按 string 索引取用：索引键来自表格文本（不可穷举），
- * 查不到时照旧是 undefined —— 与直接索引字面量键表的运行期行为完全一致。
+ * 题型表按 string 索引取用：索引键来自表格文本（不可穷举）。
+ *
+ * `TYPE_ALIASES` 已是 `Readonly<Record<string, QuestionType>>`，故这里只换短名，
+ * 不需要注解或断言。查不到时是 `undefined`，由调用方 `|| typeKey` 兜底。
  */
-const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, QuestionType>>
+const ALIAS_TO_TYPE: Readonly<Record<string, QuestionType>> = TYPE_ALIASES
 /** key → 规范短名（缺键时调用方 `|| typeKey` 兜底，与改造前一致） */
-const TYPE_LABEL_OF = TYPE_LABELS as Readonly<Record<string, string>>
+const TYPE_LABEL_OF: Readonly<Record<string, string>> = TYPE_LABELS
 
 const cell = (row: CellRow, i: number): string => {
   const v = row[i]

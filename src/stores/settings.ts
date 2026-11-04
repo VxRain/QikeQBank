@@ -86,20 +86,17 @@ export function normalizeSteps(v: unknown, fallback: readonly StepUnit[]): StepU
 /**
  * 步长文本校验：给设置页用精确错误提示（`normalizeSteps` 是静默兜底，不适合当反馈）。
  *
- * 返回类型用**可选字段的宽结构**而不是判别联合：项目 `tsconfig` 是
- * `strict:false`（无 `strictNullChecks`），判别联合在 `if (!r.ok)` 与三目里
- * **不会收窄**，写成 `{ok:false;msg} | {ok:true;steps}` 会让 `r.msg` / `r.steps`
- * 在另一侧报 TS2339。改用 `ok` + 两个可选字段，两侧都能读。
+ * 返回**判别联合**（成功带 `steps`、失败带 `msg`），不写成「`ok` + 两个可选字段」
+ * 的宽结构：宽结构实测会漏检两件事——`{ ok: true }`（缺 `value`）能通过；
+ * `if (w.ok) return w.msg.toUpperCase()`（成功分支误读 `msg`）也 0 错误。
  *
- * 运行期语义不变：`ok:false` 时必有 `msg`，`ok:true` 时必有 `steps`。
+ * ⚠️ 调用点必须用 `r.ok === true` 而不是裸 `r.ok` 做三目条件：
+ * 本项目 `tsconfig` 是 `strict:false`（无 `strictNullChecks`），实测只有裸 `r.ok`
+ * 的三目/if 会收窄失败（TS2339），而 `r.ok === true`、`switch (r.ok)`、
+ * 类型谓词三种写法均 **0 错误**。早期误以为「strict:false 下判别联合根本不能用」
+ * 而改成宽结构，是结论错了（只试了裸 `r.ok` 一种写法），已回退。
  */
-export interface ValidateStepsResult {
-  ok: boolean
-  /** 失败时的提示文案 */
-  msg?: string
-  /** 成功时的合法步长列表 */
-  steps?: string[]
-}
+export type ValidateStepsResult = { ok: false; msg: string } | { ok: true; steps: string[] }
 
 export function validateSteps(v: unknown): ValidateStepsResult {
   const list = (Array.isArray(v) ? v : String(v ?? '').split(','))

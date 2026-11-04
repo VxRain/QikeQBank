@@ -69,7 +69,18 @@ export interface SheetCell {
 
 /** 答题卡分组：材料题子题归一组，其余独立成组 */
 export interface SheetGroup {
-  key: string
+  /**
+   * 分组键（材料母题的 parent.id）。
+   *
+   * 写成 `string | undefined` 是**如实**的：运行期 `parent.id` 可能缺失，
+   * 缺失时所有这类子题归到同一个 `undefined` 键（与改造前行为一致）。
+   *
+   * 早前写成 `string` + 在赋值处 `as string` 强压，后果是：开
+   * `strictNullChecks` 时无断言版本会新增 5 条错（:108/:110/:111/:112/:114）。
+   * 把声明改成实话后，`Map<string | undefined, …>` 一并放宽，
+   * 实测 `--strict true` 下 **0 错**，且不需要任何断言。
+   */
+  key: string | undefined
   isMaterial: boolean
   parentIndex: number
   items: SheetCell[]
@@ -86,7 +97,7 @@ export function groupSheetItems(
   flagged: Record<string, boolean> = {}
 ): SheetGroup[] {
   const out: SheetGroup[] = []
-  const byParent = new Map<string, SheetGroup>()
+  const byParent = new Map<string | undefined, SheetGroup>()
   const list = Array.isArray(items) ? items : []
   for (let i = 0; i < list.length; i++) {
     const it = list[i]

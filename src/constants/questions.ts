@@ -51,7 +51,16 @@ export const QUESTION_TYPES: ReadonlyArray<QuestionTypeMeta> = Object.freeze([
 ])
 
 /** 题型 key，按显示顺序 */
-export const QUESTION_TYPE_KEYS: QuestionType[] = QUESTION_TYPES.map((t) => t.key)
+/**
+ * 题型 key，按显示顺序。
+ *
+ * `ReadonlyArray` 而非 `QuestionType[]`：这是**全应用共享的模块级单例**
+ * （`Exam.vue` / `Practice.vue` 都直接 `const ALL_TYPES = QUESTION_TYPE_KEYS`
+ * 别名同一数组，不是副本）。`Object.freeze` 只冻结了 `QUESTION_TYPES`，
+ * `.map()` 返回的是可变数组，任何一次 `push`/`sort` 会污染所有页面。
+ * 目前 grep 确认无任何改写调用（属未爆的雷），用只读类型锁住。
+ */
+export const QUESTION_TYPE_KEYS: ReadonlyArray<QuestionType> = QUESTION_TYPES.map((t) => t.key)
 
 /** 材料子题可选类型（不含 material，禁止嵌套） */
 export const CHILD_QUESTION_TYPES: ReadonlyArray<QuestionTypeMeta> = QUESTION_TYPES.filter((t) => t.key !== 'material')
@@ -59,31 +68,39 @@ export const CHILD_QUESTION_TYPES: ReadonlyArray<QuestionTypeMeta> = QUESTION_TY
 /**
  * key → 元数据。
  *
- * `Record<QuestionType, QuestionTypeMeta>` 而非 `Record<string, ...>`：键集合由
- * `QUESTION_TYPES` 穷举全 6 种题型，用 `QuestionType` 做键能让「查一个不存在的
- * 题型」在类型层就被挡掉（运行期查不到仍返回 undefined，由 `metaOf` 统一兜底）。
+ * 用 `Partial<Record<QuestionType, …>>` 而不是 `Record<QuestionType, …>`：
+ * 后者要求「每个题型都必有键」，但 reduce 的种子只能写成 `{} as Record<…>`
+ * ——那个断言直接把「键是否齐全」的检查作废了（实测：给 `QuestionType`
+ * 加第 7 个成员、但 `QUESTION_TYPES` 里故意不加，编译 0 错误）。
+ * 而且它还会让 `QUESTION_TYPE_MAP[type]` 在检查器看来恒非空，
+ * 使 `QuestionEditor.vue` 的 `if (QUESTION_TYPE_MAP[type])` 变成恒真分支。
+ *
+ * 改成 `Partial` 后：
+ * - 不需要任何 `as` 断言（种子直接写 `{}`）
+ * - `metaOf` 的 `|| null` 从「手工补真相」变成诚实代码
+ * - 真加新题型时不会让人误以为已经覆盖
  */
-export const QUESTION_TYPE_MAP: Readonly<Record<QuestionType, QuestionTypeMeta>> = Object.freeze(
-  QUESTION_TYPES.reduce<Record<QuestionType, QuestionTypeMeta>>((acc, t) => {
+export const QUESTION_TYPE_MAP: Readonly<Partial<Record<QuestionType, QuestionTypeMeta>>> = Object.freeze(
+  QUESTION_TYPES.reduce((acc, t) => {
     acc[t.key] = t
     return acc
-  }, {} as Record<QuestionType, QuestionTypeMeta>)
+  }, {} as Partial<Record<QuestionType, QuestionTypeMeta>>)
 )
 
 /** 兼容旧用法：key → 规范短名（导入解析/提示文案仍按这个取） */
-export const TYPE_LABELS: Readonly<Record<QuestionType, string>> = Object.freeze(
-  QUESTION_TYPES.reduce<Record<QuestionType, string>>((acc, t) => {
+export const TYPE_LABELS: Readonly<Partial<Record<QuestionType, string>>> = Object.freeze(
+  QUESTION_TYPES.reduce((acc, t) => {
     acc[t.key] = t.label
     return acc
-  }, {} as Record<QuestionType, string>)
+  }, {} as Partial<Record<QuestionType, string>>)
 )
 
 /** key → 完整名（单选题等）：组卷配置面板、成绩单等需要完整字样的位置用它，别各写一份 */
-export const TYPE_FULL_LABELS: Readonly<Record<QuestionType, string>> = Object.freeze(
-  QUESTION_TYPES.reduce<Record<QuestionType, string>>((acc, t) => {
+export const TYPE_FULL_LABELS: Readonly<Partial<Record<QuestionType, string>>> = Object.freeze(
+  QUESTION_TYPES.reduce((acc, t) => {
     acc[t.key] = t.fullLabel
     return acc
-  }, {} as Record<QuestionType, string>)
+  }, {} as Partial<Record<QuestionType, string>>)
 )
 
 /**

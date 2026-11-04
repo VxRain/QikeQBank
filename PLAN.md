@@ -44,16 +44,16 @@
 QikeQBank/
 ├── package.json / vite.config.js / index.html / tsconfig.json / pnpm-workspace.yaml   [根配置，主线程所有]
 ├── src/                           ← 前端
-│   ├── main.js  App.vue  router/index.js（路由 meta 驱动导航/标题）
-│   ├── constants/questions.js     ← 题型唯一权威（label/shortLabel/fullLabel/icon/hasOptions/默认分值/别名）
+│   ├── main.ts  App.vue  router/index.ts（路由 meta 驱动导航/标题）
+│   ├── constants/questions.ts     ← 题型唯一权威（label/shortLabel/fullLabel/icon/hasOptions/默认分值/别名）
 │   ├── api/    bridge.ts（cmd + 统一 unwrap<T>）  types.ts（契约 interface）
 │   │           questions.ts  practice.ts  banks.ts  exam.ts  settings.ts  sync.ts  assets.ts
 │   ├── stores/ bank.ts（题库筛选） settings.ts（FSRS 参数/记忆开关等） ui.ts（弹层服务）
 │   │           session.ts（练习/复习/模考统一会话快照） autoSync.ts
 │   │           formDraft.ts（录题脏判定 + 草稿兜底）  runConfig.ts（三入口题型/题量记忆 + 可用题量）
 │   │           listFilter.ts（列表筛选记忆 + 排序白名单 + 页码收敛 clampPage）
-│   ├── composables/ sessionResume.js（全应用唯一的「继续上次/放弃」交互）
-│   │                sessionLeaveNotice.js（全应用唯一的「离开时告知进度已存」提示）
+│   ├── composables/ sessionResume.ts（全应用唯一的「继续上次/放弃」交互）
+│   │                sessionLeaveNotice.ts（全应用唯一的「离开时告知进度已存」提示）
 │   ├── styles/ perf.css（content-visibility 等渲染性能辅助类）
 │   ├── utils/  gradeQuestion.ts（题型注册表 + 统一判分入口）
 │   │           grading.ts（判分基元，零依赖） fsrs.ts image.ts
@@ -65,10 +65,10 @@ QikeQBank/
 │   │               QuestionPreview  ImportFileBox（txt/md/xlsx/docx 导入） PasteBox  ui（弹层服务）
 │   │               question/QuestionRunner.vue（练习/复习/模考/背题共用的答题渲染层）
 │   │               exam/ExamSheet.vue（答题卡抽屉） ExamHistory.vue（逐题回看） ExamTrend.vue（纯 SVG 趋势）
-│   │               settings/（SettingsDialog 弹窗外壳 + registry.js 设置项注册表 + SettingRow 通用行 + AboutPanel）
+│   │               settings/（SettingsDialog 弹窗外壳 + registry.ts 设置项注册表 + SettingRow 通用行 + AboutPanel）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
 │               ↳ Practice/Review/Exam 已收敛为「薄编排层」：题干/选项/填空/材料/键盘流在 QuestionRunner，
-│                 判分走 gradeQuestion，题型文案取 constants/questions.js，进行中状态存 stores/session.ts
+│                 判分走 gradeQuestion，题型文案取 constants/questions.ts，进行中状态存 stores/session.ts
 ├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync/s3）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
 ├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
@@ -362,7 +362,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 ## 7. 前端模块契约
 
 ### api/bridge.ts（v3：Provider 接口 + actor 自动注入）
-`cmd(name, args)` 封装 invoke，走 `currentProvider`（默认 TauriProvider；HttpProvider/LocalProvider 以后填签名位，`api/*.js` 零改动）。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。`banks_remove`/`questions_remove`/`sync_push` 自动注入 `actor`/`device_id`（`src/utils/device.ts`，localStorage 持久化）。
+`cmd(name, args)` 封装 invoke，走 `currentProvider`（默认 TauriProvider；HttpProvider/LocalProvider 以后填签名位，`api/*.ts` 零改动）。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。`banks_remove`/`questions_remove`/`sync_push` 自动注入 `actor`/`device_id`（`src/utils/device.ts`，localStorage 持久化）。
 
 ### api/settings.ts（v3 新建）
 ```js
@@ -442,7 +442,7 @@ export function persistBankFilter(page, id)
 
 ### components/settings/（设置页重构）
 - **`SettingsDialog.vue`**：设置弹窗外壳 = 顶部搜索 + 左侧分类栏 + 右侧内容区；Esc 关闭、Ctrl/⌘+F 聚焦搜索、Tab 焦点圈在弹窗内、打开时锁 body 滚动；分类记忆只留会话（不落盘）。
-- **`registry.js`**：**设置项唯一数据源**。`SETTINGS_SECTIONS` 内每项声明 `{key,title,desc,type,value(),set(v)}`，可选 `visible()/dependsOn/indent/unit/min/max/options/normalize/component`。新增设置项**只加一条 item**，分类栏、搜索命中数、依赖提示全自动跟随。
+- **`registry.ts`**：**设置项唯一数据源**。`SETTINGS_SECTIONS` 内每项声明 `{key,title,desc,type,value(),set(v)}`，可选 `visible()/dependsOn/indent/unit/min/max/options/normalize/component`。新增设置项**只加一条 item**，分类栏、搜索命中数、依赖提示全自动跟随。
 - **`SettingRow.vue`**：按 `type` 渲染 switch / number / text / select / segmented / custom / note；数值与文本输入本地持有草稿，change/blur/回车归一化落盘，非法回滚 + toast。
 - **`AboutPanel.vue`**：关于区（版本号 getVersion、便携/安装模式、打开数据目录、清理无用图片（`assets_gc` + 显示释放字节）、检查更新→GitHub Releases，opener allow-open-url 仅放行本仓库）。
 - 搜索态：跨分类汇总命中并显示每类命中数；未满足依赖的子项（如「停留时长」需先开「答对自动下一题」）不隐藏，而是标注原因。
@@ -571,7 +571,7 @@ export function persistBankFilter(page, id)
   - 新增页面行为时：把断言加到对应模块；新模块 = `modules/` 加文件 + `MODULE_IDS` 登记 + `runner.js` 记基准数，且必须同步本表、`AGENTS.md`、`todo §0.3` 三处。
   - **性能约束**：新增用例若需要多视口 / 多状态，优先「一次导航 + 反复改状态」，不要反复 `page.reload()` —— `header` 模块去掉 7 次多余刷新后从 2.5s 降到 0.76s。
   - **等待约定（重要，别退回固定 sleep / 文案标记）**：`goto(page, hash)` 不接受任何标记参数，就绪判定统一走 `requireRoute()`：**`document.title === meta.title + ' · ' + APP_NAME` 且 `window.__inflight === 0`**。
-    - 为什么不是界面文案：`meta.title` 是路由元数据（写在 `router/index.js`），改界面文案/布局不影响它；而 `/新建题库/` 这类文案一改就废。
+    - 为什么不是界面文案：`meta.title` 是路由元数据（写在 `router/index.ts`），改界面文案/布局不影响它；而 `/新建题库/` 这类文案一改就废。
     - 为什么加 inflight：7 个视图的 `onMounted` 都经 `bridge.ts` 发 IPC，归零即首屏数据到齐（mock 里用 try/finally 计数）。
     - 实测：该组合 8/8 成功、平均 6~77ms；`goto` 超时**必抛**并附带实际 `title/inflight/hash/页面文本`。
     - 已禁用 `networkidle`（Playwright 官方标 **DISCOURAGED**："Don't use this method for testing, rely on web assertions to assess readiness instead"），也禁用 `waitForTimeout`（官方："Never wait for timeout in production"）。

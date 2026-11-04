@@ -49,22 +49,17 @@ export interface SettingOption {
 }
 
 /**
- * `normalize()` 的返回。
+ * `normalize()` 的返回（判别联合）。
  *
- * `value` 与 `msg` 都写成可选、且不靠判别联合收窄：项目 `tsconfig` 是
- * `strict:false`（无 `strictNullChecks`），判别联合在 `if (!r.ok)` /
- * 三目里**不会收窄**，写窄了反而让 `r.msg` / `r.steps` 在另一侧报 TS2339。
+ * 不写成「`ok` + 两个可选字段」的宽结构：宽结构实测会漏检
+ * `{ ok: true }`（缺 `value`）与成功分支误读 `msg`。
  *
- * 运行期语义不变：`ok:true` 时必有 `value`、`ok:false` 时必有 `msg`
- * （由 `validateSteps` 与调用点保证）。
+ * 消费方（`SettingRow.vue:152`）用的是 `if (!res.ok) … res.msg`——naked `!res.ok`
+ * 在 `strict:false` 下**不收窄**，但该 SFC 未加 `lang="ts"`、`res` 是 `any`，
+ * 所以不受影响。将来若给 SFC 开 `lang="ts"`，需把它改成 `if (res.ok === false)`
+ * 或加类型谓词（实测两种写法在 `strict:false` 下都可收窄）。
  */
-export interface NormalizeResult {
-  ok: boolean
-  /** 成功时的规整文本 */
-  value?: string
-  /** 失败时的提示文案 */
-  msg?: string
-}
+export type NormalizeResult = { ok: true; value: string } | { ok: false; msg: string }
 
 /** 一个设置项 */
 export interface SettingItem {
@@ -229,7 +224,7 @@ export const SETTINGS_SECTIONS: SettingSection[] = [
         width: 'w-[120px]',
         normalize: (text: string): NormalizeResult => {
           const r = validateSteps(text)
-          return r.ok ? { ok: true, value: r.steps.join(',') } : { ok: false, msg: r.msg }
+          return r.ok === true ? { ok: true, value: r.steps.join(',') } : { ok: false, msg: r.msg }
         },
         value: () => settings.fsrs.learningSteps.join(','),
         set: (text: string) => {
@@ -246,7 +241,7 @@ export const SETTINGS_SECTIONS: SettingSection[] = [
         width: 'w-[120px]',
         normalize: (text: string): NormalizeResult => {
           const r = validateSteps(text)
-          return r.ok ? { ok: true, value: r.steps.join(',') } : { ok: false, msg: r.msg }
+          return r.ok === true ? { ok: true, value: r.steps.join(',') } : { ok: false, msg: r.msg }
         },
         value: () => settings.fsrs.relearningSteps.join(','),
         set: (text: string) => {

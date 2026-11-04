@@ -101,11 +101,16 @@ const RE_JUDGE_NO = /^(错误|错|否|×|F|FALSE)$/i
 
 /**
  * 题型别名表 / 短名表按 string 索引取用。
- * 索引键的闭合性由 RE_TYPE_HEAD 保证（只认【单选/多选/判断/填空/问答/材料】及其「题」后缀变体），
- * 故把字面量键表放宽成 string 索引不会引入新的运行期分支；查不到时照旧是 undefined。
+ *
+ * `TYPE_ALIASES` 自 `constants/questions.ts` 起本身就是 `Readonly<Record<string, QuestionType>>`
+ * （键是中文别名，不可穷举），所以这里**只是换个短名字**，不需要任何注解或断言。
+ * 查不到时照旧是 `undefined`，由调用方 `|| typeKey` 兜底——与改造前完全一致。
+ *
+ * 历史：本文件曾是 `.js`，两个表是字面量键，所以写过
+ * `as Readonly<Record<string, ...>>` 转换；迁 `.ts` 后那个断言已多余，已删。
  */
-const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, QuestionType>>
-const TYPE_LABEL_OF = TYPE_LABELS as Readonly<Record<string, string>>
+const ALIAS_TO_TYPE: Readonly<Record<string, QuestionType>> = TYPE_ALIASES
+const TYPE_LABEL_OF: Readonly<Record<string, string>> = TYPE_LABELS
 
 /* ---------- Doc 构造（parseSheet  XLSX/DOCX 解析共用，也从这里导出） ---------- */
 export function textToDoc(text: string | null | undefined): TextDoc | null {

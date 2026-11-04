@@ -19,11 +19,14 @@
  *   属「本机行为偏好」，不进 SQLite、不进同步契约。
  */
 import { reactive } from 'vue'
-
 /**
- * 设置分区里的一个设置项。形状权威在 components/settings/registry.ts，
- * 那是 .js（未迁移），所以这里只声明「搜索用得到」的部分；
- * 多出来的字段由 registry 自己的 match 函数读取。
+ * 设置分区里的一个设置项。形状权威在 `components/settings/registry.ts`
+ * 的 `SettingItem`（已于 2026-11 由 `.js` 迁为 `.ts`）。
+ *
+ * 这里仍只声明「搜索用得到」的部分，不直接 `import type { SettingItem }`：
+ * 本模块会被 node 单测直接加载，而 `registry.ts` 顶部 `import` 了两个 `.vue`
+ * 组件，node 无法解析 `.vue`（ERR_UNKNOWN_FILE_EXTENSION）。
+ * 多出来的字段由 registry 自己的 `matchItem` 读取。
  */
 export interface SettingItemLike {
   id?: string

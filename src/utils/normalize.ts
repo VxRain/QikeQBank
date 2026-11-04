@@ -3,15 +3,21 @@
 /**
  * ProseMirror/Tiptap 节点（本模块只读取这些字段）。
  *
- * `content` 直接声明为 `PmNode[]`，**不需要类型断言**：本 interface 所有字段
- * 都可选，叠加 `strict:false`（`strictNullChecks` 关闭→`null` 联合被擦除）后，
- * 调用方（`api/types.ts::Doc` 的 `content?: unknown[]`、parsePureText 的
- * `ParsedQuestion`）都可直接赋值进来。实测（reviewer + 主代理两次复现）：
- * 改成 `PmNode[]` 并删掉全部 `as PmNode[]` 后仍是 0 条 noImplicitAny。
+ * `content` 直接声明为 `PmNode[]`，**不需要类型断言**。
  *
- * ⚠️ 若将来开启 `strictNullChecks`，这里会需要显式的收窄函数（`unknown[]`
- * 无法再直接赋给 `PmNode[]`），届时请补 `asNodes(x: unknown): PmNode[]`
- * 带运行期判型的版本，而不是退回无校验断言。
+ * 为什么能过检查（实测机制，2026-11）：`strictNullChecks` 关闭时，`unknown`
+ * 可赋给任何**字段全可选**的对象类型（`{a?: number}` ✅ / `{a: number}` ❌）。
+ * 本 interface 所有字段都可选，所以 `api/types.ts::Doc` 的
+ * `content?: unknown[]`、parsePureText 的 `ParsedQuestion` 都能直接赋值进来。
+ * （注意：**不是**“null 联合被擦除”那个机制，早期的注释写错了，已改正。）
+ *
+ * ⚠️ 这也意味着：**这里的“0 断言”不是类型正确的证据，而是检查器被关掉的证据**——
+ * `content` 里装 `null` / 数字 / 字符串都照样过检查，运行期 `n.type` 会 TypeError。
+ * 这与改前用 `as PmNode[]` 的行为完全一致（所以不是回归），但不要误以为已经安全。
+ *
+ * ⚠️ 若开启 `strictNullChecks`，这里会需要显式收窄（`unknown[]` 无法再直接
+ * 赋给 `PmNode[]`），届时请补 `asNodes(x: unknown): PmNode[]` 带运行期判型的
+ * 版本，而不是退回无校验断言。
  */
 interface PmNode {
   type?: string

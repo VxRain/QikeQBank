@@ -6,14 +6,20 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 // 新增页面只需在此加一条路由（需要进顶栏时再补 meta.nav），无需改 App.vue。
 //
 // ── .js → .ts（2026-11）──
-// `routes` **刻意不加类型注解**（不写成 `RouteRecordRaw[]`）：两处守卫测试
-// （`tests/unit/e2e-ready-signal.test.js`、`tests/unit/search-store.test.js`）
-// 用正则逐路由块解析这份源码（`path: '/x' … meta: { title: 'Y' }`），
-// 加注解会改变文本形态而破坏解析。类型安全由 vue-router 的 `createRouter`
-// 在调用处推断即可，`meta` 的增强在 `src/env.d.ts`。
-//
 // 本文件迁移前就**没有** noImplicitAny 错误（无隐式 any），迁 .ts 是为让
-// `src/` 下不再有 .js 残留，并让 `meta.title` 参与类型检查。
+// `src/` 下不再有 .js 残留，并让 `meta` 的值类型参与检查。
+//
+// 关于要不要写 `RouteRecordRaw[]`：
+// - 早期这里写过一条注释说「加注解会破坏两处守卫测试的正则解析」——**实测为假，已删**。
+//   守卫（`tests/unit/e2e-ready-signal.test.js` 的 `routerTitles()`）按
+//   `path: '/x' … meta: { title: 'Y' }` 逐块匹配，加注解后 9/9 仍然全绿。
+// - 现在**不加注解是刻意的，理由是真原因**：`meta` 的值类型检查不依赖它。
+//   `RouteMeta extends Record<PropertyKey, unknown>` 带索引签名，加注解反而
+//   挡不住 `meta: { tittle: '首页' }` 这类拼错键（两者都漏检）；
+//   加注解的**唯一收益是报错定位更精确**（`meta: { title: 123 }` 会在本行报，
+//   而不是把错误推到 `createRouter` 调用处）。
+//   保持裸数组的理由：不引入多余的 `import type`，错误定位已由
+//   `createRouter` 的入参推断提供。若要改回注解，改这一行即可，不影响任何守卫。
 const routes = [
   {
     path: '/',

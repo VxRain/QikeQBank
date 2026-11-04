@@ -64,7 +64,7 @@ export function defaultsOf(mode: RunMode): RunConfig | null {
  * @param raw 存下来的原始值
  * @param allTypes 合法题型清单（来自 constants/questions.ts，由调用方注入，避免此模块反向依赖）
  */
-export function normalizeConfig(mode: RunMode, raw: unknown, allTypes: string[] = []): RunConfig | null {
+export function normalizeConfig(mode: RunMode, raw: unknown, allTypes: readonly string[] = []): RunConfig | null {
   const def = defaultsOf(mode)
   if (!def) return null
   if (!raw || typeof raw !== 'object') return def
@@ -96,7 +96,7 @@ export function normalizeConfig(mode: RunMode, raw: unknown, allTypes: string[] 
 }
 
 /** 读配置：无记录 / 坏 JSON / 版本不符 一律回落默认 */
-export function loadRunConfig(mode: RunMode, allTypes: string[] = []): RunConfig | null {
+export function loadRunConfig(mode: RunMode, allTypes: readonly string[] = []): RunConfig | null {
   const s = storage()
   if (!s) return defaultsOf(mode)
   let raw
@@ -117,7 +117,7 @@ export function loadRunConfig(mode: RunMode, allTypes: string[] = []): RunConfig
 }
 
 /** 写配置：写失败静默（隐私模式/配额），不能因为记不住偏好就阻断开始作答 */
-export function saveRunConfig(mode: RunMode, cfg: unknown, allTypes: string[] = []): boolean {
+export function saveRunConfig(mode: RunMode, cfg: unknown, allTypes: readonly string[] = []): boolean {
   const s = storage()
   const norm = normalizeConfig(mode, cfg, allTypes)
   if (!s || !norm) return false

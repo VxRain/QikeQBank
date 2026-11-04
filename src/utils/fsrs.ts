@@ -62,13 +62,17 @@ export function schedulerKeyOf(s: FsrsSettings = {}): string {
 /**
  * 按设置取 scheduler（签名不变则复用，变则重建）。
  *
- * 返回标注为非空的 `FSRS`：唯一赋值就在下面的 `if` 块内，且 `fsrs()` /
- * `generatorParameters()` 抛错时异常直接外泄（不会返回 null），所以走到
- * `return` 时 `scheduler` 必定非空。
+ * 返回 `FSRS`（非空）：唯一赋值就在下面的 `if` 块内，`fsrs()` 声明的返回
+ * 就是 `FSRS`（非 `FSRS | null`，实测 ts-fsrs@5.4.2），`generatorParameters()`
+ * 抛错时异常直接外泄。因此走到 `return` 时控制流分析能把 `scheduler` 收窄成
+ * `FSRS`——**裸写 `return scheduler` 就够了，不需要 `!`**。
  *
- * ⚠️ 这里用 `scheduler!` 而不是裸 `return scheduler`：当前 `strict:false`
- * （无 `strictNullChecks`）下两者编译结果一样，但开 strict 后裸写法会报
- * TS2322。显式 `!` 让「此处非空」成为代码上的承诺，而不是靠配置缺口蒙过。
+ * ⚠️ 这里**刻意不用** `scheduler!`（早期写过，已改回）：
+ * `!` 会关掉一个将来真能救命的检查。实测：若以后在 if 块里加
+ * `try { scheduler = fsrs(...) } catch { scheduler = null }` 这类兜底，
+ *   - `return scheduler!` → **0 错误，静默把 null 送出去**
+ *   - `return scheduler`  → TS2322 Type 'FSRS | null' is not assignable to 'FSRS'
+ * 即裸写法能在重构时拦住「非空假设失效」，`!` 只会把问题推到运行期。
  */
 export function getScheduler(s: FsrsSettings = {}): FSRS {
   const key = schedulerKeyOf(s)
@@ -85,7 +89,7 @@ export function getScheduler(s: FsrsSettings = {}): FSRS {
     )
     schedulerKey = key
   }
-  return scheduler!
+  return scheduler
 }
 
 export function createEmpty(now: Date = new Date()) {

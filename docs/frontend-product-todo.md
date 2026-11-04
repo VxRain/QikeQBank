@@ -30,14 +30,14 @@
 ### 0.3 通用完成定义（DoD）
 
 - [ ] `pnpm build` 通过
-- [ ] `pnpm typecheck` 0 类型错误（`vue-tsc` + `checkJs`，覆盖 `src/**/*.js` 与 `*.vue`；增量约 2s）
+- [ ] `pnpm typecheck` 0 类型错误（`vue-tsc` + `checkJs`，覆盖 `src/**/*.ts` 与 `*.vue`；增量约 2s）
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` 全绿
 - [ ] `pnpm lint`（clippy `-D warnings`）0 警告
 - [ ] `node tools/smoke-test.mjs` 通过
 - [ ] 涉及页面行为：跑对应模块的 `pnpm test:e2e:<模块>`（**默认动作**）；不确定影响面用 `pnpm test:e2e:changed`；全量 `pnpm test:e2e` 只在提交前 / 发版前 / 真跨模块改动时跑。浏览器结论必须由脚本证伪，不接受口头「实测通过」
 - [ ] 改动 `uno.config.js` / `uno.config.ts` 后重启 dev server（UnoCSS 不热重载配置，e2e 复用旧 server 也不算验证）
 - 模块名（三处文档必须逐字一致）：`list`(试题列表) / `batch`(批量操作) / `banks`(题库管理) / `form`(录题) / `practice`(刷题) / `review`(复习) / `exam`(模考) / `wrong`(错题本) / `search`(全局搜索) / `header`(顶栏布局) / `settings`(设置)
-- [ ] 涉及命令签名 / 数据结构：同步更新 `PLAN.md §4/§7` ↔ Rust command ↔ `src/api/*.js`
+- [ ] 涉及命令签名 / 数据结构：同步更新 `PLAN.md §4/§7` ↔ Rust command ↔ `src/api/*.ts`
 - [ ] 涉及表结构：同步更新 `PLAN.md §3` ↔ `src-tauri/src/db/schema.rs` ↔ `tools/` 两脚本（逐字符一致）
 - [ ] 新增交互不出现 `alert/confirm/prompt`，统一走 `src/stores/ui.ts`
 - [ ] 新增 UI 复用 `App.vue :root` CSS 变量，弹层具备遮罩 + 入场动画

@@ -8,6 +8,17 @@ import katex from 'katex'
  *
  * 字段全为可选是刻意的：`noImplicitAny` 只关隐式 any，`strictNullChecks` 仍是关闭的，
  * 所以可选字段不会让 `n.attrs.latex` 这类原有写法变成错误——**运行期行为一行没动**。
+ *
+ * ⚠️ 但这不等于安全（与 `normalize.ts::PmNode` / `validate.ts::ValidateNode` 同型）：
+ * `strictNullChecks` 关闭时 `unknown` 能赋给任何**字段全可选**的类型，所以
+ * `api/types.ts::Doc`（`content?: unknown[]`）能直接传进来。实测若开启
+ * `strictNullChecks`，本文件会新增 **11 条错**（10 条 `n.attrs` possibly null
+ * + `latex` 路径），且 `renderDoc` 的调用点会报 TS2322。
+ *
+ * 收 strict 时需补带运行期判型的收窄函数（如 `asNodes(x: unknown): TiptapNode[]`），
+ * 而不是退回无校验断言。`renderDoc` 是全仓调用最多的一环
+ * （ExamHistory / QuestionRunner / QuestionPreview / examTrend / Exam / Wrong），
+ * 改它之前请先跑一遍 `tsc --strictNullChecks` 看实际影响面。
  */
 interface TiptapMark {
   type?: string

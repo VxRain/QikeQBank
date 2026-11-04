@@ -3,12 +3,17 @@
 /**
  * 校验器读取的文档节点最小形状（ProseMirror/Tiptap doc 的子集）。
  *
- * `content` 直接声明为 `ValidateNode[]`，**不需要类型断言**：本 interface 所有
- * 字段都可选，叠加 `strict:false`（`strictNullChecks` 关闭）后，调用方的
- * `content?: unknown[]` 可直接赋值进来。实测（reviewer + 主代理两次复现）：
- * 改成 `ValidateNode[]` 并删掉全部断言后仍是 0 条 noImplicitAny。
+ * `content` 直接声明为 `ValidateNode[]`，**不需要类型断言**。
  *
- * ⚠️ 若将来开启 `strictNullChecks`，这里需补带运行期判型的收窄函数，
+ * 为什么能过检查（实测机制，2026-11）：`strictNullChecks` 关闭时，`unknown`
+ * 可赋给任何**字段全可选**的对象类型（`{a?: number}` ✅ / `{a: number}` ❌）。
+ * 本 interface 所有字段都可选，所以调用方的 `content?: unknown[]` 可直接赋值进来。
+ * （**不是**“null 联合被擦除”，早期注释写错了。）
+ *
+ * ⚠️ “0 断言”不等于类型正确，而是检查器被关掉：`content` 里装 null / 数字
+ * 照样过检查，靠函数体内的 `typeof` / `Array.isArray` 判型兜住。
+ *
+ * ⚠️ 若开启 `strictNullChecks`，这里需补带运行期判型的收窄函数，
  * 而不是退回无校验断言。
  */
 interface ValidateNode {
