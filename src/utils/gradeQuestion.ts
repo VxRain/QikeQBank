@@ -33,7 +33,7 @@ import type { AnswerInput, GradeOpts, GradableQuestion } from './grading.ts'
 
 /* ------------------------------- 默认题目模板 ------------------------------- */
 // 与编辑器既有默认值逐字段一致（QuestionEditor 曾自带一份）：改这里等于改「新建题目」的样子。
-function doc(text) {
+function doc(text: string) {
   const t = String(text || '')
   return t
     ? { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] }
@@ -57,7 +57,16 @@ const fillStem = () => ({
   ]
 })
 
-const DEFAULTS = {
+/**
+ * 新建题目模板工厂。
+ *
+ * 显式标注 `Record<string, () => Record<string, unknown>>` 不是为了收紧：
+ * - 形状与 `QuestionTypeEntry.createDefault` 的声明一致（注册表拿它当兜底工厂）；
+ * - 给各题型字面量一个上下文类型，`analysis: null`、`grade: null` 这类「全 null/全缺省」属性
+ *   才有类型可推断（无上下文即 TS7018；用 `as` 断言压掉只是把问题藏起来）。
+ * 返回值**刻意保持宽松**：编辑器会往模板上动态挂 id/stem/children，收窄成严格契约会把它顶穿。
+ */
+const DEFAULTS: Record<string, () => Record<string, unknown>> = {
   single: () => ({ difficulty: 2, score: 5, analysis: null, plain_text: '', type: 'single', stem: doc('题干'), options: opts4(), answer: { ids: ['o1'] } }),
   multi: () => ({ difficulty: 3, score: 5, analysis: null, plain_text: '', type: 'multi', stem: doc('多选题干'), options: opts4(), answer: { ids: ['o1', 'o2'] } }),
   judge: () => ({
@@ -140,11 +149,17 @@ function answerDetail(q: GradableQuestion, answer: AnswerInput | null | undefine
   return {}
 }
 
+/**
+ * 渲染答案时的题目形状：grading.ts 的最小判分形状 + 选项 id（「选项 id → 字母」要读它）。
+ * 只在文件内部用；导出签名仍保持 GradableQuestion，不把页面推向更严格的契约。
+ */
+type RenderQuestion = GradableQuestion & { options?: Array<{ id?: string }> }
+
 /** 答案展示：选项字母 / 填空作答 / 自评 / 材料题问数 */
-function renderAnswerText(q, answer) {
+function renderAnswerText(q: RenderQuestion | null | undefined, answer: AnswerInput | null | undefined) {
   const a = answer || {}
   const type = q?.type
-  const keyOf = (i) => String.fromCharCode(65 + (i || 0))
+  const keyOf = (i: number) => String.fromCharCode(65 + (i || 0))
   if (type === 'single' || type === 'judge') {
     const idx = (q?.options || []).findIndex((o) => o.id === a.selected)
     return idx >= 0 ? keyOf(idx) : '—'
@@ -202,10 +217,23 @@ export interface GradeResultLike {
 }
 
 /**
+ * practice/review 严格判分的中间结果（材料题按子题递归汇总）。
+ * 只在本文件内部流转，因此不导出；`subset`/`children` 只有部分题型有，故可选。
+ */
+interface StrictResult {
+  ratio: number
+  earned: number
+  full: number
+  unanswered?: boolean
+  subset?: boolean
+  children?: StrictResult[]
+}
+
+/**
  * 建一个注册表实例（默认导出单例；测试用独立实例，避免污染全局）。
  */
 export function createTypeRegistry(entries: QuestionTypeEntry[]) {
-  const map = new Map()
+  const map = new Map<string, QuestionTypeEntry>()
   for (const e of entries) map.set(e.key, e)
 
   /**
@@ -213,7 +241,7 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
    * - 材料题是结构性的：递归子题后按「得分/满分」汇总（practice 只认 ratio ≥ 1）
    * - 叶子题型交给注册项自己的 grade（自定义题型因此自动获得支持）
    */
-  function strictTree(q, answer, opts = {}) {
+  function strictTree(q: GradableQuestion | null | undefined, answer: AnswerInput | null | undefined, opts: GradeOpts = {}): StrictResult {
     const a = answer || {}
     const type = q?.type
     if (type === 'material') {
@@ -231,7 +259,8 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
     }
     const entry = map.get(type)
     if (!entry) return { ratio: 0, unanswered: true, earned: 0, full: fullScoreOf(q) }
-    const r = entry.grade(q, a, { ...opts, mode: 'practice', multiRule: 'strict' }) || {}
+    // `|| {}` 是给「注册项返回 falsy」的既有兜底，保持原样；这里只补类型（缺字段按 0 处理）
+    const r: Partial<GradeResultLike> = entry.grade(q, a, { ...opts, mode: 'practice', multiRule: 'strict' }) || {}
     const full = fullScoreOf(q)
     const ratio = Number(r.ratio) || 0
     return {
@@ -248,19 +277,19 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
   if (material) map.set('material', { ...material, grade: (q, a, o) => strictTree(q, a, o) })
 
   const ordered = () => {
-    const builtin = QUESTION_TYPES.map((t) => map.get(t.key)).filter(Boolean)
+    const builtin = QUESTION_TYPES.map((t) => map.get(t.key)).filter((e): e is QuestionTypeEntry => !!e)
     const extra = [...map.values()].filter((e) => !QUESTION_TYPES.some((t) => t.key === e.key))
     return [...builtin, ...extra]
   }
 
   return {
-    get: (key) => map.get(key) || null,
+    get: (key: string) => map.get(key) || null,
     list: ordered,
     keys: () => ordered().map((e) => e.key),
-    isSupported: (key) => map.has(key),
+    isSupported: (key: string) => map.has(key),
 
     /** 运行时扩展题型：只需一条注册项 + 编辑器，不改作答页 */
-    register(entry) {
+    register(entry: QuestionTypeEntry) {
       if (!entry?.key) throw new Error('题型注册项缺少 key')
       if (!entry.createDefault || !entry.grade) throw new Error(`题型 ${entry.key} 缺少 createDefault/grade`)
       if (map.has(entry.key)) throw new Error(`题型已注册：${entry.key}`)
@@ -269,7 +298,7 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
     },
 
     /** 新建题目模板（未知题型回退到单选，保持编辑器既有兜底） */
-    createDefault(key) {
+    createDefault(key: string) {
       const fn = DEFAULTS[key] || map.get(key)?.createDefault || DEFAULTS.single
       return fn()
     },
@@ -313,7 +342,11 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
         }
       }
       const entry = map.get(type)
-      const r = entry ? (type === 'material' ? entry.grade(q, a, opts) : strictTree(q, a, opts)) : { ratio: 0, unanswered: true, earned: 0, full: fullScoreOf(q) }
+      // 三条路径（材料注入 / 叶子注册项 / 未注册兜底）的并集：按最宽口径声明可选字段，
+      // 下方 `r.earned ?? 0` / `r.full ?? fullScoreOf(q)` 的既有兜底即由此而来。
+      const r: Partial<StrictResult> = entry
+        ? (type === 'material' ? entry.grade(q, a, opts) : strictTree(q, a, opts))
+        : { ratio: 0, unanswered: true, earned: 0, full: fullScoreOf(q) }
       return {
         supported,
         type,
@@ -330,14 +363,14 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
     },
 
     /** 结果区展示用文案（选项字母 / 填空作答 / 自评） */
-    renderAnswer(q, answer) {
+    renderAnswer(q: GradableQuestion, answer: AnswerInput) {
       return renderAnswerText(q, answer)
     }
   }
 }
 
 /** 内置六种题型：行为全部委托共用基元，注册项本身不含算法 */
-const BUILTIN_ENTRIES = [
+const BUILTIN_ENTRIES: QuestionTypeEntry[] = [
   { key: 'single', label: typeLabel('single'), hasOptions: hasOptions('single'), createDefault: DEFAULTS.single, validate: validateQuestion, grade: (q, a) => gradeSingle(q, a?.selected), renderAnswer: renderAnswerText },
   { key: 'multi', label: typeLabel('multi'), hasOptions: hasOptions('multi'), createDefault: DEFAULTS.multi, validate: validateQuestion, grade: (q, a, o) => gradeMulti(q, a?.picked, o?.multiRule || 'strict'), renderAnswer: renderAnswerText },
   { key: 'judge', label: typeLabel('judge'), hasOptions: hasOptions('judge'), createDefault: DEFAULTS.judge, validate: validateQuestion, grade: (q, a) => gradeSingle(q, a?.selected), renderAnswer: renderAnswerText },
@@ -352,23 +385,35 @@ export const typeRegistry = createTypeRegistry(BUILTIN_ENTRIES)
 
 /* -------------------------------- 便捷导出 -------------------------------- */
 
+/**
+ * 判分入口的选项入参。
+ *
+ * `multiRule` 放宽为 `string`：页面的取值来自 localStorage（Exam.vue 的 multiRule 是 string），
+ * 而判分基元（grading.ts）的运行期语义本来就是「'strict' 特殊，其余一律按 partial」。
+ * 放宽入参只是如实描述这一事实；注册表内部仍持 GradeOpts 的两态契约，
+ * 故这里做一次窄化断言——**不新增也不改写任何运行期取值**（同一个字符串原样下传）。
+ */
+export interface GradeOptionsInput extends Omit<GradeOpts, 'multiRule'> {
+  multiRule?: string
+}
+
 /** 统一判分入口：练习/复习不传 mode，模考传 { mode: 'exam', multiRule } */
-export function gradeQuestion(q, answer, opts = {}) {
-  return typeRegistry.grade(q, answer, opts)
+export function gradeQuestion(q: GradableQuestion, answer: AnswerInput, opts: GradeOptionsInput = {}) {
+  return typeRegistry.grade(q, answer, opts as GradeOpts)
 }
 
 /** 新建题目模板（与编辑器默认值同源） */
-export function createDefaultQuestion(type) {
+export function createDefaultQuestion(type: string) {
   return typeRegistry.createDefault(type)
 }
 
 /** 按题型校验（内部仍是 utils/validate.ts 的 v2 schema） */
-export function validateByType(type, q) {
+export function validateByType(type: string, q: GradableQuestion) {
   return typeRegistry.validate(type, q)
 }
 
 /** 答案展示文案 */
-export function renderAnswer(type, q, answer) {
+export function renderAnswer(type: string, q: GradableQuestion, answer: AnswerInput) {
   const entry = typeRegistry.get(type || q?.type)
   return entry ? entry.renderAnswer(q, answer) : '—'
 }

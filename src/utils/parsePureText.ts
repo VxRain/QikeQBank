@@ -16,16 +16,51 @@
  * - （ ）占位符：只有「无选项且命中空白标记」才走填空分支，选择题分支最优先；
  * - 问答长答案：ANSWER 状态持续吸收后续文本行直到 ANALYSIS 或结尾，①②分点不丢；
  * - 无选项判断：答案为 正确/错误/√/×/T/F 单 token 且题干无空白标记 -> judge。
+ *
+ * 类型：本文件零单测覆盖，本轮只加类型注解、不改任何判定逻辑。
+ * 局部类型（OptionFragment / Token / FsmAcc / ParsedQuestion）都定义在本文件内，
+ * 因为它们是扫描器/状态机的内部结构，不是对外契约；对外仍只导出 parsePureText。
+ * 因此本文件的导出面与改造前逐字一致（仅 parsePureText）。
  */
+
+import type { BlankAnswer, Doc, Question } from '../api/types.ts'
+
+/* ---------------- 本地类型（内部结构 + 解析结果形状） ---------------- */
+
+/** 选项片段：字母 + 正文（extractOptions 产出，累加器与判断题定位共用） */
+interface OptionFragment { letter: string; text: string }
+
+/** extractOptions 命中结果：首个选项前的题干文本 + 选项片段 */
+interface OptionExtraction { stem: string; options: OptionFragment[] }
+
+/**
+ * 解析产出的题目：字段形状与 api/types.ts 的 Question 一致，
+ * 但 id / bank_id 由后端生成（解析结果里没有），故不能直接用完整 Question。
+ * children 递归同型 —— 材料题子题同样不带 id。
+ */
+type ParsedQuestion = Omit<Question, 'id' | 'bank_id' | 'children'> & {
+  id?: string
+  bank_id?: string
+  children?: ParsedQuestion[]
+}
+
+/** 状态机累加器：逐区块收集题干/选项/答案/解析，并记录空白提示 */
+interface FsmAcc {
+  stems: string[]
+  options: OptionFragment[]
+  answerParts: string[]
+  analysisParts: string[]
+  blankHint: boolean
+}
 
 /* ---------------- Doc 构造辅助（行为与旧版保持一致） ---------------- */
 
-function textToDoc(text){
+function textToDoc(text: string): Doc {
   return { type:'doc', content:[{ type:'paragraph', content:[{ type:'text', text: String(text||'').trim() || '题干' }]}]}
 }
-function createBlankDoc(segments){
+function createBlankDoc(segments: Array<string | { blankId: string }>): Doc {
   // segments: array of string | {blankId}
-  const content=[]
+  const content: unknown[] = []
   let bIdx=1
   for(const seg of segments){
     if(typeof seg==='string'){
@@ -41,7 +76,7 @@ function createBlankDoc(segments){
 }
 
 /** 归一化：CRLF->LF；全角标点/字母/数字转半角（不动中文）；全角空格转空格 */
-function normalize(raw){
+function normalize(raw: string): string {
   let s = String(raw||'').replace(/\r\n/g,'\n').replace(/\r/g,'\n')
   s = s.replace(/[\uFF01-\uFF5E]/g, ch=> String.fromCharCode(ch.charCodeAt(0)-0xFEE0))
   s = s.replace(/\u3000/g,' ')
@@ -60,7 +95,33 @@ const TT = {
   BLANK_HINT:    'BLANK_HINT',    // 本行含 ___ / ( ) / 填空 标记且本行无选项
   STEM:          'STEM',          // 普通题干/正文行
   EMPTY:         'EMPTY',         // 空行
+} as const
+
+/** Token 类型取值（TT 的 value 字面量联合） */
+type TokenType = (typeof TT)[keyof typeof TT]
+
+/**
+ * 文本类 token（携带正文文本，OPTION 除外）：
+ * - text : 正文/答案/解析文本，必有（OPTION 没有）
+ * - num  : 仅 QUESTION_NUM，题号数值
+ * - blank: 仅 QUESTION_NUM，该行题干含空白标记
+ */
+interface TextToken {
+  type: Exclude<TokenType, typeof TT.OPTION>
+  text: string
+  num?: number
+  blank?: boolean
 }
+
+/** 选项类 token：一行可含多个片段 {letter,text}[]，不带正文文本 */
+interface OptionToken {
+  type: typeof TT.OPTION
+  options: OptionFragment[]
+  text?: undefined
+}
+
+/** 扫描器产出的一行 token（按 type 判别：文本类 / 选项类） */
+type Token = TextToken | OptionToken
 
 const RE_ANSWER_MARK   = /(?:【\s*(?:参考答案|正确答案|标准答案|答案)\s*】|\[\s*(?:参考答案|答案)\s*\]|(?:^|(?<=[\s。；;,，(\[【]))(?:参考答案|正确答案|标准答案|答案)\s*[:：])/
 const RE_ANALYSIS_MARK = /(?:【\s*(?:解析|详解)\s*】|\[\s*(?:解析|详解)\s*\]|(?:^|(?<=[\s。；;,，(\[【]))(?:解析|详解)\s*[:：])/
@@ -70,10 +131,10 @@ const RE_FILL_SPLIT    = /(___+|__\s*__|\(\s*\)|\[\[\s*\]\]|\[\s*\]|【\s*】)/g
 const RE_SHORT_HINT    = /简述|论述|试述|简答|问答|为什么|如何看待|谈谈|请说明/
 const RE_JUDGE_TOKEN   = /^(?:正确|错误|对|错|是|否|√|×|[TF]|TRUE|FALSE)$/i
 
-function isBlankMark(s){ return RE_BLANK.test(s) }
+function isBlankMark(s: string): boolean { return RE_BLANK.test(s) }
 
 /** 材料头判定：保守匹配，避免题干里出现「材料」二字就误判 */
-function isMaterialHead(line){
+function isMaterialHead(line: string): boolean {
   return /^\s*[【]?材料[】]?\s*[:：]?\s*$/.test(line)
     || /^\s*材料\s*[:：]/.test(line)
     || /阅读(?:下列|下面)/.test(line)
@@ -85,7 +146,7 @@ function isMaterialHead(line){
 }
 
 /** 材料头清洗：仅剥「材料：」「【材料】」「单独 材料」三种前缀 */
-function cleanMaterialHead(line){
+function cleanMaterialHead(line: string): string {
   return line.replace(/^\s*(?:【材料】|材料\s*[:：]|材料$)/, '').trim()
 }
 
@@ -94,10 +155,10 @@ function cleanMaterialHead(line){
  * 前置字符白名单天然防误切：题干内的「维生素C.」「3.A」等不会命中
  * 返回 { stem: 首个选项前的文本, options: [{letter,text}] } 或 null
  */
-function extractOptions(text){
+function extractOptions(text: string): OptionExtraction | null {
   const re = /(^|[\s(\[])([A-G])\s*[.、:\)\]]?\s*/g
-  const marks = []
-  let m
+  const marks: Array<{ letter: string; index: number; contentStart: number }> = []
+  let m: RegExpExecArray | null
   while((m = re.exec(text)) != null){
     // 无分隔符时需确保后接中文/数字且前为行首或空白，避免误切正文中的 A
     const after = text.slice(m.index + m[0].length, m.index + m[0].length + 1)
@@ -107,7 +168,7 @@ function extractOptions(text){
     marks.push({ letter: m[2], index: m.index, contentStart: m.index + m[0].length })
   }
   if(!marks.length) return null
-  const options = []
+  const options: OptionFragment[] = []
   for(let i=0;i<marks.length;i++){
     const end = i+1 < marks.length ? marks[i+1].index : text.length
     const t = text.slice(marks[i].contentStart, end).trim()
@@ -120,21 +181,21 @@ function extractOptions(text){
 }
 
 /** 单行扫描：先剥离行内 解析/答案 尾段，再依次识别 题号 -> 题干/空白提示 -> 选项 */
-function scanLine(line, out){
+function scanLine(line: string, out: Token[]): void {
   if(!line.trim()){ out.push({ type: TT.EMPTY, text: '' }); return }
   // 材料头优先：整行归为 MATERIAL_HEAD（是否真按材料装配由状态机结合题号再判定）
   if(isMaterialHead(line.trim())){ out.push({ type: TT.MATERIAL_HEAD, text: line.trim() }); return }
   let rest = line
   // 1) 先剥「解析/详解:」段（解析一般在最后）
-  let analysisText = null
+  let analysisText: string | null = null
   const am = rest.match(RE_ANALYSIS_MARK)
   if(am){ analysisText = rest.slice(am.index + am[0].length).trim(); rest = rest.slice(0, am.index).trimEnd() }
   // 2) 再剥「答案/参考答案:」段
-  let answerText = null
+  let answerText: string | null = null
   const wm = rest.match(RE_ANSWER_MARK)
   if(wm){ answerText = rest.slice(wm.index + wm[0].length).trim(); rest = rest.slice(0, wm.index).trimEnd() }
   // 3) 行首题号
-  let qnum = null
+  let qnum: string | null = null
   const qm = rest.match(RE_QNUM)
   if(qm){ qnum = qm[1]; rest = rest.slice(qm[0].length) }
   // 4) 选项识别（整行单个选项或行内多个选项均可）
@@ -158,14 +219,17 @@ function scanLine(line, out){
 }
 
 /** 扫描器入口：归一化 -> 逐行分类 -> token 序列 */
-function tokenize(raw){
+function tokenize(raw: string): Token[] {
   const s = normalize(raw)
-  const tokens = []
+  const tokens: Token[] = []
   if(s) for(const line of s.split('\n')) scanLine(line, tokens)
   return tokens
 }
 
 /* ---------------- 阶段2：状态机 ---------------- */
+
+/** 状态机的线性状态（顺序即优先级，见 fsmCollect 注释） */
+type FsmState = 'START' | 'STEM' | 'OPTIONS' | 'ANSWER' | 'ANALYSIS'
 
 /**
  * 线性状态遍历：START -> STEM -> OPTIONS -> ANSWER -> ANALYSIS
@@ -176,16 +240,10 @@ function tokenize(raw){
  * - OPTIONS 状态下的裸文本行视为上一选项的换行续行；
  * - blankHint 只在正文落入题干时记录 —— （ ）仅在无选项语境下才是填空信号。
  */
-function fsmCollect(tokens){
+function fsmCollect(tokens: Token[]): FsmAcc {
   // 逐区块累积态：options/stems 等由后续 push 填充，给显式类型避免 never[]
-  const acc: {
-    stems: string[]
-    options: Array<{ letter: string; text: string }>
-    answerParts: string[]
-    analysisParts: string[]
-    blankHint: boolean
-  } = { stems: [], options: [], answerParts: [], analysisParts: [], blankHint: false }
-  let state = 'START'
+  const acc: FsmAcc = { stems: [], options: [], answerParts: [], analysisParts: [], blankHint: false }
+  let state: FsmState = 'START'
   for(const tok of tokens){
     const type = tok.type
     if(type === TT.EMPTY) continue
@@ -226,13 +284,13 @@ function fsmCollect(tokens){
 
 /** 判断语义选项对：两个选项都是 正确/错误 类词（含 √×、T/F、对错、是否） */
 const JUDGE_WORDS = ['正确','错误','对','错','是','否','√','×','t','f','true','false']
-function isJudgePair(frags){
+function isJudgePair(frags: OptionFragment[]): boolean {
   if(frags.length !== 2) return false
   return frags.every(f => JUDGE_WORDS.includes(f.text.trim().toLowerCase()))
 }
 
 /** 判断题答案定位：优先按答案词语义，其次 B=第二项，默认第一项 */
-function pickJudgeId(frags, answerText){
+function pickJudgeId(frags: OptionFragment[], answerText: string): string {
   const t = String(answerText||'').trim()
   if(/^B$/i.test(t)) return 'o2'
   const errIdx = frags.findIndex(f => /^(?:错误|错|×|否|F|FALSE)$/i.test(f.text.trim()))
@@ -242,16 +300,16 @@ function pickJudgeId(frags, answerText){
 }
 
 /** 题干去题型前缀（冒号或包裹式均剥：[单选题]/【单选题】/判断：xxx 剥，判断下列…保留） */
-function stripTypePrefix(s){
+function stripTypePrefix(s: string): string {
   return s.replace(/^\s*(?:【\s*(?:单选题|多选题|判断题|填空题|问答题|单选|多选|判断|问答|填空)[^】]*】|\[\s*(?:单选题|多选题|判断题|填空题|问答题)[^\]]*\]|(?:单选|多选|判断|问答|简答|论述|填空)题?\s*[:：])\s*/, '')
 }
 
 /** 填空装配：按空白标记切段生成 blank 节点序列，答案按分隔符顺次分配到空位 */
-function buildFill(stemRaw, answerText){
+function buildFill(stemRaw: string, answerText: string): { doc: Doc; blanks: BlankAnswer[] } {
   const re = RE_FILL_SPLIT
   re.lastIndex = 0
-  const segments = []
-  let count = 0, last = 0, m
+  const segments: Array<string | { blankId: string }> = []
+  let count = 0, last = 0, m: RegExpExecArray | null
   while((m = re.exec(stemRaw)) != null){
     const before = stemRaw.slice(last, m.index)
     if(before) segments.push(before)
@@ -266,7 +324,7 @@ function buildFill(stemRaw, answerText){
   // 若分割后数量与空数不一致，尝试按空白/换行兜底
   let parts = rawParts.length ? rawParts : String(answerText||'').split(/\s+/).map(s=>s.trim()).filter(Boolean)
   if(!parts.length) parts = []
-  const blanks = []
+  const blanks: BlankAnswer[] = []
   for(let i=1;i<=count;i++){
     const p = parts[i-1] || ''
     // 单空多解：按 | / ／ 切分为多答案
@@ -285,7 +343,7 @@ function buildFill(stemRaw, answerText){
 }
 
 /** 累加器 -> Question：题型判定分支（顺序即优先级） */
-function assemble(acc){
+function assemble(acc: FsmAcc): ParsedQuestion {
   // 单个孤立选项不足以构成选择题：折叠回题干再走无选项分支
   if(acc.options.length === 1){
     const f = acc.options[0]
@@ -352,8 +410,8 @@ function assemble(acc){
  * 材料题装配：MATERIAL_STEM（材料头至首个题号）-> CHILDREN（按题号切片）
  * 材料区内的 ANALYSIS 归材料级；子块逐块递归状态机（allowMaterial=false 禁止嵌套材料）
  */
-function buildMaterial(tokens, headIdx, firstQIdx){
-  const matStems = []
+function buildMaterial(tokens: Token[], headIdx: number, firstQIdx: number): ParsedQuestion {
+  const matStems: string[] = []
   let matAnalysis = ''
   for(let i=headIdx;i<firstQIdx;i++){
     const t = tokens[i]
@@ -364,15 +422,15 @@ function buildMaterial(tokens, headIdx, firstQIdx){
     else if(t.text) matStems.push(t.text)
   }
   // 按题号切子块（firstQIdx 必为 QUESTION_NUM，故首个子块必然被初始化）
-  const blocks = []
-  let cur = null
+  const blocks: Token[][] = []
+  let cur: Token[] | null = null
   for(let i=firstQIdx;i<tokens.length;i++){
     const t = tokens[i]
     if(t.type === TT.QUESTION_NUM){ cur = []; blocks.push(cur) }
     if(!cur){ cur = []; blocks.push(cur) }
     cur.push(t)
   }
-  const children = blocks.map(b => parseTokens(b, { allowMaterial: false }))
+  const children: ParsedQuestion[] = blocks.map(b => parseTokens(b, { allowMaterial: false }))
   return {
     type: 'material',
     stem: textToDoc(matStems.join('\n').trim() || '材料'),
@@ -388,7 +446,7 @@ function buildMaterial(tokens, headIdx, firstQIdx){
  *   否则降级为普通题（MATERIAL_HEAD 由 fsm 按题干行消化）；
  * - 普通模式：线性 fsmCollect 后按优先级装配题型。
  */
-function parseTokens(tokens, { allowMaterial = true } = {}){
+function parseTokens(tokens: Token[], { allowMaterial = true }: { allowMaterial?: boolean } = {}): ParsedQuestion {
   if(allowMaterial){
     const headIdx = tokens.findIndex(t => t.type === TT.MATERIAL_HEAD)
     if(headIdx !== -1){
@@ -410,7 +468,7 @@ function parseTokens(tokens, { allowMaterial = true } = {}){
 
 /* ---------------- 对外接口（签名与返回结构与旧版兼容） ---------------- */
 
-export function parsePureText(rawInput){
+export function parsePureText(rawInput: string): ParsedQuestion {
   const tokens = tokenize(rawInput)
   if(!tokens.some(t => t.type !== TT.EMPTY)){
     // 空输入兜底：占位单选，交由编辑页完善（与旧版一致）

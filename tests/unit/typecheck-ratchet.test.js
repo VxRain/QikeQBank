@@ -99,6 +99,20 @@ test('compare：基线有、当前已消失的文件不算回退（文件被删�
   assert.deepEqual(newcomers, [])
 })
 
+test('compare：基线有、当前已消失的文件算改善（对应文件已清零）', () => {
+  // aggregateByFile 只产出有错误的文件：某文件清零后不会出现在 current 里。
+  // 若只遍历 current，清零永远判不出来 → 「请--update 收紧基线」永不触发（已发生过）。
+  const { regressions, newcomers, improvements } = compare(new Map(), new Map([[TEMPLATE, 38]]))
+  assert.deepEqual(regressions, [])
+  assert.deepEqual(newcomers, [])
+  assert.deepEqual(improvements, [{ file: TEMPLATE, was: 38, now: 0 }])
+})
+
+test('compare：当前有错误但基线没有 → 新债（不因 now 默认值而漏报）', () => {
+  const { newcomers } = compare(new Map([[SEARCH, 8]]), new Map())
+  assert.deepEqual(newcomers, [{ file: SEARCH, now: 8 }])
+})
+
 test('compare：回归判定用「每文件」而非总数（总数合法下降时也必须拦住单文件上涨）', () => {
   // 总数 10 → 9 是下降，但 session 从 2 涨到 5，必须报
   const current = new Map([[SETTINGS, 4], [SESSION, 5]])

@@ -56,7 +56,13 @@ export function aggregateByFile(output) {
 
 /**
  * 对比当前计数与基线。
- * @param {Map<string, number>} current 当前每文件错误数
+ *
+ * ⚠️ 必须并集遍历两边的键：`aggregateByFile` 只产出**有错误**的文件，
+ * 某文件彻底清零后根本不会出现在 `current` 里。只遍历 current 的话，
+ * 「已清零」永远判不出来（improvements 恒为空），于是「请 --update 收紧
+ * 基线」的提示永远不会触发，棘轮看起来过了其实没上紧。
+ *
+ * @param {Map<string, number>} current 当前每文件错误数（无错误的文件不在其中）
  * @param {Map<string, number>} baseline 基线每文件错误数
  * @returns {{regressions: Array<{file: string, was: number, now: number}>, newcomers: Array<{file: string, now: number}>, improvements: Array<{file: string, was: number, now: number}>}}
  */
@@ -65,10 +71,12 @@ export function compare(current, baseline) {
   const newcomers = [];
   const improvements = [];
 
-  for (const [file, now] of current) {
+  for (const file of new Set([...current.keys(), ...baseline.keys()])) {
+    const now = current.get(file) ?? 0;
     const was = baseline.get(file);
     if (was === undefined) {
-      newcomers.push({ file, now });
+      // 基线里没有 → 新债（now 必 > 0，否则不会出现在 current）
+      if (now > 0) newcomers.push({ file, now });
     } else if (now > was) {
       regressions.push({ file, was, now });
     } else if (now < was) {

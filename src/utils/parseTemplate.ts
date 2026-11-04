@@ -15,16 +15,78 @@
  * question 为可直接 normalize → plain_text → bank_id → create 的形状（id 由后端生成）。
  */
 
+import type { BlankAnswer, QuestionType } from '../api/types.ts'
 import { TYPE_LABELS, TYPE_ALIASES } from '../constants/questions.js'
 
 // 题型命名/别名唯一权威在 constants/questions.js（FE-ARCH-01）；此处 re-export 兼容旧引用
 export { TYPE_LABELS }
 
+/* ---------- 解析结果形状（parseSheet / parseDocxTemplate / ImportFileBox 共用） ---------- */
+
+/** 纯文本 doc 的行内节点：解析器只产出文字与填空位两种 */
+type DocNode = { type: 'text'; text: string } | { type: 'blank'; attrs: { id: string } }
+
+/** 题干/选项/参考答案/解析的富文本 doc（Tiptap JSON，与 api/types.ts::Doc 结构兼容） */
+export interface TextDoc {
+  type: 'doc'
+  content: Array<{ type: 'paragraph'; content: DocNode[] }>
+}
+
+/**
+ * 解析产出的题目：形状与 api/types.ts::Question 一致，但**没有**后端生成的 id / bank_id。
+ * id / difficulty / score 是导入前由 ImportFileBox 补的默认值，解析阶段不产出。
+ */
+export interface ParsedQuestion {
+  type: QuestionType
+  stem: TextDoc | null
+  options?: Array<{ id: string; content: TextDoc | null }>
+  answer?: {
+    ids?: string[]
+    blanks?: BlankAnswer[]
+    reference?: TextDoc | null
+  }
+  analysis?: TextDoc | null
+  /** 材料子题（子题同样不带 id / bank_id） */
+  children?: ParsedQuestion[]
+  id?: string
+  difficulty?: number | null
+  score?: number | null
+}
+
+/** 一个块的解析结果（parseSheet / parseDocxTemplate 的块保持同形状） */
+export interface ParsedBlock {
+  index: number
+  raw: string
+  startLine: number
+  /** 规范题型键；缺题型标记的块为空串 */
+  type: QuestionType | ''
+  typeLabel: string
+  /** 材料块为正文前 80 字，其余为题干纯文本；失败时为空串 */
+  stemText: string
+  question: ParsedQuestion | null
+  error: string | null
+}
+
+/**
+ * 单题/材料装配结果：成功带 question + stemText，失败只带 error。
+ * 失败分支不新增键（形状与改造前逐字一致），而 `error?: undefined` 让 `if (r.error)` 的真值判断
+ * 就能把两个分支收窄开，不必引入非空断言。
+ */
+type BuildResult =
+  | { question: ParsedQuestion; stemText: string; error?: undefined }
+  | { error: string; question?: undefined; stemText?: undefined }
+
 const RE_TYPE_HEAD = /^\s*【\s*(单选|多选|判断|填空|问答|材料)[题型]?\s*】\s*(.*)$/
 const RE_SEP_LINE = /^\s*(-{3,}|\*{3,})\s*$/
 const RE_OPTION = /^\s*(?:[(（]\s*([A-Za-z])\s*[)）]|([A-Za-z])\s*[.、)）．:：])\s*(\S.*)$/
+/** 选项行拆分结果：letter = 选项字母（大写），text = 选项正文 */
+export interface OptionMatch {
+  letter: string
+  text: string
+}
+
 // RE_OPTION 捕获组：m[1] = 括号式字母，m[2] = 分隔符式字母，m[3] = 选项正文
-export function optionMatch(ln) {
+export function optionMatch(ln: string): OptionMatch | null {
   const m = RE_OPTION.exec(ln)
   if (!m) return null
   return { letter: (m[1] || m[2]).toUpperCase(), text: m[3].trim() }
@@ -37,8 +99,16 @@ const RE_BLANK = /(___+|__\s*__|\(\s*\)|\[\[\s*\]\]|\[\s*\]|【\s*】|（\s*）)
 const RE_JUDGE_OK = /^(正确|对|是|√|T|TRUE)$/i
 const RE_JUDGE_NO = /^(错误|错|否|×|F|FALSE)$/i
 
+/**
+ * 题型别名表 / 短名表按 string 索引取用。
+ * 索引键的闭合性由 RE_TYPE_HEAD 保证（只认【单选/多选/判断/填空/问答/材料】及其「题」后缀变体），
+ * 故把字面量键表放宽成 string 索引不会引入新的运行期分支；查不到时照旧是 undefined。
+ */
+const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, QuestionType>>
+const TYPE_LABEL_OF = TYPE_LABELS as Readonly<Record<string, string>>
+
 /* ---------- Doc 构造（parseSheet  XLSX/DOCX 解析共用，也从这里导出） ---------- */
-export function textToDoc(text) {
+export function textToDoc(text: string | null | undefined): TextDoc | null {
   const paras = String(text || '')
     .split('\n')
     .map((s) => s.trim())
@@ -51,9 +121,9 @@ export function textToDoc(text) {
 }
 
 /** 题干纯文本 → 填空 doc（___ 等占位符按序生成 b1..bn） */
-export function stemToFillDoc(stemText) {
+export function stemToFillDoc(stemText: string): { doc: TextDoc | null; count: number } {
   const parts = String(stemText).split(RE_BLANK)
-  const content = []
+  const content: DocNode[] = []
   let n = 0
   for (const seg of parts) {
     if (RE_BLANK.test(seg) && seg.trim()) {
@@ -67,8 +137,14 @@ export function stemToFillDoc(stemText) {
   return { doc: { type: 'doc', content: [{ type: 'paragraph', content }] }, count: n }
 }
 
+/** 填空答案组装结果：成功带 blanks，失败带 error（两个键互斥，均不出现多余的键） */
+export interface FillBlanksResult {
+  blanks?: BlankAnswer[]
+  error?: string
+}
+
 /** 填空答案组装（label 如【填空】，调用方加 ctx 前缀）；返回 {blanks} 或 {error} */
-export function parseFillBlanks(answerRaw, count, label) {
+export function parseFillBlanks(answerRaw: string | null | undefined, count: number, label: string): FillBlanksResult {
   if (answerRaw == null || !String(answerRaw).trim()) return { error: `${label}缺少答案` }
   const groups = String(answerRaw).split(/[;；]/).map((s) => s.trim())
   if (groups.length !== count) return { error: `${label}占位 ${count} 处，答案给了 ${groups.length} 组（组间用 ；分隔）` }
@@ -80,7 +156,7 @@ export function parseFillBlanks(answerRaw, count, label) {
   return { blanks }
 }
 
-function splitList(s) {
+function splitList(s: string | null | undefined): string[] {
   return String(s || '')
     .split(/[,，、;\s]+/)
     .map((x) => x.trim().replace(/^[（(\s]+|[.、)）．:：\s]+$/g, '').toUpperCase())
@@ -88,7 +164,7 @@ function splitList(s) {
 }
 
 /** 答案归一：分隔符拆分；无分隔多字母（AB/ABC，DOCX/Excel 风格）且每位都是合法选项时拆字 */
-export function parseAnswerIds(raw, letters) {
+export function parseAnswerIds(raw: string | null | undefined, letters: string[]): string[] {
   const toks = splitList(raw)
   if (toks.length === 1 && toks[0].length > 1) {
     const chars = [...toks[0]]
@@ -98,7 +174,7 @@ export function parseAnswerIds(raw, letters) {
 }
 
 /** 判断答案归一：true=正确 / false=错误 / undefined=无法识别 */
-export function judgeValue(raw) {
+export function judgeValue(raw: string | null | undefined): boolean | undefined {
   const a = String(raw ?? '').trim()
   if (RE_JUDGE_OK.test(a)) return true
   if (RE_JUDGE_NO.test(a)) return false
@@ -106,9 +182,16 @@ export function judgeValue(raw) {
 }
 
 /* ---------- 块切分：按题型标记行 ---------- */
-function cutBlocks(lines) {
-  const blocks = []
-  let cur = null
+/** 切分出的原始块：head 为题型标记行的 exec 结果（无标记块为 null），lines 为块内非分隔行 */
+interface RawBlock {
+  head: RegExpExecArray | null
+  startLine: number
+  lines: string[]
+}
+
+function cutBlocks(lines: string[]): RawBlock[] {
+  const blocks: RawBlock[] = []
+  let cur: RawBlock | null = null
   lines.forEach((ln, i) => {
     const m = RE_TYPE_HEAD.exec(ln)
     if (m) {
@@ -126,14 +209,14 @@ function cutBlocks(lines) {
 }
 
 /* ---------- 单题装配（材料子题复用，allowMaterial=false） ---------- */
-function buildSingle(type, typeLabel, bodyLines, ctx) {
-  const stemLines = []
-  const options = [] // [{letter, text}]
-  let answerRaw = null
-  let refLines = null
-  let analysisLines = null
+function buildSingle(type: QuestionType, typeLabel: string, bodyLines: string[], ctx: string): BuildResult {
+  const stemLines: string[] = []
+  const options: OptionMatch[] = []
+  let answerRaw: string | null = null
+  let refLines: string[] | null = null
+  let analysisLines: string[] | null = null
   let cur = 'stem'
-  const err = (msg) => `${ctx}：${msg}`
+  const err = (msg: string): string => `${ctx}：${msg}`
   for (const ln of bodyLines) {
     const t = ln.trim()
     if (!t) continue
@@ -202,7 +285,7 @@ function buildSingle(type, typeLabel, bodyLines, ctx) {
   if (type === 'judge') {
     if (answerRaw == null || !answerRaw) return { error: err('【判断】缺少 答案：行') }
     const a = answerRaw.trim()
-    let val = null
+    let val: boolean | null = null
     if (RE_JUDGE_OK.test(a)) val = true
     else if (RE_JUDGE_NO.test(a)) val = false
     else return { error: err(`【判断】答案须为 正确/错误（实得“${a}”）`) }
@@ -253,7 +336,14 @@ function buildSingle(type, typeLabel, bodyLines, ctx) {
 }
 
 /* ---------- 材料块 ---------- */
-function buildMaterial(bodyLines, ctx) {
+/** 材料块内按题号切出的子题原始块 */
+interface RawSub {
+  num: string
+  rest: string
+  lines: string[]
+}
+
+function buildMaterial(bodyLines: string[], ctx: string): BuildResult {
   // 首个题号行之前为材料正文
   let firstQ = -1
   bodyLines.forEach((ln, i) => {
@@ -267,8 +357,8 @@ function buildMaterial(bodyLines, ctx) {
     .trim()
   if (!matText) return { error: `${ctx}：【材料】正文为空` }
   // 按题号切子块
-  const subs = []
-  let cur = null
+  const subs: RawSub[] = []
+  let cur: RawSub | null = null
   for (const ln of bodyLines.slice(firstQ)) {
     const m = RE_QNUM.exec(ln)
     if (m) {
@@ -277,13 +367,13 @@ function buildMaterial(bodyLines, ctx) {
     } else if (cur) cur.lines.push(ln)
   }
   if (cur) subs.push(cur)
-  const children = []
+  const children: ParsedQuestion[] = []
   for (const s of subs) {
     const hm = RE_TYPE_HEAD.exec(s.rest)
     if (!hm) return { error: `${ctx}：子题 ${s.num} 缺少题型标记（写法：${s.num}. 【单选】……）` }
-    const innerType = TYPE_ALIASES[hm[1]]
+    const innerType = ALIAS_TO_TYPE[hm[1]]
     if (innerType === 'material') return { error: `${ctx}：子题 ${s.num} 不支持嵌套材料` }
-    const r = buildSingle(innerType, TYPE_LABELS[innerType], [hm[2], ...s.lines], `${ctx}子题 ${s.num}`)
+    const r = buildSingle(innerType, TYPE_LABEL_OF[innerType], [hm[2], ...s.lines], `${ctx}子题 ${s.num}`)
     if (r.error) return { error: r.error }
     children.push(r.question)
   }
@@ -299,11 +389,16 @@ function buildMaterial(bodyLines, ctx) {
 }
 
 /* ---------- 入口 ---------- */
-export function parseTemplateFile(text) {
+/** 整份文件的解析结果（blocks 按出现顺序，index 从 1 开始） */
+export interface ParsedTemplateFile {
+  blocks: ParsedBlock[]
+}
+
+export function parseTemplateFile(text: string | null | undefined): ParsedTemplateFile {
   const src = String(text || '').replace(/\r\n/g, '\n')
   const lines = src.split('\n')
   const rawBlocks = cutBlocks(lines)
-  const blocks = rawBlocks.map((b, i) => {
+  const blocks = rawBlocks.map((b, i): ParsedBlock => {
     const index = i + 1
     const ctx = `第 ${index} 块`
     const raw = [(b.head ? b.head[0] : ''), ...b.lines].join('\n')
@@ -312,8 +407,8 @@ export function parseTemplateFile(text) {
       return { ...base, type: '', typeLabel: '', stemText: '', question: null, error: `${ctx}：缺少题型标记（须以【单选/多选/判断/填空/简答/材料】开头）` }
     }
     // 展示/报错一律用规范名（问答 → 简答），解析规则仍由别名表决定
-    const type = TYPE_ALIASES[b.head[1]]
-    const typeLabel = TYPE_LABELS[type] || b.head[1]
+    const type = ALIAS_TO_TYPE[b.head[1]]
+    const typeLabel = TYPE_LABEL_OF[type] || b.head[1]
     // 标记行行尾文字并入正文首行（如：【单选】下列…？）
     const body = b.head[2] ? [b.head[2], ...b.lines] : b.lines
     if (type === 'material') {
