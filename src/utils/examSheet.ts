@@ -98,9 +98,13 @@ export function groupSheetItems(
       answered: hasAnswerEntry(answers[it.uid])
     }
     if (it.isChild && it.parent) {
-      // 材料题子题的 parent.id 必然存在（组卷时由母题写入）；断言只为满足 Map 键类型，
-      // 运行期即便缺失也仍按「同一个 undefined 键」归组，行为不变。
-      const key = it.parent.id as string
+      // 材料题子题的 parent.id 组卷时由母题写入；运行期即便缺失也仍按
+      // 「同一个 undefined 键」归组，行为不变。
+      //
+      // 不需要 `as string`：`strictNullChecks` 关闭时 `string | undefined`
+      // 会自动收窄，删掉断言仍是 0 错误（已实测）。同理不写“为满足 Map 键类型”
+      // ——那是给断言编理由，会诱导后人继续加断言。
+      const key = it.parent.id
       let g = byParent.get(key)
       if (!g) {
         g = { key, isMaterial: true, parentIndex: i, items: [] }
@@ -118,9 +122,16 @@ export function groupSheetItems(
 /**
  * 三态计数（标记优先于已答：标了就是待定，视觉上要显眼）。
  *
- * items 入参放宽到 `readonly unknown[]`：ExamSheet.vue 的 `props.items` 被
- * defineProps 的 `type: Array` 推断成 `unknown[]`，SFC 未加 lang="ts" 也写不了断言。
- * 这里只读 uid，内部用最小形状收回类型，写错字段名仍会报错。
+ * items 入参放宽到 `readonly unknown[]`：`ExamSheet.vue` 的 `props.items` 被
+ * `defineProps` 的 `type: Array` 推断成 `unknown[]`，而 SFC 未加 lang="ts" 也写不了泛型。
+ * 放宽是必需项（收紧成 `SheetItemInput[]` 会报 TS2345，因 `uid` 是必填）。
+ *
+ * ⚠️ 但这里**不提供字段级保护**：内部收回成 `SheetItemInput` 后，因它有
+ * `[k: string]: unknown` 索引签名，`it.ud` / `it.uidx` 这类拼错**一个都不报错**
+ * （已实测）。所以本函数只保证读 `uid` 不崩，不能靠它防写错字段名。
+ * 真正的根因是 `ExamSheet.vue` 没有 lang="ts"、props 拿不到精确类型；
+ * 同一 prop 上 `groupSheetItems` 用的是调用期 `@type {any}` 断言，两处治法不一致，
+ * 待 SFC 迁 TS 时一并收口。
  */
 export function countSheet(
   items: readonly unknown[] | null | undefined,

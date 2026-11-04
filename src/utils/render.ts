@@ -62,11 +62,24 @@ interface MaterialLike {
 
 export function escapeHtml(s: unknown): string{ return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
-export function renderInlineMath(latex: string): string{
-  try{ return katex.renderToString(latex, { throwOnError:false, displayMode:false }) } catch(e){ return `<span class="katex-fallback">${escapeHtml(latex)}</span>` }
+/**
+ * 行内公式 → HTML。
+ *
+ * `latex` 声明为 `string | null | undefined` 是**如实**的：真实调用点
+ * L83 传的是 `n.attrs.latex`，而 `TiptapAttrs.latex` 是可选的（`latex?`），
+ * 节点缺 latex 属性时它就是 `undefined`。
+ *
+ * katex 在 `throwOnError:false` 下对**字符串**不抛（非法 LaTeX 只返回
+ * `.katex-error` 标记），但传入 `null`/`undefined`/数字会抛
+ * `TypeError: KaTeX can only parse string typed expression`——实测确认。
+ * 上面的 try/catch 就是兜这个，回退到纯文本展示。
+ */
+export function renderInlineMath(latex: string | null | undefined): string{
+  try{ return katex.renderToString(latex as string, { throwOnError:false, displayMode:false }) } catch(e){ return `<span class="katex-fallback">${escapeHtml(latex)}</span>` }
 }
-export function renderBlockMath(latex: string): string{
-  try{ return `<div class="math-block">${katex.renderToString(latex, { throwOnError:false, displayMode:true })}</div>` } catch(e){ return `<div class="math-block">${escapeHtml(latex)}</div>` }
+/** 块级公式 → HTML（入参与回退同理见 `renderInlineMath`） */
+export function renderBlockMath(latex: string | null | undefined): string{
+  try{ return `<div class="math-block">${katex.renderToString(latex as string, { throwOnError:false, displayMode:true })}</div>` } catch(e){ return `<div class="math-block">${escapeHtml(latex)}</div>` }
 }
 export function renderInlineNodes(nodes: TiptapNode[] | null | undefined): string{
   return (nodes||[]).map(n=>{
@@ -88,7 +101,7 @@ export function renderInlineNodes(nodes: TiptapNode[] | null | undefined): strin
 }
 export function renderDoc(doc: TiptapNode | null | undefined): string{
   if(!doc || !Array.isArray(doc.content)) return ''
-  return doc.content.map((node): string=>{
+  return doc.content.map((node)=>{
     if(node.type==='paragraph') return `<p>${renderInlineNodes(node.content)}</p>`
     if(node.type==='imageBlock'){
       const src=node.attrs.src||''

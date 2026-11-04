@@ -59,7 +59,17 @@ export function schedulerKeyOf(s: FsrsSettings = {}): string {
   return JSON.stringify([p.requestRetention, p.maximumInterval, p.enableFuzz, p.learningSteps, p.relearningSteps])
 }
 
-/** 按设置取 scheduler（签名不变则复用，变则重建） */
+/**
+ * 按设置取 scheduler（签名不变则复用，变则重建）。
+ *
+ * 返回标注为非空的 `FSRS`：唯一赋值就在下面的 `if` 块内，且 `fsrs()` /
+ * `generatorParameters()` 抛错时异常直接外泄（不会返回 null），所以走到
+ * `return` 时 `scheduler` 必定非空。
+ *
+ * ⚠️ 这里用 `scheduler!` 而不是裸 `return scheduler`：当前 `strict:false`
+ * （无 `strictNullChecks`）下两者编译结果一样，但开 strict 后裸写法会报
+ * TS2322。显式 `!` 让「此处非空」成为代码上的承诺，而不是靠配置缺口蒙过。
+ */
 export function getScheduler(s: FsrsSettings = {}): FSRS {
   const key = schedulerKeyOf(s)
   if (!scheduler || schedulerKey !== key) {
@@ -75,7 +85,7 @@ export function getScheduler(s: FsrsSettings = {}): FSRS {
     )
     schedulerKey = key
   }
-  return scheduler
+  return scheduler!
 }
 
 export function createEmpty(now: Date = new Date()) {

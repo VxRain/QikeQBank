@@ -3,16 +3,21 @@
 /**
  * ProseMirror/Tiptap 节点（本模块只读取这些字段）。
  *
- * `content` 刻意保持 `unknown[]`：调用方（Form / ImportFileBox / parsePureText 的
- * `ParsedQuestion`）拿到的 doc 其静态类型就是 `content?: unknown[]`（见 `api/types.ts::Doc`），
- * 写成 `PmNode[]` 会让那些题目对象无法传进来。遍历处用 `as PmNode[]` 收窄——
- * 纯类型断言，无运行期判断，行为与改造前逐字一致。
+ * `content` 直接声明为 `PmNode[]`，**不需要类型断言**：本 interface 所有字段
+ * 都可选，叠加 `strict:false`（`strictNullChecks` 关闭→`null` 联合被擦除）后，
+ * 调用方（`api/types.ts::Doc` 的 `content?: unknown[]`、parsePureText 的
+ * `ParsedQuestion`）都可直接赋值进来。实测（reviewer + 主代理两次复现）：
+ * 改成 `PmNode[]` 并删掉全部 `as PmNode[]` 后仍是 0 条 noImplicitAny。
+ *
+ * ⚠️ 若将来开启 `strictNullChecks`，这里会需要显式的收窄函数（`unknown[]`
+ * 无法再直接赋给 `PmNode[]`），届时请补 `asNodes(x: unknown): PmNode[]`
+ * 带运行期判型的版本，而不是退回无校验断言。
  */
 interface PmNode {
   type?: string
   text?: string
   attrs?: { latex?: string | null; id?: string | null } | null
-  content?: unknown[]
+  content?: PmNode[]
 }
 
 /**
@@ -34,8 +39,8 @@ interface NormalizableQuestion {
 function getPlainText(doc: PmNode | null | undefined): string {
   if(!doc || !doc.content) return ''
   const parts: string[] = []
-  for(const n of doc.content as PmNode[]){
-    if(n.type==='paragraph') parts.push(((n.content||[]) as PmNode[]).map(c=>{
+  for(const n of doc.content){
+    if(n.type==='paragraph') parts.push((n.content||[]).map(c=>{
       if(c.type==='text') return c.text||''
       if(c.type==='inlineMath') return ` ${c.attrs?.latex||''} `
       if(c.type==='blank') return ' ___ '
@@ -47,9 +52,28 @@ function getPlainText(doc: PmNode | null | undefined): string {
   return parts.join(' ').trim()
 }
 
+/**
+ * 宽松入参：除本模块认识的形状外，也接受任意对象目录。
+ *
+ * 为什么要宽：真实调用方 `Form.vue:273` 的入参来自
+ * `normalizeDocAssets(JSON.parse(...))`，其类型随泛型退化为 `any`（`api/assets.ts:173`）。
+ * 若这里只写 `NormalizableQuestion`，**当下能过**只是因为 `any` 泄漏；等哪天
+ * 把 `normalizeDocAssets` 收紧成 `Record<string, any> & {bank_id?: string}`（`form`
+ * 的 JSDoc 就是它），两处调用会立刻报 TS2559（no properties in common）。
+ * 与 `validate.ts:49` 的做法对齐：声明宽、内部逐字段判型。
+ *
+ * 安全性由函数体保证：下面每处读 `q.children` / `q.options` 都先 `Array.isArray`，
+ * `q.stem` / `q.answer?.reference` 走 `getPlainText` 的 `?.` 与 `||` 兜底。
+ */
+type AggregatableQuestion = NormalizableQuestion | Record<string, unknown>
+
 // 聚合全文：material 母题拼接所有子题的 stem + 选项 + 参考答案 + 解析；
 // 非 material 为 stem + 自身选项/参考答案/解析。用于搜索命中子题关键词。
-export function getAggregatedPlainText(q: NormalizableQuestion): string {
+export function getAggregatedPlainText(input: AggregatableQuestion | null | undefined): string {
+  // 注意：不写 `input || {}` 兑底——那会把 `null`/`undefined` 入参从
+  // 「抛 TypeError」变成「返回空串」，是行为变更（主代理对拍实测发现）。
+  // 保持与原实现一致：让它在 `q.stem` 处自然抛错。
+  const q = input as NormalizableQuestion
   const parts = [getPlainText(q.stem)]
   const children = (q.type==='material' && Array.isArray(q.children)) ? q.children : []
   for(const c of children){
@@ -64,9 +88,15 @@ export function getAggregatedPlainText(q: NormalizableQuestion): string {
   return parts.join(' ').replace(/\s+/g,' ').trim()
 }
 
-// 规范化：analysis 空段落→null；options 去除 isAnswer；补稳定 id；递归 children
-// v2: material 的 score/difficulty 由服务端强制重算（分值加权，不信任前端）
-export function normalizeQuestion(q: NormalizableQuestion | null | undefined): NormalizableQuestion | null | undefined {
+/**
+ * 规范化：analysis 空段落→null；options 去除 isAnswer；补稳定 id；递归 children
+ * v2: material 的 score/difficulty 由服务端强制重算（分值加权，不信任前端）
+ *
+ * 与 `getAggregatedPlainText` 同理接受宽松入参（见上方注释），函数体 `if(!q) return q`
+ * 与各字段的 `Array.isArray` 守卫保证安全。
+ */
+export function normalizeQuestion(input: NormalizableQuestion | Record<string, unknown> | null | undefined): NormalizableQuestion | null | undefined {
+  const q = input as NormalizableQuestion | null | undefined
   if(!q) return q
   if(q.analysis && isDocEmpty(q.analysis)) q.analysis = null
   if(Array.isArray(q.options)){
@@ -104,8 +134,8 @@ function ensureOptionIds(q: NormalizableQuestion): void {
 }
 function isDocEmpty(doc: PmNode | null | undefined): boolean {
   if(!doc || !doc.content) return true
-  return (doc.content as PmNode[]).every(b=>{
-    if(b.type==='paragraph') return !b.content || ((b.content as PmNode[]).every(n=> !n.text || !String(n.text).trim()))
+  return doc.content.every(b=>{
+    if(b.type==='paragraph') return !b.content || (b.content.every(n=> !n.text || !String(n.text).trim()))
     return false
   })
 }

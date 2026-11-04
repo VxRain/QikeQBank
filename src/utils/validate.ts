@@ -3,15 +3,19 @@
 /**
  * 校验器读取的文档节点最小形状（ProseMirror/Tiptap doc 的子集）。
  *
- * `content` 保持 `unknown[]`：调用方传进来的 doc 静态类型就是
- * `content?: unknown[]`（`api/types.ts::Doc`），写死成 `ValidateNode[]`
- * 会让这些题目对象无法传入。递归处用断言收窄，纯类型操作，无运行期影响。
+ * `content` 直接声明为 `ValidateNode[]`，**不需要类型断言**：本 interface 所有
+ * 字段都可选，叠加 `strict:false`（`strictNullChecks` 关闭）后，调用方的
+ * `content?: unknown[]` 可直接赋值进来。实测（reviewer + 主代理两次复现）：
+ * 改成 `ValidateNode[]` 并删掉全部断言后仍是 0 条 noImplicitAny。
+ *
+ * ⚠️ 若将来开启 `strictNullChecks`，这里需补带运行期判型的收窄函数，
+ * 而不是退回无校验断言。
  */
 interface ValidateNode {
   type?: string
   text?: string
   attrs?: { id?: string | null; latex?: string | null } | null
-  content?: unknown[]
+  content?: ValidateNode[]
 }
 
 interface ValidateOption {
@@ -121,15 +125,26 @@ function optionsHaveIds(options: ValidateOption[]): boolean {
 /** short 参考答案：合法 Doc 且内容非空（非空段落，或图/公式/引用块） */
 function isValidReferenceDoc(doc: ValidateNode | null | undefined): boolean {
   if(!doc || doc.type!=='doc' || !Array.isArray(doc.content)) return false
-  return (doc.content as ValidateNode[]).some(b=>{
+  return doc.content.some(b=>{
     if(!b || typeof b.type!=='string') return false
-    if(b.type==='paragraph') return Array.isArray(b.content) && ((b.content as ValidateNode[]).some(n=> n && typeof n.text==='string' && n.text.trim()))
+    if(b.type==='paragraph') return Array.isArray(b.content) && (b.content.some(n=> n && typeof n.text==='string' && n.text.trim()))
     return ['imageBlock','mathBlock','blockquote'].includes(b.type)
   })
 }
-/** 按文档顺序返回 blank id（去重） */
-export function blankIdsInOrder(stem: ValidateNode | null | undefined): string[] {
+/**
+ * 按文档顺序返回 blank id（去重）。
+ *
+ * ⚠️ 声明写 `Array<string | null | undefined>` 而非 `string[]` 是**故意的**：
+ * 本函数会把缺失/非法的 `attrs.id` **原样推入**（旧行为），调用方靠
+ * `JSON.stringify` 全等比较来报「answer.blanks 与题干 blank 不一致」——
+ * 保留 `null` 才能让「题型缺 id」这个真实错误被校验出来。
+ *
+ * 若收窄成 `string[]` + 运行期过滤，会改变校验行为：实测 `[null,'b1'] vs ['b1']`
+ * 从「报不一致」变成「通过」，`[null]` 从「报不一致」变成「空列表」。
+ * 因此这里是**有意保留的宽声明**，不是类型缺口。
+ */
+export function blankIdsInOrder(stem: ValidateNode | null | undefined): Array<string | null | undefined> {
   const list: Array<string | null | undefined> = []
-  ;(function walk(n: ValidateNode | null | undefined){ if(!n) return; if(n.type==='blank') list.push(n.attrs?.id); if(n.content) (n.content as ValidateNode[]).forEach(walk) })(stem)
+  ;(function walk(n: ValidateNode | null | undefined){ if(!n) return; if(n.type==='blank') list.push(n.attrs?.id); if(n.content) n.content.forEach(walk) })(stem)
   return [...new Set(list)]
 }
