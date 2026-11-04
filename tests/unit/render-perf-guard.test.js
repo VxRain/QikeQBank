@@ -32,6 +32,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
 const read = (p) => readFileSync(resolve(root, p), 'utf8').replace(/\r\n/g, '\n')
 
+import { functionBody, hasExportFn } from '../helpers/src-probe.js'
+
 const previewSrc = read('src/components/QuestionPreview.vue')
 const assetsSrc = read('src/api/assets.ts')
 const listSrc = read('src/views/List.vue')
@@ -68,25 +70,24 @@ describe('A. TDZ：缓存容器必须声明在首次 refresh() 之前', () => {
 
 describe('B. 缓存键必须含 asset 代次', () => {
   test('memoKey 拼接了 assetCacheGen()', () => {
-    const m = /function memoKey\(sig\)\s*\{([\s\S]*?)\n\}/.exec(previewSrc)
-    assert.ok(m, '找不到 memoKey 函数')
+    const body = functionBody(previewSrc, 'memoKey', { where: 'src/components/QuestionPreview.vue' })
     assert.match(
-      m[1],
+      body,
       /assetCacheGen\(\)/,
       'memoKey 必须包含 assetCacheGen()：assets_gc 后路径失效，只按 signature 记忆会吐出带死链的旧 HTML'
     )
   })
 
   test('assets.ts 的 clearAssetCache 会让代次自增', () => {
-    // 允许可选的返回类型注解（迁移到 .ts 后是 `function clearAssetCache(): void {`）
-    const m = /export function clearAssetCache\(\)(?:\s*:\s*[\w\[\]<>| ]+)?\s*\{([\s\S]*?)\n\}/.exec(assetsSrc)
-    assert.ok(m, '找不到 clearAssetCache')
-    assert.match(m[1], /cacheGen\s*(\+=\s*1|\+\+)/, 'clearAssetCache 必须让 cacheGen 自增，否则旧缓存不会失效')
+    // 用 src-probe 取函数体：不care 返回类型注解是 void / Promise<T> / 泛型，
+    // 也不 care 参数是否有注解。原实现是「正则加宽」，遇到 `Promise<T>` 就假红。
+    const body = functionBody(assetsSrc, 'clearAssetCache', { where: 'src/api/assets.ts' })
+    assert.match(body, /cacheGen\s*(\+=\s*1|\+\+)/, 'clearAssetCache 必须让 cacheGen 自增，否则旧缓存不会失效')
   })
 
   test('assetCacheGen / allAssetsResolved / hasAssetRefs 均已导出', () => {
     for (const fn of ['assetCacheGen', 'allAssetsResolved', 'hasAssetRefs']) {
-      assert.match(assetsSrc, new RegExp(`export function ${fn}\\(`), `assets.ts 必须导出 ${fn}`)
+      assert.ok(hasExportFn(assetsSrc, fn), `assets.ts 必须导出 ${fn}`)
     }
     // QuestionPreview 必须真的用上（导入但不用 = 快路没接上）
     for (const fn of ['assetCacheGen', 'allAssetsResolved', 'hasAssetRefs']) {
