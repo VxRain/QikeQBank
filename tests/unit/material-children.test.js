@@ -12,7 +12,7 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
 
-const { moveItem } = await import('../../src/utils/arrayMove.js')
+const { moveItem } = await import('../../src/utils/arrayMove.ts')
 const {
   childIdSeed, childIdForAppend, dedupeChildIds, nextChildId,
   moveChild, moveChildUp, moveChildDown, canMoveChild, removeChildAt,

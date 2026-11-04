@@ -592,7 +592,7 @@ function normalizeChildIdsInPlace() {
 }
 
 /**
- * 移动子题：上移/下移/拖拽三路共用 moveChild（底层是 utils/arrayMove.js::moveItem）。
+ * 移动子题：上移/下移/拖拽三路共用 moveChild（底层是 utils/arrayMove.ts::moveItem）。
  * 只挪位置，不重编 id —— 见 utils/materialChildren.js 文件头的取舍说明。
  */
 function moveChildTo(from, to) {

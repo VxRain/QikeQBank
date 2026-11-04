@@ -11,7 +11,7 @@
  * `tests/unit/banks-view.test.js` 逐条锁住。
  */
 
-import { moveItem } from '../utils/arrayMove.js'
+import { moveItem } from '../utils/arrayMove.ts'
 
 /** 排序方式（数组顺序即下拉选项顺序）；`custom` = 用户拖拽出来的顺序 */
 export const BANK_SORT_OPTIONS = Object.freeze([
@@ -134,7 +134,7 @@ export function canDragBanks({ sort = DEFAULT_BANK_SORT, query = '' } = {}) {
 /**
  * 拖拽落位：把 from 位置的元素移到 to 位置。
  *
- * 实现委托给 utils/arrayMove.js —— 材料子题排序用的是同一套语义。
+ * 实现委托给 utils/arrayMove.ts —— 材料子题排序用的是同一套语义。
  * 各写一份必然漂移（一边越界原地不动、另一边抛异常），而这类分歧手测发现不了，
  * 所以只留一个实现，并由单测逐项对照两边的输出。
  *

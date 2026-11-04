@@ -22,7 +22,7 @@
  * 因此删除走 `removeChildAt`，它拒绝删掉最后一个。
  */
 
-import { moveItem } from './arrayMove.js'
+import { moveItem } from './arrayMove.ts'
 
 /**
  * 子题 id 前缀：`<父 id>_c<n>`，与后端 `ensure_child_ids` 同格式。
