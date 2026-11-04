@@ -48,7 +48,8 @@ export function previewIntervals(fsrsRow, schedSettings = {}, now = new Date()) 
   } catch {
     return null
   }
-  const out = {}
+  // 四档可能都有值，也可能某一档在 catch 里退成 null；先按 Record 建壳，避免 {} 缺键报 TS2739
+  const out = /** @type {Record<'again'|'hard'|'good'|'easy', {dueAt: string, ms: number, label: string}|null>} */ ({})
   for (const grade of RATING_GRADES) {
     try {
       const res = fsrsAnswer(card, grade, schedSettings, now)

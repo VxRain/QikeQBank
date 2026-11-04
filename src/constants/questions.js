@@ -93,8 +93,10 @@ function metaOf(key) {
 export function typeLabel(key, opts = {}) {
   const m = metaOf(key)
   if (!m) return key || '-'
-  if (opts === true || opts.full) return m.fullLabel
-  if (opts.short) return m.shortLabel
+  // opts === true 是 { full: true } 的缩与；opts === false 视同 {}
+  const o = opts === true ? { full: true } : opts || {}
+  if (o.full) return m.fullLabel
+  if (o.short) return m.shortLabel
   return m.label
 }
 

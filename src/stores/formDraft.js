@@ -169,7 +169,9 @@ export function startDraftTimer(key, getForm, { interval = 30_000, shouldSave } 
     const form = typeof getForm === 'function' ? getForm() : getForm
     if (form) saveDraft(key, form)
   }, interval)
-  // Node 单测里别把进程吊住；浏览器返回数字 id 没有 unref
-  if (id && typeof id.unref === 'function') id.unref()
+  // Node 单测里别把进程吊住；浏览器返回 number（无 unref）。
+  // 浏览器下 setInterval 返回 number，Node 下返回 Timeout 对象；窄化成对象且方法存在才调用。
+  const handle = /** @type {any} */ (id)
+  if (handle && typeof handle.unref === 'function') handle.unref()
   return () => clearInterval(id)
 }

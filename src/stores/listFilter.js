@@ -63,7 +63,7 @@ export function normalizeFilter(raw) {
   }
   // 难度以字符串存（<select> 的 value 是字符串，'' = 全部）
   const d = raw.difficulty === '' || raw.difficulty == null ? '' : Number(raw.difficulty)
-  out.difficulty = DIFFICULTY_CHOICES.includes(d) ? String(d) : ''
+  out.difficulty = typeof d === 'number' && DIFFICULTY_CHOICES.includes(d) ? String(d) : ''
 
   if (SORT_KEYS.includes(raw.sort)) out.sort = raw.sort
   const ps = Number(raw.pageSize)

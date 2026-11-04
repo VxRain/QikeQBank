@@ -156,6 +156,8 @@
  * @property {string} [access_key]
  * @property {string} [secret_key]
  * @property {string|null} [session_token]
+ * @property {boolean} [configured] 是否已保存密钥（后端 public_settings 返回；secret 不回传）
+ * @property {boolean} [has_secret] 同上，供面板显示「已连接」
  */
 
 /** practice_records 写入项 @typedef {Object} RecordItem

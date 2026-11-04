@@ -103,6 +103,7 @@ export function normalizeMix(mix, total = DEFAULT_TOTAL) {
     raw[t] = n
     sum += n
   }
+  /** @type {Record<string, number>} */
   const out = {}
   if (sum <= 0) return out
   let acc = 0
@@ -128,7 +129,7 @@ export function normalizeMix(mix, total = DEFAULT_TOTAL) {
  * 组一张 100 分标准卷。
  *
  * @param {Array<object>} questions 候选题目（含 score / type / difficulty）
- * @param {{total?:number, mix?:Record<string,number>, difficulty?:number|null}} opts
+ * @param {{total?:number, mix?:Record<string,number>, difficulty?:number|string|null}} opts
  * @returns {{
  *   ok: boolean,
  *   picked: object[],
@@ -157,7 +158,9 @@ export function planStandardPaper(questions, opts = {}) {
     pools[t].sort((a, b) => a.units - b.units || String(a.q.id).localeCompare(String(b.q.id)))
   }
 
+  /** @type {Record<string, {count:number, score:number, target:number}>} */
   const byType = {}
+  /** @type {Record<string, number>} */
   const missing = {}
   const picked = []
   const usedIds = new Set()
@@ -182,12 +185,14 @@ export function planStandardPaper(questions, opts = {}) {
   // 用户不该因为某一个题型少两道题就被迫换整卷。
   let deficit = Object.values(missing).reduce((s, v) => s + v, 0)
   if (deficit > 0) {
+    /** @type {Array<{q:object, units:number, type:string}>} */
     const spare = []
     for (const t of Object.keys(pools)) {
       for (const x of pools[t]) if (!usedIds.has(x.q.id)) spare.push({ ...x, type: t })
     }
     spare.sort((a, b) => a.units - b.units || String(a.q.id).localeCompare(String(b.q.id)))
-    const fill = subsetSum(spare, deficit * 2)
+    /** 传入项额外带 type（用于回填 byType），subsetSum 不关心这个字段 */
+    const fill = /** @type {Array<{q:object, units:number, type:string}>|null} */ (subsetSum(spare, deficit * 2))
     if (fill) {
       for (const x of fill) {
         picked.push(x.q)
@@ -228,6 +233,7 @@ export function planStandardPaper(questions, opts = {}) {
  */
 export function paperScoreSummary(questions) {
   const list = Array.isArray(questions) ? questions : []
+  /** @type {Record<string, {count:number, score:number}>} */
   const byType = {}
   let total = 0
   for (const q of list) {
