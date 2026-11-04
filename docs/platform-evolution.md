@@ -89,7 +89,7 @@ banks ──┬── questions ──────────────┐
 | Tiptap Block JSON 编辑器 | `src/components/TiptapDocEditor.vue` | 它本来就是个笔记编辑器，只是现在服务 `stem_json`。做成通用的 `blocks[].node_json` 是零成本复用——**这是本项目最大的杠杆** |
 | 内容寻址 assets | `assets` 表 + `asset:<sha>` | 图片/PDF/附件天然去重；**同一思路复用到 AI 结果缓存**：`sha(输入+prompt版本)` 做 key，同输入不重复付费 |
 | 作答明细 | `practice_records.detail_json`（每空对照） | 错因分析的金矿。绝大多数竞品没存这个粒度 |
-| FSRS-6 封装 | `src/utils/fsrs.js` + Rust 写入校验 | 调度器不用重写，只需扩「卡片来源」 |
+| FSRS-6 封装 | `src/utils/fsrs.ts` + Rust 写入校验 | 调度器不用重写，只需扩「卡片来源」 |
 | S3 LWW 双时钟 | `src-tauri/src/db/sync.rs` | 新表只要遵守 `updated_at`/`synced_at` 契约即可并入 |
 
 ### 2.2 同步隐患：`review_state` 全量推送（已修，PE-A-01）

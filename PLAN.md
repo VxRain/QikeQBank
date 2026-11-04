@@ -68,7 +68,7 @@ QikeQBank/
 │   │               settings/（SettingsDialog 弹窗外壳 + registry.js 设置项注册表 + SettingRow 通用行 + AboutPanel）
 │   └── views/  Home List(单库试题) Form(带 bank_id) Practice Review Wrong(题库下拉) Banks(卡片录题/导入直达)
 │               ↳ Practice/Review/Exam 已收敛为「薄编排层」：题干/选项/填空/材料/键盘流在 QuestionRunner，
-│                 判分走 gradeQuestion，题型文案取 constants/questions.js，进行中状态存 stores/session.js
+│                 判分走 gradeQuestion，题型文案取 constants/questions.js，进行中状态存 stores/session.ts
 ├── src-tauri/                     ← Rust（db/ 模块目录承载全部逻辑：schema/banks/questions/practice/assets/backup/settings/sync/s3）
 │   ├── Cargo.toml build.rs tauri.conf.json capabilities/default.json icons/  src/{main,lib,db}.rs
 ├── tools/  migrate-dbjson.mjs  smoke-test.mjs  make-portable.mjs（便携 zip 打包）
@@ -90,7 +90,7 @@ QikeQBank/
 |---|---|
 | 主线程 | 根配置、PLAN.md、src-tauri/icons/、README、集成验证/提交 |
 | **W1 Rust** | `src-tauri/Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`、`src/db/`（模块目录） |
-| **W2 前端管道** | `src/api/bridge.js`、`src/api/questions.js`、`src/api/practice.js`、`src/api/banks.js`(新)、`src/api/assets.js`、`src/stores/bank.js`(新)、`src/stores/settings.js`、`src/utils/*`、`src/App.vue` |
+| **W2 前端管道** | `src/api/bridge.ts`、`src/api/questions.ts`、`src/api/practice.ts`、`src/api/banks.ts`(新)、`src/api/assets.ts`、`src/stores/bank.ts`(新)、`src/stores/settings.ts`、`src/utils/*`、`src/App.vue` |
 | **W3a 列表/编辑/录题** | `src/views/List.vue`、`src/views/Form.vue`、`src/views/Banks.vue`、`src/components/*`（TiptapDocEditor/QuestionForm/QuestionEditor/QuestionPreview/ImportFileBox/PasteBox/ui） |
 | **W3b 刷题/复习/错题** | `src/views/Practice.vue`、`src/views/Review.vue`、`src/views/Wrong.vue` |
 | **W3c 首页** | `src/views/Home.vue` |
@@ -331,7 +331,7 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 ## 5. FSRS-6 调度（前端 ts-fsrs@5.4.2，Pin 住 5.4.2 稳定版）
 
-- 职责划分：调度计算在前端（`src/utils/fsrs.js` 唯一封装，`ts-fsrs` 无运行时依赖）；
+- 职责划分：调度计算在前端（`src/utils/fsrs.ts` 唯一封装，`ts-fsrs` 无运行时依赖）；
   后端只做可信写入 + 范围校验（`state∈0..3`、数值≥0、`due_at` 可解析 ISO，非法 Err）。
 - 状态表 `review_state` 存 Card 序列化字段（`state` 口径与 ts-fsrs State 枚举一致：
   0=New 1=Learning 2=Review 3=Relearning；`elapsed_days` 已废弃不落库）。
@@ -361,10 +361,10 @@ JS invoke 传参 **camelCase**，Rust 参数 **snake_case**（Tauri v2 自动映
 
 ## 7. 前端模块契约
 
-### api/bridge.js（v3：Provider 接口 + actor 自动注入）
-`cmd(name, args)` 封装 invoke，走 `currentProvider`（默认 TauriProvider；HttpProvider/LocalProvider 以后填签名位，`api/*.js` 零改动）。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。`banks_remove`/`questions_remove`/`sync_push` 自动注入 `actor`/`device_id`（`src/utils/device.js`，localStorage 持久化）。
+### api/bridge.ts（v3：Provider 接口 + actor 自动注入）
+`cmd(name, args)` 封装 invoke，走 `currentProvider`（默认 TauriProvider；HttpProvider/LocalProvider 以后填签名位，`api/*.js` 零改动）。约定：顶层命令参数一律 camelCase（Rust `#[command]` 宏默认转驼峰查键，snake 键收不到）；结构体内部字段（如 RecordItem）按原名精确匹配。`banks_remove`/`questions_remove`/`sync_push` 自动注入 `actor`/`device_id`（`src/utils/device.ts`，localStorage 持久化）。
 
-### api/settings.js（v3 新建）
+### api/settings.ts（v3 新建）
 ```js
 settingsGet()  → cmd('settings_get') → [{key,value_json,updated_at}]
 settingsSet(items) → cmd('settings_set',{items}) → {updated,updated_at}
@@ -385,7 +385,7 @@ s3Push() / s3Pull() / s3Status() / s3RepairAssets()   // 「仅上传」/「立�
 >
 > **上传与下载合并为一个动作**：`s3Pull` 的 `pull_pass` 进来第一件事就是 `push`（先推本地增量、再拉云端增量），本身即双向同步。故 UI 只有「立即同步」（= `s3Pull`）与「仅上传」（= `s3Push`，单向、云端内容绝不覆盖本机），不再出现「下载」这种容易被误解为单向覆盖的动词。
 
-### stores/autoSync.js（自动同步运行时）
+### stores/autoSync.ts（自动同步运行时）
 ```js
 autoSync = reactive({ running, lastAt, lastRows, lastConflicts, failures, lastError, nextAt })
 runSync({ reason: 'auto'|'manual' }) → {ok, res?, error?, skipped?: 'busy'|'exam'|'unconfigured'}
@@ -398,10 +398,10 @@ retryDelayMs(failures, intervalMin) / appliedRows(res)   // 纯函数，单测�
 - **不打扰**：考试路由（`#/exam`）下跳过自动同步；后台失败不弹窗，连续失败 3 次才提示一次；成功只更新面板里的「上次同步 X 分钟前」。
 - **偏好留本机**：`autoSyncEnabled` / `autoSyncIntervalMin` 只进 localStorage，**不进 `SYNC_KEYS`**——自动同步是设备行为（台式常开、笔记本按需），不该被另一台设备改掉。
 
-### stores/settings.js（v3：键分裂 + 注水守卫）
+### stores/settings.ts（v3：键分裂 + 注水守卫）
 进库同步：`fsrs.*`（6 键）+ `wrongLeaveAfterCorrect`；留本机：编辑偏好/自动下一题/筛选记忆/自动同步（`autoSyncEnabled`、`autoSyncIntervalMin`）。localStorage 只做写透缓存。`hydrateFromDb()` 启动调用一次、每次同步 pull-apply 后调用一次；注水期 watch 禁写（防脏时间戳）。
 
-### api/banks.js（W2 新建）
+### api/banks.ts（W2 新建）
 ```js
 listBanks()            → cmd('banks_list') → .data        // [{id,name,description,question_count,...}]
 createBank(name, description='') → cmd('banks_create',{name,description}) → .data
@@ -409,7 +409,7 @@ updateBank(id, {name, description}) → cmd('banks_update',{id,...}) → .data
 removeBank(id)         → cmd('banks_remove',{id}) → .data
 ```
 
-### stores/bank.js（W2 新建）
+### stores/bank.ts（W2 新建）
 ```js
 import { reactive } from 'vue'
 export const bankStore = reactive({ banks: [], loaded: false })
@@ -422,11 +422,11 @@ export function persistBankFilter(page, id)
 
 题库筛选规则（List/Practice/Review/Wrong/Form 新建共用）：默认全部；设置开启记忆时按页记住上次选择；关闭记忆时切换开关即清掉各页记忆。新建试题必须显式归属（?bank= 或顶部下拉二选一，不再静默回退首库）。
 
-### api/questions.js（W2 改；FE-P0-09/10 再改）
+### api/questions.ts（W2 改；FE-P0-09/10 再改）
 `list({query, type, bankId, limit, offset, summary, sort, difficulty, status})` → args 带 `bank_id`（bankId falsy 时不传=全部）；`summary=true` 透传为摘要模式；分页透传 `limit/offset`；`sort/difficulty/status` 有值才传（difficulty 为 0/空串时不传）；返回信封，`data={total, items}`。
 `batchUpdate(ids, patch)` → `questions_batch_update`、`batchRemove(ids, actor?)` → `questions_batch_remove`，两者均单次 IPC。其余不变。
 
-### stores/listFilter.js（FE-P0-09 新建）
+### stores/listFilter.ts（FE-P0-09 新建）
 列表筛选记忆。导出 `SORT_OPTIONS` / `SORT_KEYS` / `DEFAULT_SORT` / `DIFFICULTY_CHOICES` / `STATUS_OPTIONS` / `PAGE_SIZE_CHOICES` / `DEFAULT_PAGE_SIZE`，以及 `emptyFilter` / `normalizeFilter` / `filterKey` / `loadFilter` / `saveFilter` / `clearFilter` / `clampPage`。
 - 排序键必须与后端 `SORT_WHITELIST` 同源（`tests/unit/list-filter.test.js` 有跨语言逐字校对守卫）。
 - 持久化按 `页:题库` 分键（`qbank.listFilter.v1.<page>:<bankId>`）：A 库的筛选不串到 B 库；全默认不落键。
@@ -434,7 +434,7 @@ export function persistBankFilter(page, id)
 - `clampPage(page, total, pageSize)`：页码收敛（`total=0` → 1；pageSize 非法回退 50，不除 0）。
 - TODO 原文写的「记住各页筛选」设置**并不存在**，此处按 FE-P0-05 的既有做法用 localStorage 记住，不新增设置开关。
 
-### api/practice.js（W2 改；FE-P0-11 再改）
+### api/practice.ts（W2 改；FE-P0-11 再改）
 `practicePool({limit,type,bankId,ids})`（ids 非空时按序组卷）、`reviewDue({limit,bankId})`、`stats(bankId?)`（有值才传 `{bankId}`）、`wrongList({limit,offset,bankId,type,leaveAfterCorrect,query,sort,minWrongCount})` → `cmd('wrong_list',…)` 取 `.data`（`query` 空白时不传）、`wrongStats({leaveAfterCorrect})` → `cmd('wrong_stats',…)`、`wrongDismiss(questionId)`、`importQuestions(items,bankId)`、`openDataDir()` → `cmd('open_data_dir')` 取 `.data`。其余不变。
 
 ### App.vue（W2 改；设置弹窗已抽出）
@@ -448,7 +448,7 @@ export function persistBankFilter(page, id)
 - 搜索态：跨分类汇总命中并显示每类命中数；未满足依赖的子项（如「停留时长」需先开「答对自动下一题」）不隐藏，而是标注原因。
 
 ### 配图文件化（前后端约定）
-- 题面 JSON 只存 `asset:<64hex>` 引用；`src/utils/image.js` 负责上传压缩（GIF 直存/小 PNG 直存/其余 WebP q85 长边 1920，拒 svg/超 20MB/超 12000px，EXIF 方向修正）；`src/api/assets.js` 负责 put/resolve/expand/normalize（resolve 结果 session 缓存，GC 后清）。
+- 题面 JSON 只存 `asset:<64hex>` 引用；`src/utils/image.ts` 负责上传压缩（GIF 直存/小 PNG 直存/其余 WebP q85 长边 1920，拒 svg/超 20MB/超 12000px，EXIF 方向修正）；`src/api/assets.ts` 负责 put/resolve/expand/normalize（resolve 结果 session 缓存，GC 后清）。
 - 显示：QuestionPreview 异步展开后渲染（深拷贝，不碰父对象）；Practice/Review 组卷后整批展开；Form 加载时展开。保存：Form 对深拷贝 payload 归一（显示 URL→引用）再提交；Rust 入库 choke 点（create/update/import）二次校验，未登记图直接 Err。data: URI 存量原样显示。
 - lib.rs setup 建 `data/assets` 并运行时放行 asset 协议 scope（静态 capability 写不出 portable 路径）。
 
@@ -460,7 +460,7 @@ export function persistBankFilter(page, id)
 - 多选：首列勾选（表头全选本页）+ 选中条（批量移动 / 批量删除 / 取消选择），表格常驻不隐藏；多选时行内编辑禁用，移动/删除可用；翻页/重查后清空。
 - 移动（单题/批量共用）：行内「移动」按钮或选中条「移动」→ `selectDialog` 弹窗选目标库 → 确定执行。
 
-### stores/ui.js（弹层服务）
+### stores/ui.ts（弹层服务）
 - `selectDialog({title,message,options:[{value,label}],okText})` → resolve 选中 value，取消为 null；DialogHost 新增 select 类型（下拉 + 确定）。与 confirm/prompt 同视觉语言。
 
 ### Banks.vue（题库管理）
@@ -486,7 +486,7 @@ export function persistBankFilter(page, id)
 - 剪贴板图片 `Ctrl+V` 直接粘贴：`editorProps.handlePaste` 拦截 → `uploadFileToAsset`（压缩→assets 入库）后以块级图插入，多图串行保序；含 `text/html` 的图文混排走默认粘贴保排版。
 
 ### List.vue（FE-P0-09/10 再改）
-- 筛选条：搜索框、题型、**难度（1–5）**、**状态（published/draft）**、**排序**四个下拉 + 每页条数（20/50/100）；条件经 `stores/listFilter.js` 按 `页:题库` 记忆，刷新/返回后恢复；任一筛选变更回第 1 页。
+- 筛选条：搜索框、题型、**难度（1–5）**、**状态（published/draft）**、**排序**四个下拉 + 每页条数（20/50/100）；条件经 `stores/listFilter.ts` 按 `页:题库` 记忆，刷新/返回后恢复；任一筛选变更回第 1 页。
 - `pageSize` 真正参与 `limit/offset`（旧实现写死 `PAGE_SIZE` 常量，换条数会算错 offset）。
 - 页码收敛：拿到 `total` 后用 `clampPage` 判断越界并重查，修掉「删完末页最后一题显示第 3 / 2 页」。
 - 表格新增难度点阵列（纯 CSS，复用 `:root` 变量）。
@@ -508,23 +508,23 @@ export function persistBankFilter(page, id)
 - 组卷时 `practicePool({limit,type,bankId})`（每题附 `fsrs`，无状态行为 null）；`commit()` 正确→Good/错误→Again 算卡并入 recordAnswer；`practiceScope==='wrong-only'` 且答对时不带 card（只写流水）。
 - 错题重练：`/practice?retry=1` + sessionStorage['qbank.retryIds'] → `practicePool({ids})` 直达作答；另修复本轮结束页「错题重做」未切回作答页的问题。
 - 键盘流：未判分 A–F 选题 / M 切材料 / 简答看答案后 1-2 自评 / Enter 提交；判分后 Enter 下一题，Esc 取消自动下一题；背题模式 ←/→ 或 Enter 翻题；输入区/组词/弹窗/修饰键不劫持。
-- **判分后选项自身标色（FE-P1-06）**：`.option-btn-right` / `.option-btn-wrong` + 对勾/叉图标 + `aria-label`，不依赖下方答案对照行。口径在 `utils/practiceLoop.js::optionMarkOf`：正确选项一律绿（**漏选的也绿**，否则看不出漏了哪个）、我选了但不对的标红、**未判分恒返回空**（作答中绝不泄露答案）。样式在 `uno.config.js` 成对定义且带 `!` —— 必须同时压过 `option-btn` 默认底色与 `option-btn-on` 选中态。
+- **判分后选项自身标色（FE-P1-06）**：`.option-btn-right` / `.option-btn-wrong` + 对勾/叉图标 + `aria-label`，不依赖下方答案对照行。口径在 `utils/practiceLoop.ts::optionMarkOf`：正确选项一律绿（**漏选的也绿**，否则看不出漏了哪个）、我选了但不对的标红、**未判分恒返回空**（作答中绝不泄露答案）。样式在 `uno.config.js` 成对定义且带 `!` —— 必须同时压过 `option-btn` 默认底色与 `option-btn-on` 选中态。
 - **完成页三入口**：「同配置再来一轮」（复位会话后直接再走 `start()`，不刷新页面）/「去复习」/「去错题本」。后两者带 `?bank=` 且**目标页真的认这个参数**（`Review.vue`/`Wrong.vue` 把它传给 `resolveBankFilter`）——带了不认等于白带。
-- **弱项专练**：`utils/practiceLoop.js::rankWeakTypes`，排序优先级「正确率最低 → 错题数多 → 样本大」，门槛 `count >= 3` 且 `rate < 0.6`。数据源 `records_overview.by_type`（`review_stats.by_type` 只有题量，缺「做过多少、对了多少」），**只在完成页出现时拉取**。入口地址须带 `again=1`（否则 `phase` 仍是 `done`，点了没反应）。推荐前按 `availableByType` 过滤掉「历史很弱但现在一道题都不剩」的题型——推一个点了就报错的入口比不推更糟。
+- **弱项专练**：`utils/practiceLoop.ts::rankWeakTypes`，排序优先级「正确率最低 → 错题数多 → 样本大」，门槛 `count >= 3` 且 `rate < 0.6`。数据源 `records_overview.by_type`（`review_stats.by_type` 只有题量，缺「做过多少、对了多少」），**只在完成页出现时拉取**。入口地址须带 `again=1`（否则 `phase` 仍是 `done`，点了没反应）。推荐前按 `availableByType` 过滤掉「历史很弱但现在一道题都不剩」的题型——推一个点了就报错的入口比不推更糟。
 - **单题计时 + 难度标识**：计时用「累计 + 本次进入时刻」而非「进入至今」，跳走再跳回接着算而不是从 0 重开；判分后停表。难度点阵样式从 `List.vue` 的 scoped 提到 `App.vue` 全局（scoped 会让第二处静默失效：DOM 正常但没样式）。
 - **同路由深链必须 watch**：完成页跳 `/practice?types=…` 命中同一条路由，组件不重新挂载 → `onMounted` 的深链逻辑不再执行。必须 `watch([route.query.bank/types/count/again])` 重新应用（`?retry=1` 时让位）。
 
 ### Review.vue（W3b）
-- 顶部设置同 Practice（题库下拉 + 题量输入框默认 20/全部按钮，题量按 `stores/runConfig.js` 记忆）；`reviewDue({limit, bankId})`；徽章 SM-2→FSRS；待复习文案拆“其中学习中 N 题”（`stats.learning_due`，>0 才显示）；卡片 Learning/Relearning 态打“学习中”徽标。
+- 顶部设置同 Practice（题库下拉 + 题量输入框默认 20/全部按钮，题量按 `stores/runConfig.ts` 记忆）；`reviewDue({limit, bankId})`；徽章 SM-2→FSRS；待复习文案拆“其中学习中 N 题”（`stats.learning_due`，>0 才显示）；卡片 Learning/Relearning 态打“学习中”徽标。
 - `reviewGrade` 四键 1:1 映射 FSRS Rating，前端算卡（`cardFromRow(it.parent?.fsrs ?? it.q.fsrs)`）后 `card` + `fsrs_log` 并入 recordAnswer；其余（自评统计、材料记父题 id）不动。
-- 四键显示下次间隔：`utils/reviewPreview.js` 预计算四个 rating 的 due，**只计算不写库**（不得为了预览先落记录）。
+- 四键显示下次间隔：`utils/reviewPreview.ts` 预计算四个 rating 的 due，**只计算不写库**（不得为了预览先落记录）。
 - 评分后 5 秒可撤销：前端自生成流水 UUID 随 `record_answer` 提交，撤销时调 `review_revert` 写回评分前的卡片快照；撤销后丢弃该题临时 UUID（重评产生新流水，不复用旧 ID）。
 - 键盘流：未判分 A–F 选题 / M 切材料 / Enter 判分；判分后 1-4 自评（Enter 无动作）；规则同 Practice。
 
 ### Exam.vue（模考，FE-P0-07）
-- 准备页：题库 + 题型 + 题量 + 多选计分规则（partial/strict）+ 限时；题型/题量与多选规则/限时均按 localStorage 记忆（题型题量走 `stores/runConfig.js`）；题量旁显示「可用 N 题」，0 题禁用开始并给录题/导入入口；「最近模考」带得分率趋势（`components/exam/ExamTrend.vue`，纯 SVG，不引图表库）。
+- 准备页：题库 + 题型 + 题量 + 多选计分规则（partial/strict）+ 限时；题型/题量与多选规则/限时均按 localStorage 记忆（题型题量走 `stores/runConfig.ts`）；题量旁显示「可用 N 题」，0 题禁用开始并给录题/导入入口；「最近模考」带得分率趋势（`components/exam/ExamTrend.vue`，纯 SVG，不引图表库）。
 - 作答页：`QuestionRunner` 渲染；顶部「标记」与「答题卡」；底部上一题/下一题/交卷 + 已答与标记计数。
-  - `components/exam/ExamSheet.vue` 抽屉：已答/未答/标记三态，点击跳题，材料题按母题分组（组标题用首个子题位置）；分组与计数逻辑在 `utils/examSheet.js`（纯函数）。
+  - `components/exam/ExamSheet.vue` 抽屉：已答/未答/标记三态，点击跳题，材料题按母题分组（组标题用首个子题位置）；分组与计数逻辑在 `utils/examSheet.ts`（纯函数）。
   - 标记按 uid 记入草稿 `extra.flaggedUids`，恢复时经 `remapFlaggedUids` 按题目 id 重映射（uid 的序号会随被删题目前移）。
 - 交卷：全卷统一判分落库（`mode='exam'`，**不建 FSRS 卡**，不进错题本与复习统计）；材料题拆子题，一子题一条流水，`detail` 带 `exam_id/exam_seq/score_earned/full_score`；确认对话框同时报告未答数与标记数。
 - 历史回看：`components/exam/ExamHistory.vue` + `exam_detail(exam_id)`，**不依赖内存 sheet**（重启后仍可回看）；题目被删时展示占位；选项 id 映射回字母。

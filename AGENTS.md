@@ -5,7 +5,7 @@
 ## 铁律 ①：禁止浏览器原生弹窗（优先级最高）
 
 - **严禁** `alert()` / `confirm()` / `prompt()` / `window.*` 弹窗 —— 会立刻暴露 WebView 套壳感，用户观感极差。
-- 一律使用应用内 UI 服务（`src/stores/ui.js` 驱动，组件挂载于 App.vue）：
+- 一律使用应用内 UI 服务（`src/stores/ui.ts` 驱动，组件挂载于 App.vue）：
   - 成功/失败/提示 → `toast(text, type, duration)`，`type ∈ success | error | info`
   - 危险或需要确认的操作 → `await confirmDialog({ title, message, okText, cancelText, danger })` → `boolean`
   - 单行文本输入 → `await promptDialog({ title, message, placeholder, initial })` → 取消为 `null`，确定为 trim 后的字符串
@@ -23,7 +23,7 @@
 - 前端 `src/`；后端 `src-tauri/src/db/`（模块目录：mod 入口 + schema/banks/questions/practice/assets/backup/settings/sync，command 层，全部返回 `{success, data}` 信封，前端 `api/*.js` 统一取 `.data`）。
 - **schema/DDL 唯一权威 = PLAN.md §3**；`src-tauri/src/db/schema.rs` 的 MIGRATIONS 与 `tools/` 两脚本必须与其逐字符一致；改表结构必须同步三处。
 - 契约变更（命令签名/数据结构）必须同步：PLAN.md §4/§7 ↔ Rust command ↔ 前端 `src/api/*.js`。
-- 路由：hash 模式（桌面端）；题库归属走 `stores/bank.js` 的 `bankStore.currentBankId`（localStorage 记忆），新增题必须显式归属（优先 `?bank=` 路由参数）。
+- 路由：hash 模式（桌面端）；题库归属走 `stores/bank.ts` 的 `bankStore.currentBankId`（localStorage 记忆），新增题必须显式归属（优先 `?bank=` 路由参数）。
 - 验证门禁（默认档，每改必跑）：`pnpm typecheck`（`vue-tsc`，0 类型错误，增量约 2s）、`pnpm build`、`cargo test` 全绿、`pnpm lint`（cargo clippy `-D warnings`，0 警告，新增警告即失败）、`node tools/smoke-test.mjs`。改动后必须真实执行，禁止目测通过。
 - 改动 `uno.config.js` / `uno.config.ts` 后必须重启 dev server（Vite 的 UnoCSS 插件不热重载配置：新 shortcut 解析不到 CSS → 页面变浏览器默认样式，而 DOM 看着正常；e2e 会复用旧 server，其全绿不算验证。样式正确性由 `tests/unit/hover-state-wiring.test.js` 校验，不进 e2e）。
 - **E2E 分级（禁止「改一行跑全量」）**：`tools/e2e-frontend.mjs` 支持按模块跑（结构见 `PLAN.md §8`：入口只做装载/汇总，`tools/e2e/modules/<id>.js` 一页一个模块），模块名与 `docs/frontend-product-todo.md §0.3`、`PLAN.md §8` 三处必须逐字一致：

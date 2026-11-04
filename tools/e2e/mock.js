@@ -302,7 +302,7 @@ export function mockScript() {
         case 'open_data_dir': return { success: true, data: { path: '/mock/data' } }
 
         // ── 资产（C2）──────────────────────────────────────────────────
-        // putAsset 要求必须返回 sha，否则前端自己 throw（见 src/api/assets.js:22），
+        // putAsset 要求必须返回 sha，否则前端自己 throw（见 src/api/assets.ts:22），
         // 所以这里给一个合法的 64 位 sha，别用占位符。
         case 'assets_put': return { success: true, data: { sha: 'a'.repeat(64), path: '/mock/assets/aa/' + 'a'.repeat(64) } }
         case 'assets_gc': return { success: true, data: { removed: 0, freed_bytes: 0, total: 0, scanned: 0, dangling: 0 } }
