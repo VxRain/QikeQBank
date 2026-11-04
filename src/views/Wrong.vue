@@ -101,7 +101,7 @@
           <thead>
             <tr>
               <th class="px-3 py-3 border-b border-line bg-bg-accent" style="width: 40px">
-                <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" title="全选本页" :checked="allChecked" :indeterminate="someChecked && !allChecked" @change="toggleAll($event.target.checked)" />
+                <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" title="全选本页" :checked="allChecked" :indeterminate="someChecked && !allChecked" @change="toggleAll(checkedOf($event))" />
               </th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent" style="width: 80px">类型</th>
               <th class="text-left px-3.5 py-3 border-b border-line text-[12px] uppercase tracking-wide text-muted font-600 bg-bg-accent">题干</th>
@@ -115,7 +115,7 @@
             <template v-for="q in questions" :key="q.id">
             <tr class="transition-[background-color] duration-100 hover:bg-card-hover" :class="selected.has(q.id) && 'row-on'">
               <td class="px-3 py-3 border-b border-line text-center">
-                <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, $event.target.checked)" />
+                <input type="checkbox" class="accent-[#1f4d3a] w-4 h-4 cursor-pointer align-middle" :checked="selected.has(q.id)" @change="toggleOne(q.id, checkedOf($event))" />
               </td>
               <td class="px-3.5 py-3 border-b border-line"><span class="badge badge-type">{{ typeLabel(q.type) }}</span></td>
               <td class="px-3.5 py-3 border-b border-line max-w-[360px] truncate text-text-secondary font-500" :title="plainTextOf(q, extractFromDoc)">{{ truncate(plainTextOf(q, extractFromDoc), 80) }}</td>
@@ -192,6 +192,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.js'
+import { checkedOf } from '@/utils/domEvent.js'
 import { truncate } from '@/utils/listFormat.js'
 import { settings } from '@/stores/settings.js'
 import { leaveRuleText, leaveRuleHint as leaveRuleHintOf } from '@/utils/wrongRules.js'

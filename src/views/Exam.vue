@@ -315,7 +315,7 @@
 
               <div v-else-if="row.q.type === 'fill'" class="flex flex-col gap-1 text-[13px]">
                 <div v-for="(b, bi) in row.q.answer?.blanks || []" :key="b.id" class="flex gap-2 items-baseline flex-wrap">
-                  <span class="text-muted w-[46px] shrink-0">空 {{ bi + 1 }}</span>
+                  <span class="text-muted w-[46px] shrink-0">空 {{ Number(bi) + 1 }}</span>
                   <span :class="isBlankOk(row, b) ? 'text-text' : 'text-danger'">{{ row.ans.fillValues?.[b.id]?.trim() || '（未填）' }}</span>
                   <span class="text-muted">→ <span class="text-success font-500">{{ (b.answers || []).join(' / ') || '—' }}</span></span>
                 </div>
@@ -957,7 +957,10 @@ function fmtDate(iso) {
   return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())} ${p(dt.getHours())}:${p(dt.getMinutes())}`
 }
 function fmtDur(s) {
-  return fmtDurationCn(Math.max(0, new Date(s.ended_at) - new Date(s.started_at)))
+  // Date 相减得到毫秒数，但 TS 不允许两个 Date 直接做算术，先显式转 number
+  const end = new Date(s.ended_at).getTime()
+  const start = new Date(s.started_at).getTime()
+  return fmtDurationCn(Math.max(0, end - start))
 }
 
 /**

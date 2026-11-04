@@ -3,7 +3,7 @@
     <div class="row type-row relative flex items-center justify-between gap-2 flex-wrap">
       <div class="flex items-center gap-1.5 flex-wrap">
         <label class="text-[13px] text-text-secondary">题型</label>
-        <select :value="local.type" @change="onMainTypeChange($event.target.value)" class="select px-2 py-1.5 text-[12px] w-auto">
+        <select :value="local.type" @change="onMainTypeChange(valueOf($event))" class="select px-2 py-1.5 text-[12px] w-auto">
           <option v-for="t in QUESTION_TYPES" :key="t.key" :value="t.key">{{ t.key === 'material' ? `${t.label}（父子题）` : t.label }}</option>
         </select>
         <template v-if="local.type==='material'">
@@ -96,7 +96,7 @@
                 class="select px-1.5 py-1 text-[12px] w-auto"
                 title="改子题题型（已填内容按「切换题型时保留内容」设置复用）"
                 :aria-label="`第 ${cIdx+1} 个子题的题型`"
-                @change="onChildTypeChange(cIdx, $event.target.value)"
+                @change="onChildTypeChange(cIdx, valueOf($event))"
               >
                 <option v-for="t in CHILD_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
               </select>
@@ -150,6 +150,7 @@ import PasteBox from './PasteBox.vue'
 import { settings } from '@/stores/settings.js'
 import { QUESTION_TYPES, QUESTION_TYPE_MAP, CHILD_QUESTION_TYPES as CHILD_TYPES, typeLabel } from '@/constants/questions.js'
 import { createDefaultQuestion } from '@/utils/gradeQuestion.js'
+import { valueOf } from '@/utils/domEvent.js'
 import { toast } from '@/stores/ui.js'
 import {
   childIdSeed, childIdForAppend, dedupeChildIds, moveChild, canMoveChild, removeChildAt,
@@ -427,12 +428,14 @@ function addChild(type){
 }
 function removeChild(idx){
   const r = removeChildAt(local.children, idx)
-  if (r.error === 'empty') {
-    // 子题清空后会变成「抽得到但点不进去」的空材料题，而列表里看不出异常
-    toast('材料题至少要保留 1 个子题；要换成单题请改题型', 'error')
+  // removeChildAt 返回 {error} | {children}，按 'in' 判别而不是读可能不存在的字段
+  if ('error' in r) {
+    if (r.error === 'empty') {
+      // 子题清空后会变成「抽得到但点不进去」的空材料题，而列表里看不出异常
+      toast('材料题至少要保留 1 个子题；要换成单题请改题型', 'error')
+    }
     return
   }
-  if (r.error) return
   local.children = r.children
   children.value = r.children.map(wrapChild)
   emitUpdate()
@@ -459,6 +462,7 @@ function childSummary(q) {
  * 插入指示线的位置：算到第几张卡片处，就把线画在那张卡的上沿。
  * 不用重新排序 DOM（那会在拖拽中改变坐标、造成逐帧抖动）。
  */
+/** @type {import('vue').ComputedRef<import('vue').CSSProperties|null>} */
 const insertLineStyle = computed(() => {
   const list = childListEl.value
   const at = childDragInsertAt.value

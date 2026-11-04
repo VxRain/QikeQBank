@@ -47,6 +47,7 @@ const rootEl = ref(null)
 const tipText = computed(() => props.text || '查看说明')
 const pos = ref({ left: 0, top: 0, transform: '' })
 
+/** @type {import('vue').ComputedRef<import('vue').CSSProperties>} */
 const bubbleStyle = computed(() => ({
   position: 'fixed',
   left: `${pos.value.left}px`,

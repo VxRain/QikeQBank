@@ -75,7 +75,7 @@
           rows="5"
           class="w-full p-3 border border-line rounded-[8px] text-[14px] text-text bg-card outline-none resize-y shadow-sm transition-[border-color,box-shadow] duration-150 focus:border-primary focus:shadow-[0_0_0_3px_rgba(31,77,58,0.15)]"
           :placeholder="shortPlaceholder"
-          @input="emit('update:shortText', $event.target.value)"
+          @input="emit('update:shortText', valueOf($event))"
         ></textarea>
         <div class="flex gap-2 flex-wrap">
           <button type="button" class="btn" @click="toggleRef">
@@ -101,6 +101,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { renderDoc, renderOptions } from '@/utils/render.js'
 import { optionMarkOf } from '@/utils/practiceLoop.js'
+import { valueOf } from '@/utils/domEvent.js'
 
 const props = defineProps({
   // { q, parent, isChild, childIdx, childCount, uid }
@@ -194,7 +195,8 @@ function isPicked(id) {
  * 口径与判分一致，详见 utils/practiceLoop.js::optionMarkOf（含「未判分恒空」）。
  */
 function markOf(id) {
-  return optionMarkOf(q.value, id, { selected: props.selected, picked: props.picked }, props.locked)
+  // picked 由 defineProps 的 `type: Array` 推断为 unknown[]，实际是选项 id 数组
+  return optionMarkOf(q.value, id, { selected: props.selected, picked: /** @type {string[]} */ (props.picked) }, props.locked)
 }
 
 /**

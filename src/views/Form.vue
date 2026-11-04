@@ -97,6 +97,9 @@ function createDefault(){
   }
 }
 
+// createDefault() 不含 bank_id（新建时未归属），编辑态后端会带回该字段；
+// 用 JSDoc 声明成「题目 + 可选 bank_id」，避免读 form.value.bank_id 时报 TS2339。
+/** @type {import('vue').Ref<Record<string, any> & {bank_id?: string}>} */
 const form = ref(createDefault())
 const editorRef = ref(null)
 
@@ -134,7 +137,9 @@ const dirty = ref(false)
 let baseline = null // 挂载（或重置）时的表单快照，脏判定基准
 let allowLeave = false // 已确认放行（保存成功 / 用户明确放弃），不再二次拦截
 let stopDraftTimer = () => {}
-const dkey = computed(()=> draftKey({ isEdit: isEdit.value, id: route.params.id, bankId: newBankId.value }))
+// route.params.id 的类型是 string | string[]（动态段可重复），草稿键只接受 string
+const routeId = computed(()=> (typeof route.params.id === 'string' ? route.params.id : ''))
+const dkey = computed(()=> draftKey({ isEdit: isEdit.value, id: routeId.value, bankId: newBankId.value }))
 
 function resetBaseline(){
   baseline = snapshotOf(form.value)

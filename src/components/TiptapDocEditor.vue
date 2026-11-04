@@ -12,7 +12,7 @@
       <button class="btn bubble-btn" @click="editor.chain().focus().toggleItalic().run()" :class="{ 'btn-primary': editor.isActive('italic') }" title="斜体"><i>I</i></button>
       <label class="btn bubble-btn swatch relative cursor-pointer" title="文字颜色">
         <span class="dot w-3 h-3 rounded-full inline-block border border-line-strong" :style="{background: editor.getAttributes('textStyle').color || '#1b1a17'}"></span>
-        <input type="color" class="w-0 h-0 opacity-0 absolute" :value="editor.getAttributes('textStyle').color || '#1b1a17'" @input="editor.chain().focus().setColor($event.target.value).run()" />
+        <input type="color" class="w-0 h-0 opacity-0 absolute" :value="editor.getAttributes('textStyle').color || '#1b1a17'" @input="editor.chain().focus().setColor(valueOf($event)).run()" />
       </label>
       <button class="btn bubble-btn" @click="editor.chain().focus().unsetColor().run()" title="清除颜色"><i class="i-lucide-rotate-ccw" /></button>
     </BubbleMenu>
@@ -77,6 +77,7 @@ import { Node, mergeAttributes } from '@tiptap/core'
 import katex from 'katex'
 import { toast } from '@/stores/ui.js'
 import { compressImageFile } from '@/utils/image.js'
+import { valueOf } from '@/utils/domEvent.js'
 import { putAsset, assetFileUrl } from '@/api/assets.js'
 
 const props = defineProps({ modelValue: { type: Object, required: true }, showBlank: { type: Boolean, default: true }, compact: { type: Boolean, default: false } })
@@ -370,7 +371,10 @@ watch(()=>props.modelValue, (val)=>{
   const clean = sanitizeDoc(val)
   const cur = editor.getJSON()
   if(JSON.stringify(cur) !== JSON.stringify(clean)){
-    editor.commands.setContent(clean, false)
+    // Tiptap 3.x 把第二参从 `emitUpdate: boolean` 改成了 options 对象：
+    // 传 false 会被当成 {}，emitUpdate 回落到默认 true → 这里会多发一次 update，
+    // 父组件若回写 modelValue 就形成抖动。必须显式传 { emitUpdate: false }。
+    editor.commands.setContent(clean, { emitUpdate: false })
   }
 }, {deep:true})
 onBeforeUnmount(()=> editor.destroy())

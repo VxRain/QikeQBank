@@ -145,7 +145,8 @@ export function buildBankResults(banks, kw) {
  * 只收静态路径（含 `:param` 的路由是「编辑某题」这类入口，不能从面板直达），
  * 且按 meta.nav.order → title 排序，保证顺序稳定、可断言。
  *
- * @param {Array<{path:string, meta?:{title?:string, nav?:object}}>} routes 路由表原始数组
+ * @param {ReadonlyArray<{path:string, meta?:{title?:string, nav?:object}}>} routes 路由表原始数组
+ *   （router.options.routes 是只读的，这里只读遍历，不拷贝不修改）
  */
 export function buildPageResults(routes, kw) {
   const needle = normalizeKeyword(kw).toLowerCase()
