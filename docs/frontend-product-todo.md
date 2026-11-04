@@ -122,10 +122,37 @@
   - **已迁移三目录（utils+stores+api）合计 388 条**，`src/api/` 为 **0**（api 层是真标了类型）；未迁移的 `.vue` 贡献了其余 515 条
   - 已迁移目录内按文件 Top6：`parseDocxTemplate.ts` 52 / `gradeQuestion.ts` 52 / `parsePureText.ts` 50 / `parseTemplate.ts` 38 / `parseSheet.ts` 37 / `session.ts` 34
   - 错误码：TS7006（参数隐式 any）为主，其余 TS7053（下标）/ TS7005 / TS7018 / TS7034 各数十
-  - 复现：`tsconfig.json` 的 `compilerOptions` 加 `"noImplicitAny": true` 后跑 `pnpm typecheck`（探针配置用完即删，不落仓库）
+  - 复现：`pnpm typecheck:strict`（读 `tsconfig.strict.json`，即 `tsconfig.json` + `noImplicitAny: true`）
   - 注①（口径）：**任何单看某个目录的合计数都不能当成「全项目债务」**——388 是已迁移目录的，903 才是全量。
-  - 注②（不是棘轮）：这个数字会随收紧**下降**（显式 any 清掉后，隐式 any 的推断位置也跟着减少），别拿它做只降不升的基线。
+  - 注②（**已是棘轮**）：数字会随收紧**下降**（显式 any 清掉后，隐式 any 的推断位置也跟着减少），因此**不能用一个总数字做基线**（总数字合法地会变）；改为**按文件计数**上棘轮，见下节。
 - **5 个文件只是改了后缀**，内容零改动，因此仍是隐式 any 语义：`utils/image.ts`（66 行）、`render.ts`（87）、`normalize.ts`（80）、`validate.ts`（85）、`parseTemplate.ts`（383）
+
+#### 0.6.1 noImplicitAny 棘轮（已落地）
+
+清理 `noImplicitAny` 是渐进工程，必须有守卫锁住不回退，否则清零过的文件会悄悄回潮。
+
+**配置**：`tsconfig.strict.json` = `extends ./tsconfig.json` + `noImplicitAny: true` + **`incremental: false`**。
+关增量是刻意的：多路并行跑类型检查时会共用 `tsBuildInfoFile`，一路写新缓存会让另一路读到**过期通过结果**（假绿）。
+
+**守卫**：`tools/typecheck-ratchet.mjs` + 基线 `tools/typecheck-baseline.json`（`total` + 每文件条数，**禁止手改**，用 `--update` 生成）。
+
+| 命令 | 作用 |
+|---|---|
+| `pnpm typecheck:strict` | 只跑严格检查，看原始错误清单（清理时用） |
+| `pnpm typecheck:ratchet` | 比对基线，**任一文件条数增加 / 出现新文件即失败**（门禁用） |
+| `node tools/typecheck-ratchet.mjs --update` | 某文件清零后**收紧**基线 |
+
+**为什么不用 include 白名单**（实测否决，别重走）：给 `tsconfig` 的 `include` 只写一个文件，**被引文件会被一起编译**，错误清单里混进别人的债：
+
+| 白名单只列 | 实际报出 | 合计 |
+|---|---|---|
+| `parseTemplate.ts` | 自己 38 + `constants/questions.js` 5 | 43 |
+| `parsePureText.ts` | 自己 50（无依赖） | 50 |
+| `gradeQuestion.ts` | 自己 52 + `validate.ts` 14 + `grading.ts` 2 + `questions.js` 5 | 73 |
+
+派给单个 worker 时它会被别人文件的错误卡住，验收标准无法收敛。改成**全项目编译 + 按文件计数比对**后，每个 worker 的验收标准收敛成一句话：**我的文件归零，其余文件数字不变**。注意「其余文件」允许**下降**（依赖收紧顺带修好）但不允许上升。
+
+**分批顺序由依赖决定，不能按文件随意并行**：`parseDocxTemplate.ts` 与 `parseSheet.ts` 都 import `parseTemplate.ts` 的类型，必须排在它之后；`session.ts` / `settings.ts` / `gradeQuestion.ts` 都会改到 `Practice.vue` / `Review.vue`，跨批并行会文本覆盖。
 
 **显式 any 已清零并上了守卫**（`tests/unit/ts-import-guard.test.js` D 组）：`src/**/*.ts` 里不再有 `: any` / `as any` / `any[]` / `Record<string, any>`。清的过程**挖出了 4 处真契约缺口**（都属「any 掩盖了它」）：
 
@@ -138,7 +165,7 @@
 
 顺带把 ExamHistory 里的「材料题子题切换 + 填空正确答案注入」从 SFC 搬到 `utils/examTrend.ts::enrichReviewItems`（SFC 未加 `lang="ts"`，写不了类型注解，留原处只能永远靠静态推断），**并补上 `parseSheet` 的 7 条单测**——它此前零覆盖，而它的类型本次被改动过。
 
-**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。要往前走，下一步是 `noImplicitAny` 分文件清零（388 → 0），而不是继续改名。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
+**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。要往前走，下一步是 `noImplicitAny` 分文件清零（388 → 0），棘轮已就位（§0.6.1），而不是继续改名。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
 
 **不建模块 shim**（`declare module '*.vue'`）：实测不加时模块类错误为 0；加了反而把 SFC 的 props/emits 推导顶成 `any`。`src/env.d.ts` 只做 `vue-router` 的 `RouteMeta` 增强。
 
