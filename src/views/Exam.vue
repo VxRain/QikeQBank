@@ -813,7 +813,8 @@ async function restoreDraft(d) {
 
 function ansForPaper(q) {
   if (q.type === 'material') {
-    const children = {}
+    /** 子题作答按子题 id 索引；键在运行时才会填齐，故初始为空对象而非 `{}` 字面量推断 */
+    const children = /** @type {Record<string, ReturnType<typeof ansPlain>>} */ ({})
     ;(q.children || []).forEach((c, ci) => {
       const uid = idxMap[`${q.id}#${ci}`]
       const a = uid ? answers[uid] : null
