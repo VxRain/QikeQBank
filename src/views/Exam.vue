@@ -372,9 +372,9 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.js'
-import { examSessions } from '@/api/exam.js'
-import { expandQuestions } from '@/api/assets.js'
+import { practicePool, recordAnswer, stats as fetchStats } from '@/api/practice.ts'
+import { examSessions } from '@/api/exam.ts'
+import { expandQuestions } from '@/api/assets.ts'
 import { renderDoc } from '@/utils/render.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { lettersOf, fmtDurationCn, dedupeShuffle } from '@/utils/questionDisplay.js'

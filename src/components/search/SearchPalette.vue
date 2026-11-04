@@ -11,7 +11,7 @@
  * - 本文件只负责 DOM：遮罩、焦点、渲染、事件接线
  *
  * 数据来源（不新造第三套匹配逻辑）：
- * - 题目：api/questions.js 的 list()，首屏 `summary: true`
+ * - 题目：api/questions.ts 的 list()，首屏 `summary: true`
  * - 题库：stores/bank.js 已加载的列表
  * - 页面：router 路由表（meta.title + PAGE_ALIASES 别称）
  * - 设置：components/settings/registry.js 的 matchItem / isItemVisible
@@ -211,7 +211,7 @@ import {
   splitHighlight
 } from '@/stores/search.js'
 import { bankStore } from '@/stores/bank.js'
-import { list as listQuestions, get as getQuestion } from '@/api/questions.js'
+import { list as listQuestions, get as getQuestion } from '@/api/questions.ts'
 import { toast } from '@/stores/ui.js'
 import { SETTINGS_SECTIONS, isItemVisible, matchItem } from '@/components/settings/registry.js'
 import QuestionPreview from '@/components/QuestionPreview.vue'

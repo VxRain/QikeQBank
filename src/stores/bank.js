@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { listBanks } from '../api/banks.js'
+import { listBanks } from '../api/banks.ts'
 import { settings } from './settings.js'
 
 // 题库列表全局状态（仅列表数据；无“当前库”概念，各页筛选默认全部题库）

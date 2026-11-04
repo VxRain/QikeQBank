@@ -42,8 +42,8 @@
 import { onMounted, ref } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { openDataDir as openDataDirApi, isPortableMode } from '@/api/practice.js'
-import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.js'
+import { openDataDir as openDataDirApi, isPortableMode } from '@/api/practice.ts'
+import { gcAssets, clearAssetCache, fmtBytes } from '@/api/assets.ts'
 import { toast } from '@/stores/ui.js'
 
 const REPO = 'VxRain/QikeQBank'

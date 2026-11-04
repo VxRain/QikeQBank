@@ -10,7 +10,7 @@ import { flush, goto } from '../helpers.js'
 export default {
   id: 'wrong',
   label: '错题本：搜索 / 排序 / 统计',
-  owns: ['src/views/Wrong.vue', 'src/api/practice.js'],
+  owns: ['src/views/Wrong.vue', 'src/api/practice.ts'],
   async run({ page, ok }) {
     // ── FE-P0-11：错题本搜索 / 排序 / 统计 ──
     await goto(page, '#/wrong')

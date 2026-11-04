@@ -216,8 +216,8 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { reviewDue, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.js'
-import { expandQuestions } from '@/api/assets.js'
+import { reviewDue, practicePool, recordAnswer, reviewRevert, stats as fetchStats } from '@/api/practice.ts'
+import { expandQuestions } from '@/api/assets.ts'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { cardFromRow, toRow, toLog, answer as fsrsAnswer } from '@/utils/fsrs.js'
 import { gradeQuestion } from '@/utils/gradeQuestion.js'

@@ -78,7 +78,7 @@ import katex from 'katex'
 import { toast } from '@/stores/ui.js'
 import { compressImageFile } from '@/utils/image.js'
 import { valueOf } from '@/utils/domEvent.js'
-import { putAsset, assetFileUrl } from '@/api/assets.js'
+import { putAsset, assetFileUrl } from '@/api/assets.ts'
 
 const props = defineProps({ modelValue: { type: Object, required: true }, showBlank: { type: Boolean, default: true }, compact: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue','blankInserted'])

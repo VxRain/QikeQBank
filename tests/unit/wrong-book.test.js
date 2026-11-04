@@ -11,7 +11,7 @@ const rd = (p) => readFileSync(resolve(ROOT, p), 'utf8').replace(/\r\n/g, '\n')
 
 describe('错题本（FE-P0-11）接线守卫', () => {
   const vue = rd('src/views/Wrong.vue')
-  const api = rd('src/api/practice.js')
+  const api = rd('src/api/practice.ts')
   const rs = rd('src-tauri/src/db/practice.rs')
 
   test('排序键与 practice.rs 的 WRONG_SORT_WHITELIST 逐字一致', () => {

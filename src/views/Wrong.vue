@@ -189,7 +189,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.js'
+import { wrongList, wrongDismiss, wrongStats } from '@/api/practice.ts'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { plainTextOf, blankAnswersOf, lettersOf } from '@/utils/questionDisplay.js'
 import { checkedOf } from '@/utils/domEvent.js'

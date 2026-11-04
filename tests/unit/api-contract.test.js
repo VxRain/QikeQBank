@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cmd, unwrap, setProvider } from '../../src/api/bridge.js'
-import { list as listQuestions, get as getQuestion } from '../../src/api/questions.js'
-import { listBanks } from '../../src/api/banks.js'
-import { stats, isPortableMode } from '../../src/api/practice.js'
+import { cmd, unwrap, setProvider } from '../../src/api/bridge.ts'
+import { list as listQuestions, get as getQuestion } from '../../src/api/questions.ts'
+import { listBanks } from '../../src/api/banks.ts'
+import { stats, isPortableMode } from '../../src/api/practice.ts'
 
 // FE-ARCH-06 契约守卫：信封只允许在 bridge.unwrap 处拆，页面/调用方只拿业务数据。
 function withProvider(invoke, fn) {

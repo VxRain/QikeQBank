@@ -14,7 +14,7 @@ export default {
   // 静默退化为全量（安全但慢），而且该页的行为（新建/改名/删库保护）从未被测过。
   // Home.vue 也归到这里：它只调 stats / records_overview / is_portable_mode，
   // 与题库页共享同一批 mock 与首屏链路。
-  owns: ['src/views/Banks.vue', 'src/views/Home.vue', 'src/stores/bank.js', 'src/stores/ui.js', 'src/api/banks.js'],
+  owns: ['src/views/Banks.vue', 'src/views/Home.vue', 'src/stores/bank.js', 'src/stores/ui.js', 'src/api/banks.ts'],
   async run({ page, ok }) {
     // ── 题库列表与进入 ──
     await goto(page, '#/banks')

@@ -49,8 +49,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
-import { get, create, update } from '@/api/questions.js'
-import { expandQuestions, normalizeDocAssets } from '@/api/assets.js'
+import { get, create, update } from '@/api/questions.ts'
+import { expandQuestions, normalizeDocAssets } from '@/api/assets.ts'
 import { normalizeQuestion, getAggregatedPlainText } from '@/utils/normalize.js'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter } from '@/stores/bank.js'
 import { toast, confirmDialog } from '@/stores/ui.js'
@@ -217,7 +217,7 @@ onMounted(async ()=>{
   if(isEdit.value){
     loading.value=true
     try{
-      const q = await get(route.params.id)
+      const q = await get(routeId.value)
       // asset: 引用展开成可显示 URL（保存时再归一回去）
       const list = await expandQuestions([q])
       form.value = list[0] || q
@@ -284,7 +284,7 @@ async function onSave(){
     normalizeQuestion(payload)
     payload.plain_text = getAggregatedPlainText(payload)
     if(isEdit.value){
-      await update(route.params.id, payload)
+      await update(routeId.value, payload)
       clearDraft(dkey.value) // 保存成功即清草稿，离开时不再提示
       dirty.value = false
       allowLeave = true

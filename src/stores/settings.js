@@ -1,5 +1,5 @@
 import { reactive, watch, nextTick } from 'vue'
-import { settingsGet, settingsSet } from '../api/settings.js'
+import { settingsGet, settingsSet } from '../api/settings.ts'
 import { leaveAfterOf } from '../utils/wrongRules.js'
 
 // 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。

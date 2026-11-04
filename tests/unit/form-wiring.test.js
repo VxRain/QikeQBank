@@ -49,7 +49,7 @@ test('Form.vue：保存成功后必须清草稿并复位 dirty（两条保存分
   // 编辑分支
   assert.match(
     src,
-    /await update\(route\.params\.id, payload\)[\s\S]{0,200}clearDraft\(dkey\.value\)/,
+    /await update\(routeId\.value, payload\)[\s\S]{0,200}clearDraft\(dkey\.value\)/,
     '编辑保存后应 clearDraft'
   )
   // 新建分支（连续录入）

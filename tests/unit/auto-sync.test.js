@@ -7,7 +7,7 @@
  */
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { setProvider } from '../../src/api/bridge.js'
+import { setProvider } from '../../src/api/bridge.ts'
 import { normalizeSyncInterval, settings } from '../../src/stores/settings.js'
 import { appliedRows, autoSync, initAutoSync, retryDelayMs, STARTUP_DELAY_MS } from '../../src/stores/autoSync.js'
 

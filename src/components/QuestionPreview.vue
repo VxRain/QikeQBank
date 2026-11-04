@@ -5,7 +5,7 @@
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { renderDoc, renderMaterial, renderOptions } from '@/utils/render.js'
-import { expandQuestions, hasAssetRefs, allAssetsResolved, assetCacheGen } from '@/api/assets.js'
+import { expandQuestions, hasAssetRefs, allAssetsResolved, assetCacheGen } from '@/api/assets.ts'
 
 const props = defineProps({
   question: { type: Object, default: null },
@@ -37,7 +37,7 @@ let lastKey = ''
  * 或「预览 A → 预览 B → 又预览 A」时，重复计算完全没必要。
  *
  * ── 缓存键为什么必须包含 asset 代次 ──
- * 渲染结果依赖 asset 解析后的 URL。`assets_gc` 后路径可能失效（见 api/assets.js
+ * 渲染结果依赖 asset 解析后的 URL。`assets_gc` 后路径可能失效（见 api/assets.ts
  * 的 cacheGen），只按 `signature` 记忆就会一直吐出带死链的旧 HTML。
  * 把代次拼进键里，清理缓存时自然全量失效，不需要遍历删除。
  *

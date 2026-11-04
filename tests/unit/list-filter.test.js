@@ -231,7 +231,7 @@ describe('listFilter / clampPage（页码收敛）', () => {
 describe('listFilter / 接线守卫（回退即失败）', () => {
   // 仓库文件在 Windows 上是 CRLF，先归一化行尾，否则 \n}\n 匹配不到
   const vue = readFileSync(resolve(ROOT, 'src/views/List.vue'), 'utf8').replace(/\r\n/g, '\n')
-  const api = readFileSync(resolve(ROOT, 'src/api/questions.js'), 'utf8').replace(/\r\n/g, '\n')
+  const api = readFileSync(resolve(ROOT, 'src/api/questions.ts'), 'utf8').replace(/\r\n/g, '\n')
 
   /** 粗粒度取函数体：从 `function name(` 到下一个顶层 `\n}\n`（足够守卫用，不做真解析） */
   function functionBody(src, name) {

@@ -336,8 +336,8 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { practicePool, recordAnswer, stats as fetchStats, recordsOverview } from '@/api/practice.js'
-import { expandQuestions } from '@/api/assets.js'
+import { practicePool, recordAnswer, stats as fetchStats, recordsOverview } from '@/api/practice.ts'
+import { expandQuestions } from '@/api/assets.ts'
 import QuestionRunner from '@/components/question/QuestionRunner.vue'
 import { bankStore, loadBanks, resolveBankFilter, persistBankFilter, bankExists } from '@/stores/bank.js'
 import { settings } from '@/stores/settings.js'

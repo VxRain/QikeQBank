@@ -225,7 +225,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { list, get, remove, batchUpdate, batchRemove } from '@/api/questions.js'
+import { list, get, remove, batchUpdate, batchRemove } from '@/api/questions.ts'
 import { bankStore, loadBanks, bankExists } from '@/stores/bank.js'
 import { toast, confirmDialog, selectDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'

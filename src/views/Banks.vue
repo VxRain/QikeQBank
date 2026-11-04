@@ -202,7 +202,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { bankStore, loadBanks } from '@/stores/bank.js'
-import { createBank, updateBank, removeBank } from '@/api/banks.js'
+import { createBank, updateBank, removeBank } from '@/api/banks.ts'
 import { toast, confirmDialog } from '@/stores/ui.js'
 import ImportFileBox from '@/components/ImportFileBox.vue'
 import {

@@ -13,7 +13,7 @@
  * 错误留在状态里，供设置面板显示。
  */
 import { reactive, watch } from 'vue'
-import { s3ConfigGet, s3Pull } from '../api/sync.js'
+import { s3ConfigGet, s3Pull } from '../api/sync.ts'
 import { loadBanks } from './bank.js'
 import { hydrateFromDb, settings } from './settings.js'
 import { toast } from './ui.js'

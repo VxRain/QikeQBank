@@ -92,7 +92,7 @@ const props = defineProps({
 
 const PAD = CHART
 // defineProps 用 `type: Array` 声明时 vue-tsc 只能推断出 unknown[]，
-// 这里按后端 exam_sessions 的实际形状收窄（字段名见 api/types.js::ExamSession）。
+// 这里按后端 exam_sessions 的实际形状收窄（字段名见 api/types.ts::ExamSession）。
 /** @type {import('vue').ComputedRef<Array<{exam_id:string, started_at:string, score:number, full_score:number}>>} */
 const rows = computed(() => /** @type {any} */ (props.sessions))
 const trend = computed(() => buildTrend(rows.value))

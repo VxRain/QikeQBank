@@ -135,7 +135,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { s3ConfigGet, s3ConfigSet, s3Test, s3Push, s3Status, s3RepairAssets } from '@/api/sync.js'
+import { s3ConfigGet, s3ConfigSet, s3Test, s3Push, s3Status, s3RepairAssets } from '@/api/sync.ts'
 import { settings } from '@/stores/settings.js'
 import { autoSync, beginCloudTask, endCloudTask, resetAutoSyncClock, runSync } from '@/stores/autoSync.js'
 import { toast } from '@/stores/ui.js'

@@ -33,7 +33,7 @@ const root = resolve(here, '../..')
 const read = (p) => readFileSync(resolve(root, p), 'utf8').replace(/\r\n/g, '\n')
 
 const previewSrc = read('src/components/QuestionPreview.vue')
-const assetsSrc = read('src/api/assets.js')
+const assetsSrc = read('src/api/assets.ts')
 const listSrc = read('src/views/List.vue')
 
 /** 取源码中某标识符首次出现的位置（找不到返回 -1） */
@@ -77,15 +77,16 @@ describe('B. 缓存键必须含 asset 代次', () => {
     )
   })
 
-  test('assets.js 的 clearAssetCache 会让代次自增', () => {
-    const m = /export function clearAssetCache\(\)\s*\{([\s\S]*?)\n\}/.exec(assetsSrc)
+  test('assets.ts 的 clearAssetCache 会让代次自增', () => {
+    // 允许可选的返回类型注解（迁移到 .ts 后是 `function clearAssetCache(): void {`）
+    const m = /export function clearAssetCache\(\)(?:\s*:\s*[\w\[\]<>| ]+)?\s*\{([\s\S]*?)\n\}/.exec(assetsSrc)
     assert.ok(m, '找不到 clearAssetCache')
     assert.match(m[1], /cacheGen\s*(\+=\s*1|\+\+)/, 'clearAssetCache 必须让 cacheGen 自增，否则旧缓存不会失效')
   })
 
   test('assetCacheGen / allAssetsResolved / hasAssetRefs 均已导出', () => {
     for (const fn of ['assetCacheGen', 'allAssetsResolved', 'hasAssetRefs']) {
-      assert.match(assetsSrc, new RegExp(`export function ${fn}\\(`), `assets.js 必须导出 ${fn}`)
+      assert.match(assetsSrc, new RegExp(`export function ${fn}\\(`), `assets.ts 必须导出 ${fn}`)
     }
     // QuestionPreview 必须真的用上（导入但不用 = 快路没接上）
     for (const fn of ['assetCacheGen', 'allAssetsResolved', 'hasAssetRefs']) {

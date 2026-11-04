@@ -128,7 +128,7 @@
  * 所以一切数据都来自 exam_detail(exam_id)；父级只负责传 examId 与开关。
  */
 import { ref, watch } from 'vue'
-import { examDetail } from '@/api/exam.js'
+import { examDetail } from '@/api/exam.ts'
 import { buildReviewRows } from '@/utils/examTrend.js'
 import { renderDoc } from '@/utils/render.js'
 import { TYPE_FULL_LABELS } from '@/constants/questions.js'
