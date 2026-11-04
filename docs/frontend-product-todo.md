@@ -117,10 +117,10 @@
 **挡不住的**（`strict: false` 的直接后果，别指望它）：
 
 - **不挡 undefined / null 访问**：`strictNullChecks: false`，`a.b.c` 里 `b` 可能不存在也照样通过
-- **不挡隐式 any**：`noImplicitAny: false`。打开这一个开关，**全项目 903 条错误**，分布：
-  - `src/utils/` 312 / `src/views/` 264 / `src/components/` 241 / `src/stores/` 76 / `src/constants/` 5 / `src/composables/` 2 / `App.vue` 3
-  - **已迁移三目录（utils+stores+api）合计 388 条**，`src/api/` 为 **0**（api 层是真标了类型）；未迁移的 `.vue` 贡献了其余 515 条
-  - 已迁移目录内按文件 Top6：`parseDocxTemplate.ts` 52 / `gradeQuestion.ts` 52 / `parsePureText.ts` 50 / `parseTemplate.ts` 38 / `parseSheet.ts` 37 / `session.ts` 34
+- **不挡隐式 any**：`noImplicitAny: false`。打开这一个开关，**全项目 617 条错误 / 47 文件**（起点 903 / 55，已按棘轮清零三批共 286 条，见 §0.6.1），分布：
+  - `src/views/` 264 / `src/components/` 241 / `src/utils/` 83 / `src/stores/` 19 / `src/constants/` 5 / `src/composables/` 2 / `App.vue` 3
+  - **api 层为 `0`**（真标了类型）；`utils`+`stores` 剩余 102 条 / 17 文件（起点 388），最大单文件 `normalize.ts` 17 / `render.ts` 17 / `validate.ts` 14
+  - 已清零的 8 个 `utils`/`stores` 文件：`parseTemplate` 38 / `parsePureText` 50 / `gradeQuestion` 52 / `parseDocxTemplate` 52 / `parseSheet` 37 / `session` 34 / `settings` 15 / `search` 8
   - 错误码：TS7006（参数隐式 any）为主，其余 TS7053（下标）/ TS7005 / TS7018 / TS7034 各数十
   - 复现：`pnpm typecheck:strict`（读 `tsconfig.strict.json`，即 `tsconfig.json` + `noImplicitAny: true`）
   - 注①（口径）：**任何单看某个目录的合计数都不能当成「全项目债务」**——388 是已迁移目录的，903 才是全量。
@@ -165,7 +165,7 @@
 
 顺带把 ExamHistory 里的「材料题子题切换 + 填空正确答案注入」从 SFC 搬到 `utils/examTrend.ts::enrichReviewItems`（SFC 未加 `lang="ts"`，写不了类型注解，留原处只能永远靠静态推断），**并补上 `parseSheet` 的 7 条单测**——它此前零覆盖，而它的类型本次被改动过。
 
-**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。要往前走，下一步是 `noImplicitAny` 分文件清零（388 → 0），棘轮已就位（§0.6.1），而不是继续改名。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
+**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。`noImplicitAny` 分文件清零已开工（§0.6.1）：8 个 `utils`/`stores` 文件、286 条已清零（903 → 617），棘轮已就位锁住不回退。剩余 617 条里 `views` 264 / `components` 241 是下一批，`utils`+`stores` 还剩 102 条（17 文件）。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
 
 **不建模块 shim**（`declare module '*.vue'`）：实测不加时模块类错误为 0；加了反而把 SFC 的 props/emits 推导顶成 `any`。`src/env.d.ts` 只做 `vue-router` 的 `RouteMeta` 增强。
 
