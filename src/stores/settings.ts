@@ -30,13 +30,15 @@ function load() {
 }
 
 // 自动下一题停留时长归一化：非法回退 1200ms，钳制在 300–5000ms
-export function normalizeDelay(v) {
+// 入参故意用 unknown 而非 any：调用方既有 localStorage 的 JSON（任意形状）
+// 也有 DB 的 value_json，收窄到 unknown 只影响类型层，运行期仍是 Number(v)。
+export function normalizeDelay(v: unknown): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return 1200
   return Math.min(5000, Math.max(300, Math.round(n)))
 }
 // 自动同步间隔归一化：整数分钟，钳制 10–60，非法回退 30
-export function normalizeSyncInterval(v) {
+export function normalizeSyncInterval(v: unknown): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return 30
   return Math.min(60, Math.max(10, Math.round(n)))
@@ -49,26 +51,39 @@ export const FSRS_LIMITS = {
   stepsMax: 6,
 }
 const STEP_RE = /^(\d+)([mhd])$/
+/**
+ * 合法步长单元：数字 + m/h/d，与 ts-fsrs 的 StepUnit 同形。
+ *
+ * 为什么要这个类型：settings.fsrs 会整体传给 utils/fsrs.ts 的 fsrsAnswer /
+ * previewIntervals（形参 FsrsSettings 的 learningSteps 是 ts-fsrs 的 Steps
+ * 模板字符串联合）。若 normalizeSteps 返回裸 string[]，调用点会报 TS2345。
+ * 模板字面量类型与 STEP_RE 的语义完全重合，所以只是让过滤谓词带上类型收窄，
+ * 判定顺序与结果一律不变。
+ */
+export type StepUnit = `${number}m` | `${number}h` | `${number}d`
 // 目标记忆保持率：钳制 0.75–0.95，非法回退 0.9
-export function normalizeRetention(v) {
+export function normalizeRetention(v: unknown): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return FSRS_LIMITS.retention.def
   return Math.min(FSRS_LIMITS.retention.max, Math.max(FSRS_LIMITS.retention.min, n))
 }
 // 最大间隔（天）：整数，钳制 30–36500，非法回退 36500
-export function normalizeMaxInterval(v) {
+export function normalizeMaxInterval(v: unknown): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return FSRS_LIMITS.maxInterval.def
   return Math.min(FSRS_LIMITS.maxInterval.max, Math.max(FSRS_LIMITS.maxInterval.min, Math.round(n)))
 }
 // 学习/重学步长：数组或逗号文本，每项必须符合 数字+m/h/d，最多 6 步，全非法回退默认
-export function normalizeSteps(v, fallback) {
+export function normalizeSteps(v: unknown, fallback: readonly StepUnit[]): StepUnit[] {
   const list = Array.isArray(v) ? v : String(v ?? '').split(',')
-  const out = list.map((s) => String(s).trim()).filter((s) => STEP_RE.test(s)).slice(0, FSRS_LIMITS.stepsMax)
+  const out = list
+    .map((s) => String(s).trim())
+    .filter((s): s is StepUnit => STEP_RE.test(s))
+    .slice(0, FSRS_LIMITS.stepsMax)
   return out.length ? out : [...fallback]
 }
 // 步长文本校验：给设置页用精确错误提示（normalizeSteps 是静默兜底，不适合直接当反馈）
-export function validateSteps(v) {
+export function validateSteps(v: unknown) {
   const list = (Array.isArray(v) ? v : String(v ?? '').split(','))
     .map((s) => String(s).trim())
     .filter(Boolean)
@@ -79,7 +94,7 @@ export function validateSteps(v) {
   return { ok: true, steps: list }
 }
 // 练习入库范围：仅接受 'wrong-only'，其余一律 'all'
-export function normalizePracticeScope(v) {
+export function normalizePracticeScope(v: unknown): string {
   return v === 'wrong-only' ? 'wrong-only' : 'all'
 }
 
@@ -105,8 +120,10 @@ export const DEFAULTS = Object.freeze({
   fsrs: Object.freeze({
     requestRetention: 0.9,
     maximumInterval: 36500,
-    learningSteps: Object.freeze(['1m', '10m']),
-    relearningSteps: Object.freeze(['10m']),
+    // as const：让两个步长数组保留字面量单元类型（StepUnit），
+    // 与 normalizeSteps 的返回类型对齐。纯类型标注，运行期仍是同一个冻结数组。
+    learningSteps: Object.freeze(['1m', '10m'] as const),
+    relearningSteps: Object.freeze(['10m'] as const),
     enableFuzz: false,
     practiceScope: 'all'
   })
@@ -153,7 +170,9 @@ function syncSnapshot() {
 }
 
 // 同步键赋值（归一化后写入 store）
-function applySyncValues(raw) {
+// raw 是「同步键 → JSON.parse 后的值」的字典：键集合由 SYNC_KEYS 白名单决定，
+// 值形状来自 DB 的 value_json，故用 Record<string, unknown> 而非具体形状。
+function applySyncValues(raw: Record<string, unknown>) {
   if (raw['fsrs.requestRetention'] !== undefined)
     settings.fsrs.requestRetention = normalizeRetention(raw['fsrs.requestRetention'])
   if (raw['fsrs.maximumInterval'] !== undefined)
@@ -174,7 +193,9 @@ function applySyncValues(raw) {
 // 布尔会被先完成一方的 finally 提前开门，漏出另一方的赋值回写。
 // 初始 0：模块底部会发起首次 hydrateFromDb()，由它把深度抬到 1 再归零。
 let hydrateDepth = 0
-let saveTimer = null
+// 防抖定时器句柄：初值 null 表示「无挂起写」，故必须显式给出可空类型，
+// 否则 noImplicitAny 下 `null` 会把变量推成 any（赋值处才定型的 TS7034/7005）。
+let saveTimer: ReturnType<typeof setTimeout> | null = null
 
 function persistLocalCache() {
   try {
@@ -222,7 +243,7 @@ export async function hydrateFromDb() {
   try {
     const items = await settingsGet()
     if (Array.isArray(items) && items.length) {
-      const raw = {}
+      const raw: Record<string, unknown> = {}
       for (const it of items) {
         if (!it || typeof it.key !== 'string') continue
         if (!SYNC_KEYS.includes(it.key)) continue

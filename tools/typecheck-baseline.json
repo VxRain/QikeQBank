@@ -1,11 +1,10 @@
 {
   "_comment": "noImplicitAny 分文件棘轮基线。由 node tools/typecheck-ratchet.mjs --update 生成，禁止手改。清零某文件后重跑 --update 收紧数字。",
-  "total": 684,
+  "total": 617,
   "files": {
     "src/views/Exam.vue": 81,
     "src/components/QuestionEditor.vue": 62,
     "src/views/Practice.vue": 53,
-    "src/utils/parseDocxTemplate.ts": 52,
     "src/views/Review.vue": 47,
     "src/components/TiptapDocEditor.vue": 44,
     "src/views/List.vue": 24,
@@ -18,7 +17,6 @@
     "src/utils/normalize.ts": 17,
     "src/utils/render.ts": 17,
     "src/components/exam/ExamHistory.vue": 16,
-    "src/stores/settings.ts": 15,
     "src/utils/validate.ts": 14,
     "src/views/Form.vue": 11,
     "src/components/S3SyncPanel.vue": 10,

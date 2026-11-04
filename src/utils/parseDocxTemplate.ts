@@ -13,15 +13,71 @@
  * - parseDocxHtml(html) -> { blocks }（block 形状与 parseTemplateFile 一致）
  * - parseDocxFile(arrayBuffer, mammoth) -> Promise<{ blocks, warnings:{images, formulas} }>
  */
+import type { QuestionType } from '../api/types.ts'
 import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
 import {
   textToDoc,
   optionMatch,
 } from './parseTemplate.ts'
+import type { OptionMatch } from './parseTemplate.ts'
 import { buildOne, applyScoreDiff } from './parseSheet.ts'
+import type { ParseBlock, ParseQuestion } from './parseSheet.ts'
+
+/**
+ * 题型别名表 / 短名表按 string 索引取用。
+ * 索引键来自模板文本（不可穷举），查不到时照旧是 undefined —— 与直接索引字面量键表的行为一致。
+ */
+const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, QuestionType>>
+/** 题型 key → 规范短名（缺键时调用方 `|| type` 兜底，与改造前一致） */
+const TYPE_LABEL_OF = TYPE_LABELS as Readonly<Record<string, string>>
+
+/** 章节/题型键：detectSection 的值域；'choice' = 歧义「选择」章节，按答案字母数推断单多选 */
+type SectionKey = QuestionType | 'choice' | null
+
+/** mammoth HTML → 行流元素：head>0 表示样式标题行（h1-h3） */
+interface DocxLine {
+  text: string
+  head: number
+}
+
+/** 材料节正文累积（首个子题出现即定稿成块） */
+interface MatBody {
+  lines: string[]
+  rawLines: string[]
+  scoreRaw: string
+}
+
+/**
+ * 解析中的一道题（组装成块之前的可变草稿）。
+ * `_badSerial`：材料节内出现裸序号的内部标记，只在 closeChunk 时读，不进块也不落库。
+ */
+interface DocxChunk {
+  section: SectionKey
+  stemLines: string[]
+  options: OptionMatch[]
+  answerRaw: string | null
+  refLines: string[] | null
+  analysisLines: string[] | null
+  scoreRaw: string
+  subOverride: SectionKey
+  isSub: boolean
+  rawLines: string[]
+  _badSerial?: boolean
+}
+
+/** mammoth.convertToHtml 的入参：浏览器传 { arrayBuffer }，node 传 { buffer } 或 { path }（原样透传） */
+type DocxInput = { arrayBuffer: ArrayBuffer } | { buffer: Uint8Array } | { path: string }
+
+/** 调用方注入的 mammoth 模块：这里只用到 convertToHtml（避免 node/浏览器双环境硬依赖差异） */
+interface MammothLike {
+  convertToHtml(input: DocxInput): Promise<{
+    value: string
+    messages?: ReadonlyArray<{ message?: string }> | null
+  }>
+}
 
 // 章节关键词（具体优先于"选择"）：返回 single/multi/judge/fill/short/material/'choice'/null
-function detectSection(text) {
+function detectSection(text: string): SectionKey {
   let t = String(text || '').trim()
   // 去行首序号/【】包装
   t = t.replace(/^第?[一二三四五六七八九十百0-9]+[、．.：:\s]+/, '')
@@ -51,9 +107,9 @@ const RE_ESCAPE = /^\\(?=[(（]?\d+[)）]?[.．、)]|[(（]\d+[)）])/
 
 // mammoth HTML → 带注解的行流（纯字符串实现，无 DOM 依赖）
 // [{ text, head }]，img 只计数丢弃
-export function htmlToLines(html) {
+export function htmlToLines(html: string): { lines: DocxLine[]; images: number } {
   const src = String(html || '')
-  const lines = []
+  const lines: DocxLine[] = []
   let images = 0
   // 表格：每行 td 各占一行拼入
   let s = src.replace(/<table[\s\S]*?<\/table\s*>/gi, (tbl) => {
@@ -61,7 +117,7 @@ export function htmlToLines(html) {
     return tds.map((td) => `<p>${td}</p>`).join('')
   })
   // 列表：由内向外逐层剥（先 ul 纯文本行，再 ol 合成序号），避免嵌套 li 提前截断
-  const peelList = (tag, withSerial) => {
+  const peelList = (tag: string, withSerial: boolean): void => {
     // 只匹配不含同类嵌套的最内层列表
     const re = new RegExp(`<${tag}[^>]*>((?:(?!<(?:ul|ol)\\b)[\\s\\S])*?)<\\/${tag}\\s*>`, 'gi')
     let changed = true
@@ -70,7 +126,7 @@ export function htmlToLines(html) {
       s = s.replace(re, (m, inner) => {
         changed = true
         let idx = 0
-        return inner.replace(/<li[^>]*>([\s\S]*?)<\/li\s*>/gi, (lm, lic) => {
+        return inner.replace(/<li[^>]*>([\s\S]*?)<\/li\s*>/gi, (lm: string, lic: string) => {
           idx++
           const prefix = withSerial ? `${idx}. ` : ''
           return `<p data-li="1">${prefix}${lic}</p>`
@@ -100,7 +156,7 @@ export function htmlToLines(html) {
   return { lines, images }
 }
 
-function newChunk() {
+function newChunk(): DocxChunk {
   return {
     section: null, stemLines: [], options: [],
     answerRaw: null, refLines: null, analysisLines: null, scoreRaw: '',
@@ -109,7 +165,7 @@ function newChunk() {
 }
 
 // 内容行路由：选项 / 普通文本（答案/解析等标记行已在外层处理）
-function routeContentLine(chunk, text, rawLine) {
+function routeContentLine(chunk: DocxChunk, text: string, rawLine: string): void {
   const om = optionMatch(text)
   if (om) {
     chunk.options.push({ letter: om.letter, text: om.text })
@@ -119,14 +175,14 @@ function routeContentLine(chunk, text, rawLine) {
   chunk.rawLines.push(rawLine)
 }
 
-export function parseDocxHtml(html) {
+export function parseDocxHtml(html: string): { blocks: ParseBlock[] } {
   const { lines } = htmlToLines(html)
-  const blocks = []
-  let section = null // single/multi/judge/fill/short/material/'choice'/null
-  let chunk = null
-  let matBody = null // { lines:[], rawLines:[], scoreRaw:'' }，首个子题出现即定稿
+  const blocks: ParseBlock[] = []
+  let section: SectionKey = null // single/multi/judge/fill/short/material/'choice'/null
+  let chunk: DocxChunk | null = null
+  let matBody: MatBody | null = null // { lines:[], rawLines:[], scoreRaw:'' }，首个子题出现即定稿
   let matChildren = 0
-  let openMatItem = null // 定稿后的材料父块（子题按引用追加）
+  let openMatItem: ParseBlock | null = null // 定稿后的材料父块（子题按引用追加）
 
   const closeChunk = () => {
     if (!chunk) return
@@ -217,7 +273,7 @@ export function parseDocxHtml(html) {
     }
     // 材料子题号 (n)（含题型覆盖前缀）
     let subM = line.match(RE_SUBNUM)
-    let subOverride = null
+    let subOverride: SectionKey = null
     if (!subM) {
       const tm = line.match(RE_SUBTYPE)
       if (tm) {
@@ -225,7 +281,7 @@ export function parseDocxHtml(html) {
         const sm2 = rest.match(RE_SUBNUM)
         if (sm2) {
           const name = tm[1]
-          subOverride = name.includes('选择') ? 'choice' : TYPE_ALIASES[name]
+          subOverride = name.includes('选择') ? 'choice' : ALIAS_TO_TYPE[name]
           subM = sm2
         }
       }
@@ -305,7 +361,7 @@ export function parseDocxHtml(html) {
   return { blocks }
 }
 
-function resolveType(chunk, section) {
+function resolveType(chunk: DocxChunk, section: SectionKey): QuestionType | 'choice' {
   if (chunk.subOverride) return chunk.subOverride
   if (section && section !== 'choice') {
     // 材料子题无独立章节：按选择推断（显式题型覆盖已在上分支返回）
@@ -315,11 +371,11 @@ function resolveType(chunk, section) {
   return 'choice' // 选择章节或无章节：看答案推断
 }
 
-function assembleChunk(chunk, section, blocks, openMatItem) {
+function assembleChunk(chunk: DocxChunk, section: SectionKey, blocks: ParseBlock[], openMatItem: ParseBlock | null): void {
   const index = blocks.length + 1
   const raw = chunk.rawLines.join('\n')
   const stemText = chunk.stemLines.join('\n').trim()
-  const pushErr = (msg) => blocks.push({ index, type: '', typeLabel: '', stemText, raw, question: null, error: msg })
+  const pushErr = (msg: string): void => { blocks.push({ index, type: '', typeLabel: '', stemText, raw, question: null, error: msg }) }
   if (chunk._badSerial) {
     pushErr('材料子题须用 (n) 编号（如 (1)），裸序号不认')
     return
@@ -332,7 +388,7 @@ function assembleChunk(chunk, section, blocks, openMatItem) {
       pushErr('选择题缺少答案（无法推断单选/多选）')
       return
     }
-    const letters = (answerRaw.match(/[A-Za-z]/g) || []).map((c) => c.toUpperCase())
+    const letters = (answerRaw.match(/[A-Za-z]/g) || []).map((c: string) => c.toUpperCase())
     const uniq = [...new Set(letters)]
     if (!uniq.length) {
       pushErr('选择题答案无有效字母')
@@ -340,7 +396,7 @@ function assembleChunk(chunk, section, blocks, openMatItem) {
     }
     type = uniq.length === 1 ? 'single' : 'multi'
   }
-  const typeLabel = TYPE_LABELS[type] || type
+  const typeLabel = TYPE_LABEL_OF[type] || type
   const optTexts = chunk.options.map((o) => o.text)
   const refText = chunk.refLines ? chunk.refLines.join('\n').trim() : ''
   const analysisText = chunk.analysisLines ? chunk.analysisLines.join('\n').trim() : ''
@@ -356,7 +412,7 @@ function assembleChunk(chunk, section, blocks, openMatItem) {
   }
   // r.question 是「按题型构造」的联合类型，score/difficulty 只在部分分支上声明；
   // 这里统一按可扩展的题目对象处理（分值/难度是所有题型的公共可写字段）。
-  const q: Record<string, unknown> = r.question
+  const q: ParseQuestion = r.question
   if (chunk.scoreRaw) {
     const n = Number(String(chunk.scoreRaw).trim())
     if (Number.isFinite(n) && n > 0) q.score = n
@@ -371,12 +427,12 @@ function assembleChunk(chunk, section, blocks, openMatItem) {
 }
 
 // 材料正文定稿落块（无正文直接返回 null；调用方保证至少进过材料节）
-function finalizeMaterial(matBody, blocks) {
+function finalizeMaterial(matBody: MatBody | null, blocks: ParseBlock[]): ParseBlock | null {
   if (!matBody) return null
   const bodyText = matBody.lines.join('\n').trim()
   if (!bodyText) return null
   const index = blocks.length + 1
-  const item = {
+  const item: ParseBlock = {
     index,
     type: 'material',
     typeLabel: '材料',
@@ -397,7 +453,10 @@ function finalizeMaterial(matBody, blocks) {
 
 // parseDocxFile：mammoth 在调用方注入（避免 node/浏览器双环境硬依赖差异）
 // input 透传给 mammoth.convertToHtml：浏览器传 { arrayBuffer }，node 传 { buffer } 或 { path }
-export async function parseDocxFile(input, mammoth) {
+export async function parseDocxFile(input: DocxInput, mammoth: MammothLike): Promise<{
+  blocks: ParseBlock[]
+  warnings: { images: number; formulas: number }
+}> {
   const { value: html, messages } = await mammoth.convertToHtml(input)
   const { blocks } = parseDocxHtml(html)
   let formulas = 0
