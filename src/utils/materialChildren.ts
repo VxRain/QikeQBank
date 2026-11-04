@@ -27,7 +27,8 @@ import { moveItem } from './arrayMove.ts'
 /** 子题最小形状（本模块只关心 id；其余字段原样透传） */
 export interface ChildQuestion {
   id?: string
-  [k: string]: any
+  // 允许调用方传完整 Question；多出的字段本模块不读
+  [k: string]: unknown
 }
 
 

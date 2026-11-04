@@ -16,11 +16,15 @@ export function hasAnswerEntry(a) {
   return false
 }
 
-/** 答题卡条目（Exam 组卷产物） */
+/**
+ * 答题卡条目（Exam 组卷产物）。
+ * q/parent 只用到「有没有题目 id」与作答状态，故给最小形状而不是 any——
+ * 写错字段名时能报错，同时不逼调用方造一个完整 Question。
+ */
 export interface SheetItemInput {
   uid: string
-  q?: any
-  parent?: any
+  q?: { id?: string; type?: string; fsrs?: unknown } | null
+  parent?: { id?: string; type?: string; fsrs?: unknown } | null
   isChild?: boolean
   childIdx?: number
   childCount?: number
@@ -30,7 +34,7 @@ export interface SheetItemInput {
   answered?: boolean
   /** 是否被标记（存疑） */
   flagged?: boolean
-  [k: string]: any
+  [k: string]: unknown
 }
 
 /** 答题卡分组：材料题子题归一组，其余独立成组 */
@@ -48,7 +52,7 @@ export interface SheetGroup {
  */
 export function groupSheetItems(
   items: SheetItemInput[] | null | undefined,
-  answers: Record<string, any> = {},
+  answers: Record<string, unknown> = {},
   flagged: Record<string, boolean> = {}
 ): SheetGroup[] {
   const out: SheetGroup[] = []
@@ -100,7 +104,7 @@ export function cellStateOf(entry) {
 /**
  * 首个未答项下标（答题卡「跳到首个未答」）；全答完返回 -1。
  */
-export function firstUnansweredIndex(items: SheetItemInput[] | null | undefined, answers: Record<string, any> = {}): number {
+export function firstUnansweredIndex(items: SheetItemInput[] | null | undefined, answers: Record<string, unknown> = {}): number {
   const list = Array.isArray(items) ? items : []
   for (let i = 0; i < list.length; i++) {
     if (!hasAnswerEntry(answers[list[i].uid])) return i

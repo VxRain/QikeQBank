@@ -9,20 +9,28 @@
  * 抽到这里之后：单一实现、可单测、改一处全生效。
  */
 
+/** ProseMirror/Tiptap doc 的最小形状（本模块只把它交给 renderDoc，不展开内容） */
+export interface DocLike {
+  type?: string
+  content?: unknown[]
+}
+
 /** 题目最小形状（本模块只读展示相关字段） */
 export interface QuestionLike {
   id?: string
   type?: string
-  stem?: any
+  stem?: DocLike
   children?: QuestionLike[]
-  options?: Array<{ id?: string; content?: any }>
+  options?: Array<{ id?: string; content?: DocLike }>
   answer?: {
     ids?: string[]
     blanks?: Array<{ id: string; answers?: string[] }>
   } | null
   plain_text?: string
   plainText?: string
-  [k: string]: any
+  // 刻意不写 `[k: string]: unknown`：索引签名会让「带具体字段的 interface」
+  // （如 api/types.ts 的 Question）**无法**赋给它——TS 要求源类型也有索引签名。
+  // 少写索引签名反而更宽松：结构兼容即可，多出来的字段照样能传。
 }
 
 /** 可作答项（材料题按子题展开；母题自身不入队） */
@@ -44,7 +52,7 @@ export interface RunItem {
  */
 export function plainTextOf(
   q: QuestionLike | null | undefined,
-  extract?: (doc: any) => string
+  extract?: (doc: DocLike) => string
 ): string {
   if (!q) return '-'
   // 取文本，再统一加装饰——装饰不能只在 stem 分支里做：

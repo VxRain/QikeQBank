@@ -37,14 +37,20 @@ export interface AnswerInput {
   shortText?: string
   /**
    * 材料题按子题 id 索引的作答。调用方（Exam 组卷）在此处用的是普通对象，
-   * 故同时放宽为 Record<string, any> 而不是严格的 Record<string, AnswerInput>。
+   * 故同时放宽为 Record<string, unknown> 而不是严格的 Record<string, AnswerInput>。
    */
-  children?: Record<string, any>
+  children?: Record<string, unknown>
 }
 
 /** 判分选项 */
 export interface GradeOpts {
   multiRule?: 'partial' | 'strict'
+  /**
+   * 判分场景。practice/review/exam 三者的差异只在「简答题要不要自评」等细枝上，
+   * 目前由各题型注册项自行判读；显式声明是为了让注册表的 opts 与实现同源
+   * （此前注册项签名里写了 mode，但 Grading 的 GradeOpts 没声明 → 两处不一致）。
+   */
+  mode?: 'practice' | 'review' | 'exam'
 }
 
 /** 落库用的 exam detail meta */
@@ -199,11 +205,11 @@ export function buildExamDetail(
   ans: AnswerInput | null | undefined,
   res: GradeResult,
   meta: ExamDetailMeta = {}
-): Record<string, any> {
+): Record<string, unknown> {
   const a = ans || {}
   // detail_json 是「题库自定义的稀疏字段袋」：各题型只写自己那几项，
   // 故用索引签名而非逐个可选字段（后端也是 json! 动态拼装）。
-  const d: Record<string, any> = {
+  const d: Record<string, unknown> = {
     type: q?.type,
     exam_id: meta.examId,
     exam_seq: meta.seq,

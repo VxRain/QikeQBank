@@ -77,7 +77,7 @@ export function previewIntervals(
 /**
  * 撤销窗口内要回传的载荷：把「评分前」的卡片快照整理成后端可写形态。
  */
-export function revertPayloadOf(fsrsRow: FsrsRow | null | undefined): Record<string, any> | null {
+export function revertPayloadOf(fsrsRow: FsrsRow | null | undefined): Record<string, unknown> | null {
   if (!fsrsRow) return null
   // 后端 FsrsCard 只要这几个字段；多余字段会让 serde 忽略，但少字段会直接报错
   return {

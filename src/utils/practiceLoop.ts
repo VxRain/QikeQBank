@@ -18,7 +18,8 @@ export interface TypeStat {
   count?: number
   correct?: number
   avg_ms?: number
-  [k: string]: any
+  // 后端 by_type 行可能带额外字段；本模块只读 type/count/correct
+  [k: string]: unknown
 }
 
 /** weakPracticeEntry 的输入：可直接给数组，也可给带 by_type 的对象 */

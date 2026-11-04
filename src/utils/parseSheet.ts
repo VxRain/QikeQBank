@@ -120,6 +120,28 @@ export function buildOne({ type, typeLabel, stemText, optTexts, answerRaw, analy
   return { error: err(`未知题型“${typeLabel}”`) }
 }
 
+/**
+ * 解析产物里的一个块（Excel/CSV 导入的中间形态，最终由 Form 落库）。
+ * `question` 为 null 表示该行没有可导入的题（此时 error 必有值）。
+ */
+export interface ParseBlock {
+  index: number
+  type: string
+  typeLabel: string
+  stemText: string
+  raw: string
+  question: {
+    type: string
+    stem?: unknown
+    children: Array<Record<string, unknown>>
+    analysis?: unknown
+    score?: number | null
+    difficulty?: number | null
+    [k: string]: unknown
+  } | null
+  error: string | null
+}
+
 export function parseSheetRows(rows) {
   const blocks = []
   const all = Array.isArray(rows) ? rows : []
@@ -138,7 +160,7 @@ export function parseSheetRows(rows) {
   const data = all.slice(headIdx + 1)
   const rawRow = (row) => row.map((c) => cell({ 0: c }, 0)).join(' | ')
   // 材料父题占位：子行按引用追加，天然保持行序
-  let openMaterial: { intId: string; item: any; rowIdx: number } | null = null // { intId, item, rowIdx }
+  let openMaterial: { intId: string; item: ParseBlock; rowIdx: number } | null = null
 
   const pushSingle = (rowIdx, row, { stripNum = false, attachTo = null } = {}) => {
     const index = blocks.length + 1

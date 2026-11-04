@@ -5,7 +5,7 @@
  * 纯函数 + 可注入 now，保证 node:test 可测；不直接读 settings（调用方传入）。
  */
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from 'ts-fsrs'
-import type { Steps } from 'ts-fsrs'
+import type { Card, ReviewLog, Steps } from 'ts-fsrs'
 
 export { Rating, State }
 
@@ -87,8 +87,25 @@ export interface FsrsRow {
   lapses?: number | null
   state?: number | null
   last_reviewed_at?: string | null
-  /** 上次评分档位（again/hard/good/easy）；撤销时原样带回 */
+  /** 上次评分档位（again/hard/good/easy）；撤销时原样带回。Rust 侧是 Option<String> */
   last_result?: string | null
+}
+
+/**
+ * ts-fsrs ReviewLog → fsrs_log 快照（落 practice_records.detail_json 的 fsrs_log 字段）。
+ * 只保留有效字段：elapsed_days / last_elapsed_days 已废弃不存。
+ */
+export interface FsrsLogRow {
+  rating: number
+  state: number
+  stability: number
+  difficulty: number
+  scheduled_days: number
+  learning_steps: number
+  /** ISO 字符串 */
+  due: string
+  /** ISO 字符串 */
+  review: string
 }
 
 /** 后端 fsrs 行（或 null）→ ts-fsrs Card。elapsed_days 已废弃：重建填 0，由调度器内部处理 */
@@ -108,7 +125,7 @@ export function cardFromRow(row: FsrsRow | null | undefined, now: Date = new Dat
 }
 
 /** ts-fsrs Card → 后端行（Date→ISO；last_result 为本次 grade 字符串） */
-export function toRow(card: any, lastResult?: string | null) {
+export function toRow(card: Card, lastResult?: string | null): FsrsRow {
   return {
     stability: card.stability,
     difficulty: card.difficulty,
@@ -128,7 +145,7 @@ export function toRow(card: any, lastResult?: string | null) {
 }
 
 /** ReviewLog → fsrs_log 快照（只存有效字段，废弃的 elapsed_days/last_elapsed_days 不存） */
-export function toLog(log: any) {
+export function toLog(log: ReviewLog): FsrsLogRow {
   const iso = (d: Date | string) => (d instanceof Date ? d.toISOString() : new Date(d).toISOString())
   return {
     rating: log.rating,
@@ -146,7 +163,12 @@ export function toLog(log: any) {
  * 作答：grade ∈ again/hard/good/easy → { card, log }。
  * schedSettings 为 settings.fsrs（缺键自动补默认）。
  */
-export function answer(card: any, grade: string, schedSettings: FsrsSettings = {}, now: Date = new Date()) {
+export function answer(
+  card: Card,
+  grade: string,
+  schedSettings: FsrsSettings = {},
+  now: Date = new Date()
+): { card: Card; log: ReviewLog } {
   const rating = GRADE_TO_RATING[grade]
   if (rating == null) throw new Error(`invalid fsrs grade: ${grade}`)
   return getScheduler(schedSettings).next(card, now, rating)

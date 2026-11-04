@@ -29,6 +29,7 @@ import {
   fullScoreOf,
   earnedOf
 } from './grading.ts'
+import type { AnswerInput, GradeOpts, GradableQuestion } from './grading.ts'
 
 /* ------------------------------- 默认题目模板 ------------------------------- */
 // 与编辑器既有默认值逐字段一致（QuestionEditor 曾自带一份）：改这里等于改「新建题目」的样子。
@@ -94,10 +95,27 @@ const DEFAULTS = {
 /* --------------------------------- 作答片段 --------------------------------- */
 
 /**
+ * 作答片段（字段名与 practice_records.detail_json 一致）。
+ * 各题型只写自己那几项，因此**全部字段可选**——这是这个形状的唯一正确表达：
+ * 写成「按题型返回不同对象」的联合，会让调用方在 res.detail?.selected 上
+ * 逐个卡 TS2339（实测 6 处），而真实语义就是「稀疏字段袋」。
+ */
+export interface AnswerDetail {
+  /** 单选/多选/判断：选中的选项 id */
+  selected?: string[]
+  /** 填空：逐空判分结果 */
+  blanks?: Array<{ id?: string; value?: string; correct?: boolean }>
+  /** 简答：自评档位 */
+  self_grade?: string
+  /** 简答：我的答案原文 */
+  my_answer?: string
+}
+
+/**
  * 落库/回看用的作答片段（字段名与 practice_records.detail_json 一致）。
  * 不含 child_id/exam_id 等编排字段——那些由页面按上下文补充。
  */
-function answerDetail(q, answer) {
+function answerDetail(q: GradableQuestion, answer: AnswerInput | null | undefined): AnswerDetail {
   const a = answer || {}
   const type = q?.type
   if (type === 'single' || type === 'judge') return a.selected ? { selected: [a.selected] } : {}
@@ -114,8 +132,7 @@ function answerDetail(q, answer) {
     }
   }
   if (type === 'short') {
-    // detail 是稀疏字段袋（各题型只写自己那几项），故用索引签名
-    const d: Record<string, any> = {}
+    const d: AnswerDetail = {}
     if (a.shortSelf) d.self_grade = a.shortSelf
     if (a.shortText) d.my_answer = a.shortText
     return d
@@ -160,15 +177,28 @@ export interface ValidationResult {
   errors: string[]
 }
 
-/** 题型注册项（新增题型只需这一条 + 编辑器） */
+/**
+ * 题型注册项（新增题型只需这一条 + 编辑器）。
+ *
+ * q/answer/opts 复用 grading.ts 的 GradableQuestion / AnswerInput / GradeOpts，
+ * 而不是各写一遍 any：注册表是**题型扩展点**，这里的签名就是新题型的契约，
+ * 写 any 等于新题型接错参数也不会报错。
+ */
 export interface QuestionTypeEntry {
   key: string
   label: string
   hasOptions: boolean
-  createDefault: () => Record<string, any>
-  validate: (q: any) => ValidationResult
-  grade: (q: any, answer: any, opts?: any) => { ratio: number; unanswered?: boolean; subset?: boolean }
-  renderAnswer: (q: any, answer: any) => string
+  createDefault: () => Record<string, unknown>
+  validate: (q: GradableQuestion) => ValidationResult
+  grade: (q: GradableQuestion, answer: AnswerInput, opts?: GradeOpts) => GradeResultLike
+  renderAnswer: (q: GradableQuestion, answer: AnswerInput) => string
+}
+
+/** 注册项 grade 的最小返回形状（完整 GradeResult 另含 full/earned/blanks） */
+export interface GradeResultLike {
+  ratio: number
+  unanswered?: boolean
+  subset?: boolean
 }
 
 /**
@@ -247,7 +277,7 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
     /**
      * 校验：先确认题型与注册项一致，再走 utils/validate.ts 的 v2 schema 规则。
      */
-    validate(key: string, q: any): ValidationResult {
+    validate(key: string, q: GradableQuestion): ValidationResult {
       if (!q || typeof q !== 'object') return { valid: false, errors: ['question must be object'] }
       if (q.type !== key) return { valid: false, errors: [`题型不匹配：期望 ${key}，实为 ${q.type ?? '空'}`] }
       const entry = map.get(key)
@@ -260,7 +290,7 @@ export function createTypeRegistry(entries: QuestionTypeEntry[]) {
      * @param q 题目（材料题含 children）
      * @param answer { selected, picked[], fillValues{}, shortSelf, shortText, children{} }
      */
-    grade(q: any, answer: any, opts: { mode?: 'practice' | 'review' | 'exam'; multiRule?: 'partial' | 'strict' } = {}) {
+    grade(q: GradableQuestion, answer: AnswerInput, opts: GradeOpts = {}) {
       const mode = opts.mode || 'practice'
       const a = answer || {}
       const type = q?.type

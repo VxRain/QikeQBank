@@ -356,7 +356,7 @@ function assembleChunk(chunk, section, blocks, openMatItem) {
   }
   // r.question 是「按题型构造」的联合类型，score/difficulty 只在部分分支上声明；
   // 这里统一按可扩展的题目对象处理（分值/难度是所有题型的公共可写字段）。
-  const q: Record<string, any> = r.question
+  const q: Record<string, unknown> = r.question
   if (chunk.scoreRaw) {
     const n = Number(String(chunk.scoreRaw).trim())
     if (Number.isFinite(n) && n > 0) q.score = n
