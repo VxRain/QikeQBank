@@ -108,12 +108,43 @@ function runVueTsc() {
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   });
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
   if (result.error) {
     console.error(`✗ 无法执行 vue-tsc：${result.error.message}`);
     process.exit(2);
   }
-  return output;
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  return { output, status: result.status };
+}
+
+/**
+ * 区分「编译真的干净」与「编译器因为配置/崩溃而失败」——**不能只看有没有
+ * `error TS`**。历史事故（reviewer 复现，已修）：
+ *
+ * - 配置崩坏（TS18003 无输入文件 / TS2688 找不到类型库）时，输出含
+ *   `error TS` 但没有任何 `src/` 行，旧判据（`&& !output.includes('error TS')`）
+ *   首层就短路 → 打印「✓ 0 条 / 0 文件」并 exit 0，**假绿**；在此状态下
+ *   `--update` 会把基线写成 `{total:0,files:{}}`，此后永久失明。
+ * - 反向也错：项目真正清零时输出为空、exit 0，旧判据反而判为崩溃 → exit 2，
+ *   闸门在成功那一刻变红。
+ *
+ * 正确判据：**以 vue-tsc 的退出码为准**（0 = 编译干净；非 0 = 有错或崩）。
+ * 非 0 却一条 `src/` 错误都没有 → 必然是配置错/崩溃（真实类型错误一定带
+ * `src/` 路径），此时坚决 exit 2，绝不当成 0 条。
+ *
+ * @param {{output: string, status: number|null}} r runVueTsc 的返回
+ * @param {Map<string, number>} counts 聚合后的每文件错误数
+ * @returns {string|null} 崩溃时为错误说明，正常时为 null
+ */
+export function detectCompileFailure({ output, status }, counts) {
+  // 干净：退出码 0，且确实没有 src/ 错误
+  if (status === 0 && counts.size === 0) return null;
+  // 有错：退出码非 0，但有 src/ 错误可归因 → 正常业务结果
+  if (status !== 0 && counts.size > 0) return null;
+  // 剩下两种都是异常：
+  //   status === 0 却有 src/ 错误（不可能，保守起见报错）
+  //   status !== 0 却没有任何 src/ 错误（配置错 / 崩溃）
+  const detail = output.trim() || '(无输出)';
+  return `vue-tsc 退出码 ${status}，但没有任何 src/ 错误行 —— 配置错误或编译器崩溃。原始输出：\n${detail}`;
 }
 
 function main() {
@@ -121,22 +152,29 @@ function main() {
   const update = args.includes('--update');
   const json = args.includes('--json');
 
-  const output = runVueTsc();
+  const ran = runVueTsc();
+  const output = ran.output;
   const current = aggregateByFile(output);
 
-  // 一条错误都没有却非正常退出 → 配置错误或崩溃，不能当成「全清零」放行
-  if (current.size === 0 && !output.includes('error TS')) {
-    const compilerCrashed = !/^src\/.*error TS/m.test(output);
-    if (compilerCrashed) {
-      console.error('✗ vue-tsc 未产出任何错误行，但也没有正常完成。原始输出：');
-      console.error(output.trim() || '(空)');
-      process.exit(2);
-    }
+  // 崩溃/配置错绝不能被当成「已清零」放行（见 detectCompileFailure 注释）
+  const failure = detectCompileFailure(ran, current);
+  if (failure) {
+    console.error(`✗ ${failure}`);
+    console.error('  棘轮拒绝在无法判定真实错误数的情况下给出结论。');
+    process.exit(2);
   }
 
   const countedTotal = [...current.values()].reduce((a, b) => a + b, 0);
 
   if (update) {
+    // 护栏：一次崩溃就能把基线清成 0 条，此后永久失明。宁可拒绝。
+    // 真正清零到 0 条是可以的（那意味着 noImplicitAny 全部达标），
+    // 但必须由「编译干净且确实没有任何错误」证明 —— 上面的 failure
+    // 检查已经保证了这一点，这里再做一层显式确认以免未来改动破坏它。
+    if (current.size === 0 && ran.status !== 0) {
+      console.error('✗ 拒绝写入空基线：vue-tsc 未正常退出，无法确认真实错误数。');
+      process.exit(2);
+    }
     const payload = {
       _comment:
         'noImplicitAny 分文件棘轮基线。由 node tools/typecheck-ratchet.mjs --update 生成，禁止手改。清零某文件后重跑 --update 收紧数字。',

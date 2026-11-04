@@ -121,11 +121,12 @@
   - `src/views/` 264 / `src/components/` 241 / `src/utils/` 83 / `src/stores/` 19 / `src/constants/` 5 / `src/composables/` 2 / `App.vue` 3
   - **api 层为 `0`**（真标了类型）；`utils`+`stores` 剩余 102 条 / 17 文件（起点 388），最大单文件 `normalize.ts` 17 / `render.ts` 17 / `validate.ts` 14
   - 已清零的 8 个 `utils`/`stores` 文件：`parseTemplate` 38 / `parsePureText` 50 / `gradeQuestion` 52 / `parseDocxTemplate` 52 / `parseSheet` 37 / `session` 34 / `settings` 15 / `search` 8
-  - 错误码：TS7006（参数隐式 any）为主，其余 TS7053（下标）/ TS7005 / TS7018 / TS7034 各数十
+  - 错误码实测（2026-11，617 条时）：TS7006 390 / TS7053 91 / TS2339 48 / TS7005 36 / TS7031 15 / TS7034 14，其余 TS7023 6 / TS7018 6 / TS7022 5 / TS7016 2 / TS7011 2 / TS7024 1 / TS2345 1
   - 复现：`pnpm typecheck:strict`（读 `tsconfig.strict.json`，即 `tsconfig.json` + `noImplicitAny: true`）
   - 注①（口径）：**任何单看某个目录的合计数都不能当成「全项目债务」**——388 是已迁移目录的，903 才是全量。
   - 注②（**已是棘轮**）：数字会随收紧**下降**（显式 any 清掉后，隐式 any 的推断位置也跟着减少），因此**不能用一个总数字做基线**（总数字合法地会变）；改为**按文件计数**上棘轮，见下节。
-- **5 个文件只是改了后缀**，内容零改动，因此仍是隐式 any 语义：`utils/image.ts`（66 行）、`render.ts`（87）、`normalize.ts`（80）、`validate.ts`（85）、`parseTemplate.ts`（383）
+- **4 个文件只是改了后缀**，内容零改动，因此仍是隐式 any 语义：`utils/image.ts`（66 行）、`render.ts`（87）、`normalize.ts`（80）、`validate.ts`（85）
+  （`parseTemplate.ts` 原先也在这份清单里，但已在 §0.6.1 的批次 2 清零并大幅改动，383 → 478 行，故移出）
 
 #### 0.6.1 noImplicitAny 棘轮（已落地）
 
@@ -163,9 +164,36 @@
 | `practice_records.detail_json` | 被写成 `Record<string, any>`，实际是**真契约**（由 `grading.ts::buildExamDetail` 写、成绩单/回看/趋势读） | 收紧后 6 处 TS2339，遂建 `ExamDetailJson` |
 | `exam_detail.question` | 同上，回看时会被合并子题并补 `_parentStem/_parentType/_childIndex` | TS2353 |
 
+### 0.6.2 noImplicitAny 清零新挖出的第 5 处缺口（已记录，待修）
+
+`src/stores/session.ts:181` 的 `extra` 归一化：
+
+```ts
+const extra: SessionExtra = isPlainObject(r.extra) ? (r.extra as SessionExtra) : {}
+```
+
+`isPlainObject` 只保证「是个非数组对象」，**不校验内部字段**。因此受污染的
+快照（如 `extra: { flaggedKeys: 'oops' }`）能通过 `normalizeSnapshot`，
+随后 `Practice.vue:866` 的 `flaggedKeys.filter(...)` 抛
+`TypeError: .filter is not a function`。
+
+**关键定性：这不是本次引入的漂移。** 改动前的等价写法是
+`r.extra && typeof r.extra === 'object' && !Array.isArray(r.extra)`，
+判定条件与 `isPlainObject` 完全一致，同样不校验字段。区别只是旧代码
+靠隐式 any 蒙过去、新代码把 `as SessionExtra` 摆到了明面上。
+
+**建议修法（未做，待确认）**：在 `normalizeSnapshot` 里对 `flaggedKeys`
+补一次 `Array.isArray` + `filter(typeof === 'string')`，与同文件里
+`keys` / `wrongKeys` 已有的归一化写法对齐。同类风险点还有
+`answers`（`Record<string, unknown>`，下游按字符串读）。
+
+**为什么没顺手改**：项目规则明确禁止「修 bug 时自作主张新增测试用例或改断言基准」，
+且该改动超出本 goal 的「只加类型注解、行为等价」范围——一旦动逻辑，
+五份文件的行为等价声明就不再成立。故留作独立立项。
+
 顺带把 ExamHistory 里的「材料题子题切换 + 填空正确答案注入」从 SFC 搬到 `utils/examTrend.ts::enrichReviewItems`（SFC 未加 `lang="ts"`，写不了类型注解，留原处只能永远靠静态推断），**并补上 `parseSheet` 的 7 条单测**——它此前零覆盖，而它的类型本次被改动过。
 
-**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。`noImplicitAny` 分文件清零已开工（§0.6.1）：8 个 `utils`/`stores` 文件、286 条已清零（903 → 617），棘轮已就位锁住不回退。剩余 617 条里 `views` 264 / `components` 241 是下一批，`utils`+`stores` 还剩 102 条（17 文件）。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
+**结论**：这批 `.ts` 的价值是「契约层（`src/api/` + `types.ts`）有真类型 + 迁移与收紧过程挖出了 4 处运行期风险」，**不是**「前端已经类型安全」。`noImplicitAny` 分文件清零已开工（§0.6.1）：8 个 `utils`/`stores` 文件、286 条已清零（903 → 617），棘轮已就位锁住不回退。剩余 617 条里 `views` 264 / `components` 241 是下一批，`utils`+`stores` 还剩 102 条（17 文件）。收紧过程又挖出 1 处既有缺口（`session.ts` 的 `extra` 未校验内部字段，§0.6.2），**属既有缺陷、非本次漂移**，待独立立项。`strict: true` 是更大的工程（含 `strictNullChecks`），单独立项。
 
 **不建模块 shim**（`declare module '*.vue'`）：实测不加时模块类错误为 0；加了反而把 SFC 的 props/emits 推导顶成 `any`。`src/env.d.ts` 只做 `vue-router` 的 `RouteMeta` 增强。
 

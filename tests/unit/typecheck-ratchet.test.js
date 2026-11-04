@@ -18,7 +18,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { aggregateByFile, compare } = await import('../../tools/typecheck-ratchet.mjs')
+const { aggregateByFile, compare, detectCompileFailure } = await import('../../tools/typecheck-ratchet.mjs')
 
 /** 真实 vue-tsc 输出片段（含多行错误续行、空行、汇总行，模拟干扰项） */
 const SAMPLE = `src/utils/parsePureText.ts(163,9): error TS7034: Variable 'tokens' implicitly has type 'any[]' in some locations where its type cannot be determined.
@@ -120,4 +120,49 @@ test('compare：回归判定用「每文件」而非总数（总数合法下降�
   const { regressions, improvements } = compare(current, baseline)
   assert.deepEqual(regressions, [{ file: SESSION, was: 2, now: 5 }])
   assert.deepEqual(improvements, [{ file: SETTINGS, was: 8, now: 4 }])
+})
+
+/* ------------------------------------------------------------------ *
+ * detectCompileFailure：区分「真干净」与「编译器崩了」
+ *
+ * 这一组是回归守卫。审阅时实际发生过的事故（reviewer 复现，已修）：
+ * 旧判据写成 `current.size === 0 && !output.includes('error TS')`，
+ * 配置崩坏时输出**含** `error TS`（如 TS18003）但没有 `src/` 行，
+ * 首层就短路 → 打印「✓ 0 条 / 0 文件」并 exit 0（假绿）；
+ * 在此状态下 --update 还会把基线写成 {total:0,files:{}}，此后永久失明。
+ * 反向也错：项目真清零时输出为空 → 旧判据反而判为崩溃 → exit 2。
+ *
+ * 因此判据必须以 vue-tsc 的**退出码**为准，而不是「输出里有没有 error」。
+ * ------------------------------------------------------------------ */
+
+test('detectCompileFailure：干净编译（exit 0，无错误）→ 不算崩溃', () => {
+  assert.equal(detectCompileFailure({ output: '', status: 0 }, new Map()), null)
+})
+
+test('detectCompileFailure：有 src 错误且 exit 非 0 → 正常业务结果，不算崩溃', () => {
+  const out = `${PURE_TEXT}(163,9): error TS7034: Variable 'tokens' implicitly ...`
+  assert.equal(detectCompileFailure({ output: out, status: 2 }, aggregateByFile(out)), null)
+})
+
+test('detectCompileFailure：配置崩坏（exit 非 0 但无 src 错误）→ 必须报错（防假绿）', () => {
+  // 实测 TS18003 的输出形态：含 "error TS" 但没有任何 src/ 路径
+  const out = "error TS18003: No inputs were found in config file 'tsconfig.strict.json'."
+  const r = detectCompileFailure({ output: out, status: 2 }, aggregateByFile(out))
+  assert.notEqual(r, null, '旧判据在这里短路放行（假绿），必须报错')
+  assert.match(r, /TS18003/, '错误说明要带上原始输出，便于定位')
+})
+
+test('detectCompileFailure：找不到类型库（exit 非 0，无 src 错误）→ 必须报错', () => {
+  const out = "error TS2688: Cannot find type definition file for 'vite/client'."
+  assert.notEqual(detectCompileFailure({ output: out, status: 2 }, aggregateByFile(out)), null)
+})
+
+test('detectCompileFailure：项目真清零（exit 0、输出空）→ 不能误判为崩溃', () => {
+  // 这是本目标的终点状态：全部清零时输出就是空的。旧判据在这里 exit 2（闸门误红）。
+  assert.equal(detectCompileFailure({ output: '', status: 0 }, aggregateByFile('')), null)
+})
+
+test('detectCompileFailure：exit 0 却有 src 错误 → 保守报错（不可能组合）', () => {
+  const out = `${SESSION}(1,1): error TS7006: Parameter implicitly has an 'any' type.`
+  assert.notEqual(detectCompileFailure({ output: out, status: 0 }, aggregateByFile(out)), null)
 })

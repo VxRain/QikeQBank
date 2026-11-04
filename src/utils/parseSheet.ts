@@ -15,6 +15,7 @@
  * 对外：parseSheetRows(rows) -> { blocks }，rows 为 SheetJS sheet_to_json(header:1) 的二维数组；
  * block 形状与 parseTemplateFile 一致 { index, type, typeLabel, stemText, raw, question|null, error|null }。
  */
+import type { QuestionType } from '../api/types.ts'
 import { TYPE_ALIASES, TYPE_LABELS } from '../constants/questions.js'
 import {
   textToDoc,
@@ -40,7 +41,7 @@ type ScoreRaw = string | number | null | undefined
  * 题型表按 string 索引取用：索引键来自表格文本（不可穷举），
  * 查不到时照旧是 undefined —— 与直接索引字面量键表的运行期行为完全一致。
  */
-const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, string>>
+const ALIAS_TO_TYPE = TYPE_ALIASES as Readonly<Record<string, QuestionType>>
 /** key → 规范短名（缺键时调用方 `|| typeKey` 兜底，与改造前一致） */
 const TYPE_LABEL_OF = TYPE_LABELS as Readonly<Record<string, string>>
 
