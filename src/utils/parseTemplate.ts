@@ -18,7 +18,11 @@
 import type { BlankAnswer, QuestionType } from '../api/types.ts'
 import { TYPE_LABELS, TYPE_ALIASES } from '../constants/questions.ts'
 
-// 题型命名/别名唯一权威在 constants/questions.ts（FE-ARCH-01）；此处 re-export 兼容旧引用
+// 题型命名/别名唯一权威在 constants/questions.ts（FE-ARCH-01）；此处 re-export 仅为对外 API 兼容
+//
+// 注：截至 2026-11 全仓**已无任何引用方**从本文件取 TYPE_LABELS
+// （parseSheet / parseDocxTemplate 都直接 `from '../constants/questions.ts'` 取）。
+// 保留是为了不破外部/历史导入；若确认无外部消费方可删。
 export { TYPE_LABELS }
 
 /* ---------- 解析结果形状（parseSheet / parseDocxTemplate / ImportFileBox 共用） ---------- */

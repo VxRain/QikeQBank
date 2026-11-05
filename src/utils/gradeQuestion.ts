@@ -107,7 +107,10 @@ const DEFAULTS: Record<string, () => Record<string, unknown>> = {
  * 作答片段（字段名与 practice_records.detail_json 一致）。
  * 各题型只写自己那几项，因此**全部字段可选**——这是这个形状的唯一正确表达：
  * 写成「按题型返回不同对象」的联合，会让调用方在 res.detail?.selected 上
- * 逐个卡 TS2339（实测 6 处），而真实语义就是「稀疏字段袋」。
+ * 逐个卡 TS2339（将一个 3 成员联合注入后实测：+18 条错，其中 TS2339 共 12 处，
+ * 分布在 Practice.vue 961-963 与 Review.vue 638-640 的 4 个调用点上），
+ * 而真实语义就是「稀疏字段袋」。
+ * 注：早期这里写「实测 6 处」，那个数字是误记（基线里那 6 条 TS2339 打在其他窄对象上，与本类型无关）。
  */
 export interface AnswerDetail {
   /** 单选/多选/判断：选中的选项 id */

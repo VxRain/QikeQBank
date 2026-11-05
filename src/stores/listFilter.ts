@@ -112,7 +112,11 @@ export function saveFilter(page: string, bankId: string | null | undefined, filt
   if (!s || !bankId) return false
   const norm = normalizeFilter(filter)
   const def = emptyFilter()
-  // 逐键对比「是否全默认」；keyof 限定，避免用字符串索引对象时绕开类型检查
+  // 逐键对比「是否全默认」。
+  // 注：`as Array<keyof ListFilter>` 是未校验断言——`Object.keys()` 返回 `string[]`，
+  // 这里把它硬拉成 `keyof ListFilter`；删掉后反而报 TS7053（×2），所以它确实必需。
+  // 它**不是**在「防止绕开检查」：不加会报错。真正的风险是 ListFilter 将来加可选字段时，
+  // 新键在 `def` 上可能为 undefined，导致 `norm[k] === def[k]` 对两个 undefined 判等。
   const isDefault = (Object.keys(def) as Array<keyof ListFilter>).every((k) => norm[k] === def[k])
   try {
     if (isDefault) {

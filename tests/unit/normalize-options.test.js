@@ -32,3 +32,30 @@ test('normalizeQuestion: 已有选项 id 原样保留', () => {
   })
   assert.deepEqual(q.options.map((o) => o.id), ['zzz', 'o1', 'aaa'])
 })
+
+// ── session.ts 的 extra 校验（注释复审 P0：「声明 SessionExtra 但加载时不校验」）──
+// 早期 normalizeSnapshot 只过 isPlainObject 就 `as SessionExtra`，脏值原样透传，
+// 消费方一旦 flaggedKeys.filter(...) 就是 TypeError。该 `as` 实测还是纯装饰（删掉 0 错）。
+import { normalizeSnapshot } from '../../src/stores/session.ts'
+
+const snapBase = {
+  v: 1, mode: 'practice', keys: ['a'], curIdx: 0, answers: {},
+  round: { total: 0, correct: 0, wrongKeys: [], ms: 0 }, rounds: [],
+  startedAt: 1, updatedAt: Date.now()
+}
+
+test('normalizeSnapshot: extra 脏值不透传', () => {
+  const cases = [
+    { name: 'flaggedKeys 是字符串', extra: { flaggedKeys: 'oops' }, expect: {} },
+    { name: 'skippedKeys 混入数字', extra: { skippedKeys: [1, 'a'] }, expect: { skippedKeys: ['a'] } },
+    { name: 'practiceMode 非法', extra: { practiceMode: 'nonsense' }, expect: {} },
+    { name: '正常值原样保留', extra: { flaggedKeys: ['x'], skippedKeys: ['y'], practiceMode: 'recite' },
+      expect: { flaggedKeys: ['x'], skippedKeys: ['y'], practiceMode: 'recite' } },
+    { name: '未知键保留（索引签名允许）', extra: { foo: 1 }, expect: { foo: 1 } },
+    { name: '非对象', extra: 'str', expect: {} }
+  ]
+  for (const c of cases) {
+    const s = normalizeSnapshot({ ...snapBase, extra: c.extra })
+    assert.deepEqual(s.extra, c.expect, c.name)
+  }
+})

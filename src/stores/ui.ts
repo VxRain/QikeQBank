@@ -41,9 +41,9 @@ export interface DialogState {
 }
 
 export const ui = reactive({
-  toasts: [] as Toast[],
+  toasts: [],
   /** 当前弹层；null = 无 */
-  dialog: null as DialogState | null
+  dialog: null
 })
 
 /* ---------- Toast ---------- */

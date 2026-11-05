@@ -19,7 +19,7 @@
  *   rounds: Array<{ total, correct, wrongKeys: string[], ms, rate }>,
  *   startedAt: number,
  *   updatedAt: number,
- *   extra: Object                  // 模式特有（练习 mode/题型/题量、模考 examId/时长…）
+ *   extra: SessionExtra         // 页面共用部分（见 SessionExtra）
  * }
  */
 
@@ -43,9 +43,14 @@ export interface SessionRound {
 /**
  * 会话快照（v1）。`answers` 由各页面自定义形状（练习/复习/模考的作答状态不同），
  * 这里保持 `unknown` 而非强行建模——收紧成一个共用形状只会造出假契约。
- * `extra` 则是**页面共用**的那部分（标记/跳过/练习模式），值得建模：
- * 原先它是 `Record<string, any>`，导致读 `extra.flaggedKeys.filter(...)` 时
- * 类型是 unknown/any，写错字段名不会有任何提示。
+ * `extra` 则是页面共用的那几个字段，故给出命名类型 `SessionExtra`。
+ *
+ * ⚠️ 类型只是书面契约，**加载时只校验到 `isPlainObject` 一层**：
+ * `flaggedKeys: 'oops'` 这类脏值会原样透传（见 `normalizeSnapshot` 的 `extra` 行）。
+ * 早期本段注释写「原先 Record<string,any> 导致写错字段名不会有任何提示」，
+ * 那是在为自己的建模找理由；实际当前状态下写错值类型仍无任何提示。
+ * 真要在边界拦住，得逐字段判型（参考同函数里 `answers` / `rounds` 的做法）。
+ * 另注：截至 2026-11，全仓除本文件外**无人读取 `extra.*`**，它是预备好的契约。
  */
 export interface SessionSnapshot {
   v: number
@@ -161,11 +166,34 @@ function normalizeRound(raw: unknown): SessionRound {
 }
 
 /**
+ * 规范化 `extra`：已知字段逐个判型，未知键原样保留（索引签名允许）。
+ *
+ * 判型不通过就当没写（而不是整个快照作废）——这两个字段只影响「哪些题标了/
+ * 跳过了」的展示，丢掉比打断整个恢复流程代价小。
+ */
+function normalizeExtra(raw: unknown): SessionExtra {
+  if (!isPlainObject(raw)) return {}
+  const src = raw as Record<string, unknown>
+  const out: SessionExtra = { ...src }
+  const strArr = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? v.filter((k: unknown): k is string => typeof k === 'string') : undefined
+  const flagged = strArr(src.flaggedKeys)
+  const skipped = strArr(src.skippedKeys)
+  if (flagged) out.flaggedKeys = flagged
+  else delete out.flaggedKeys
+  if (skipped) out.skippedKeys = skipped
+  else delete out.skippedKeys
+  if (src.practiceMode !== 'practice' && src.practiceMode !== 'recite') delete out.practiceMode
+  return out
+}
+
+/**
  * 规范化快照：结构不对就返回 null（宁可重开，也不拿半截数据恢复）。
  */
 export function normalizeSnapshot(raw: unknown, mode?: string): SessionSnapshot | null {
   if (!raw || typeof raw !== 'object') return null
-  // raw 来自 localStorage JSON：逐字段判型后再读（下面每个字段都有独立兜底）
+  // raw 来自 sessionStorage JSON（本模块只用 sessionStorage，不碰 localStorage）：
+  // 逐字段判型后再读（下面每个字段都有独立兜底）
   const r = raw as Record<string, unknown>
   if (asInt(r.v) !== SESSION_VERSION) return null
   if (mode && r.mode !== mode) return null
@@ -178,7 +206,11 @@ export function normalizeSnapshot(raw: unknown, mode?: string): SessionSnapshot 
   const rounds: SessionRound[] = Array.isArray(r.rounds)
     ? r.rounds.map((x: RoundLike) => ({ ...normalizeRound(x), rate: Math.max(0, Math.min(100, asInt(x?.rate))) }))
     : []
-  const extra: SessionExtra = isPlainObject(r.extra) ? (r.extra as SessionExtra) : {}
+  // extra：只保留已知字段且逐个判型（保留索引签名允许的其它键，但不校验其类型）。
+  // 早期写法是 `isPlainObject(r.extra) ? (r.extra as SessionExtra) : {}`——
+  // 那个 `as` 实测删掉后仍 0 错（纯装饰），而脏值（如 `flaggedKeys:'oops'`）
+  // 会原样透传，消费方一旦 `flaggedKeys.filter(...)` 就是 TypeError。
+  const extra = normalizeExtra(r.extra)
   return {
     v: SESSION_VERSION,
     mode: r.mode,
@@ -229,7 +261,9 @@ export function load(mode: string, opts: { ttlMs?: number; now?: number } = {}):
 export function save(mode: string, snap: unknown) {
   const s = storage()
   if (!s || !isMode(mode)) return null
-  const base = snap && typeof snap === 'object' ? (snap as Record<string, unknown>) : {}
+  // snap 已在加载/调用侧保证是普通对象；这里不再做 `as Record<string, unknown>`
+  // （实测删掉断言后 0 错，纯装饰）。`typeof` 判断保留作为运行期兜底。
+  const base = snap && typeof snap === 'object' ? snap : {}
   const normalized = normalizeSnapshot({ ...base, mode, v: SESSION_VERSION, updatedAt: Date.now() }, mode)
   if (!normalized) return null
   try {

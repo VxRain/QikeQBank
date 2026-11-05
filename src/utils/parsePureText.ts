@@ -318,10 +318,11 @@ function buildFill(stemRaw: string, answerText: string): { doc: Doc; blanks: Bla
   }
   const tail = stemRaw.slice(last)
   if(tail) segments.push(tail)
-  if(!count){ segments.push({ blankId: 'b1' }); count = 1 } // 只有「填空」字样时退化为单空
+  if(!count){ segments.push({ blankId: 'b1' }); count = 1 } // 题干里没有任何 RE_BLANK 占位符时兜底为单空（与「看到『填空』二字」无关）
   // 答案分配：支持逗号分隔多空、竖线/斜杠分隔单空多解（如 价值尺度|衡量尺度）
   const rawParts = String(answerText||'').split(/[,，;；、]+/).map(s=>s.trim()).filter(Boolean)
-  // 若分割后数量与空数不一致，尝试按空白/换行兜底
+  // 逗号切出来的段为空时，才回退到按空白/换行切分（**不是**「数量不一致就重试拆分」：
+  // `（ ）和（ ）` + `答案：甲 乙` 这种无逗号的会整段当第一个空，多空答案会静默错配）
   let parts = rawParts.length ? rawParts : String(answerText||'').split(/\s+/).map(s=>s.trim()).filter(Boolean)
   if(!parts.length) parts = []
   const blanks: BlankAnswer[] = []
@@ -330,12 +331,11 @@ function buildFill(stemRaw: string, answerText: string): { doc: Doc; blanks: Bla
     // 单空多解：按 | / ／ 切分为多答案
     const alts = p ? p.split(/[|\/／]+/).map(s=>s.trim()).filter(Boolean) : []
     blanks.push({ id:`b${i}`, answers: alts.length ? alts : (p ? [p] : ['0']) })
-    // 若原文单空却用 | 分隔（如 价值尺度|衡量尺度），则首空需合并所有 alts
-    if(count===1 && parts.length===1 && alts.length>1){
-      // 已处理
-    }
+    // 注：这里曾有一段空分支注释「已处理」，实际分支体为空——
+    // 单空多解已由上面的 `alts` 展开处理完毕，不需要额外合并，故删掉误导性的占位注释。
   }
-  // 特判：单空且答案含 | 但被逗号切为1段，上面的 alts 已正确展开；若空数为1且 rawParts 为空但原答含 |，兜底展开
+  // 特判：空数为1、首空没拿到答案（`'0'`）且原文含 | 或 / 时，把原答拆成多解。
+  // 注意是「首空为 '0'」才触发，不是「原答含 | 就展开」（如 `答案：/` 会原样保留 '/'）。
   if(count===1 && blanks[0].answers[0]==='0' && /[|\/]/.test(String(answerText||''))){
     blanks[0].answers = String(answerText).split(/[|\/／]+/).map(s=>s.trim()).filter(Boolean)
   }
@@ -363,7 +363,8 @@ function assemble(acc: FsmAcc): ParsedQuestion {
     if(isJudgePair(acc.options)){
       return { type:'judge', stem: textToDoc(stemText || '判断题'), options, answer:{ ids:[pickJudgeId(acc.options, answerText)] }, analysis }
     }
-    // 答案长度决定 single/multi：抽字母去重，映射到存在的选项
+    // single/multi 由「去重后的字母里、真正命中现存选项的个数」决定：≥2 → multi。
+    // （早期写作「答案长度决定」，会导出错误预期：`答案：A（见解析）` 长度不短却仍是 single）
     const letters = new Set(acc.options.map((o) => o.letter))
     // answerText 是 string|null（由上面按是否命中 ANSWER 标记赋值）；这里已确认为字符串上下文
     const ids = [...new Set(String(answerText || '').toUpperCase().replace(/[^A-G]/g, ''))]
@@ -442,9 +443,12 @@ function buildMaterial(tokens: Token[], headIdx: number, firstQIdx: number): Par
 /**
  * 状态机入口：
  * - 显式材料：存在 MATERIAL_HEAD 且其后仍有 QUESTION_NUM 才按材料装配
- * - 隐式材料：无显式头但有多题号且首题号前有较长公共题干（如“据此完成下面小题”）也判材料
+ * - 隐式材料：无显式头但**至少 2 个题号**且首题号前有较长公共题干（>30 字或含「小题」）也判材料；
  *   否则降级为普通题（MATERIAL_HEAD 由 fsm 按题干行消化）；
  * - 普通模式：线性 fsmCollect 后按优先级装配题型。
+ *
+ * ⚠️ 早期这里写「连续题号」，不是实话：下面只要求 `qIdxs.length >= 2`，
+ * 题号 1 与 7 这种不连续的同样会判材料（已实测）。
  */
 function parseTokens(tokens: Token[], { allowMaterial = true }: { allowMaterial?: boolean } = {}): ParsedQuestion {
   if(allowMaterial){
@@ -453,7 +457,7 @@ function parseTokens(tokens: Token[], { allowMaterial = true }: { allowMaterial?
       const rel = tokens.slice(headIdx + 1).findIndex(t => t.type === TT.QUESTION_NUM)
       if(rel !== -1) return buildMaterial(tokens, headIdx, headIdx + 1 + rel)
     }
-    // 隐式材料兜底：首段为长材料 + 连续题号
+    // 隐式材料兜底：首段为长材料 + 至少 2 个题号（**不要求连续**）
     const qIdxs = tokens.map((t,i)=> t.type===TT.QUESTION_NUM ? i : -1).filter(i=>i!==-1)
     if(qIdxs.length >= 2){
       const firstQ = qIdxs[0]

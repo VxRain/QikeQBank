@@ -66,7 +66,7 @@ function getPlainText(doc: PmNode | null | undefined): string {
  * 若这里只写 `NormalizableQuestion`，**当下能过**只是因为 `any` 泄漏；等哪天
  * 把 `normalizeDocAssets` 收紧成 `Record<string, any> & {bank_id?: string}`（`form`
  * 的 JSDoc 就是它），两处调用会立刻报 TS2559（no properties in common）。
- * 与 `validate.ts:49` 的做法对齐：声明宽、内部逐字段判型。
+ * 与 `validate.ts:55`（`validateQuestion(input: unknown)`）的做法对齐：声明宽、内部逐字段判型。
  *
  * 安全性由函数体保证：下面每处读 `q.children` / `q.options` 都先 `Array.isArray`，
  * `q.stem` / `q.answer?.reference` 走 `getPlainText` 的 `?.` 与 `||` 兜底。

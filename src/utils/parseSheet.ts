@@ -40,8 +40,13 @@ type ScoreRaw = string | number | null | undefined
 /**
  * 题型表按 string 索引取用：索引键来自表格文本（不可穷举）。
  *
- * `TYPE_ALIASES` 已是 `Readonly<Record<string, QuestionType>>`，故这里只换短名，
- * 不需要注解或断言。查不到时是 `undefined`，由调用方 `|| typeKey` 兜底。
+ * `TYPE_ALIASES` 是 `Readonly<Record<string, QuestionType>>`，直接别名即可；
+ * `TYPE_LABELS` 是 `Readonly<Partial<Record<QuestionType, string>>>`（键窄于 string），
+ * 赋给 `Record<string, string>` 目前能过，只是因为 `strictNullChecks` 关闭
+ * （值里的 undefined 被擦除、且未命中键在运行期仍返回 undefined）。
+ * 查不到时是 `undefined`，由调用方 `|| typeKey` 兜底。
+ *
+ * ⚠️ 迁移代价：开 `strictNullChecks` 时本文件会新增 14 条错。
  */
 const ALIAS_TO_TYPE: Readonly<Record<string, QuestionType>> = TYPE_ALIASES
 /** key → 规范短名（缺键时调用方 `|| typeKey` 兜底，与改造前一致） */
