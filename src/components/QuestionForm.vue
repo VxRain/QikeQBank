@@ -145,9 +145,15 @@ function onOptionUpdate(idx, val){
 function toggleAnswer(idx){
   const opt = local.options[idx]
   if(!opt.id){
-    opt.id = `o${local.options.indexOf(opt)+1}`
-    const used = new Set(local.options.map(o=>o.id))
-    while(used.has(opt.id)) opt.id = 'o'+(Number(opt.id.slice(1))+1)
+    // 避免与已有 id 撞车，且**排除自身**：早期实现把 opt 自己也算进 used，
+    // 于是 while 首轮必真，总是白跳一个位置（无冲突时 o2 会被挤成 o3）。
+    const used = new Set()
+    for(const other of local.options){
+      if(other !== opt && other.id) used.add(other.id)
+    }
+    let n = local.options.indexOf(opt) + 1
+    while(used.has(`o${n}`)) n++
+    opt.id = `o${n}`
   }
   if(!local.answer) local.answer={ids:[]}
   if(!Array.isArray(local.answer.ids)) local.answer.ids=[]

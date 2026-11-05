@@ -1,6 +1,6 @@
 {
   "_comment": "noImplicitAny 分文件棘轮基线。由 node tools/typecheck-ratchet.mjs --update 生成，禁止手改。清零某文件后重跑 --update 收紧数字。",
-  "total": 480,
+  "total": 479,
   "files": {
     "src/views/Exam.vue": 80,
     "src/components/QuestionEditor.vue": 62,
@@ -8,7 +8,7 @@
     "src/views/Review.vue": 47,
     "src/components/TiptapDocEditor.vue": 43,
     "src/views/List.vue": 24,
-    "src/components/QuestionForm.vue": 22,
+    "src/components/QuestionForm.vue": 21,
     "src/views/Wrong.vue": 21,
     "src/components/search/SearchPalette.vue": 18,
     "src/views/Banks.vue": 18,

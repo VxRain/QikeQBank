@@ -135,8 +135,24 @@ export function normalizeQuestion(input: NormalizableQuestion | Record<string, u
   return q
 }
 // options 短id：题内唯一 o1/o2/...，新增的按位置生成，已有的保留（乱序/引用/判分不漂移）
+//
+// ⚠️ 必须避让已占用的 id：早期实现只按位置写 `o${i+1}`，一旦选项被删/重排
+// 留下「中间空洞」，就会与已有 id 撞车（如 `[{id:'o2'},{},{}]` → `o2,o2,o3`）。
+// 而判分（gradeQuestion.ts 按 id 做 findIndex）取的是**第一个**匹配，
+// 重复 id 会让判分与答案字母永远落到错误选项上。
 function ensureOptionIds(q: NormalizableQuestion): void {
-  q.options.forEach((o,i)=>{ if(!o.id) o.id = `o${i+1}` })
+  const used = new Set<string>()
+  // 第一轮先登记全部已有 id，保证「已有的保留」不被后生成的值抢占
+  q.options.forEach((o)=>{ if(o.id) used.add(o.id) })
+  // 第二轮再给缺 id 的按位置填，位置号被占则顺延，直到全局唯一
+  let next = 1
+  q.options.forEach((o)=>{
+    if(o.id) return
+    while(used.has(`o${next}`)) next++
+    o.id = `o${next}`
+    used.add(o.id)
+    next++
+  })
 }
 function isDocEmpty(doc: PmNode | null | undefined): boolean {
   if(!doc || !doc.content) return true
