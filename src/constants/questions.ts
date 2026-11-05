@@ -16,9 +16,12 @@
  * 不在本文件重复定义，而是 `import type` 自 `api/types.ts`（该文件是纯类型文件、
  * 零运行时 import，反向依赖不会成环）——保证「题型联合」全仓只有一处定义。
  *
- * 本文件的 5 条 noImplicitAny 全部来自 3 个 `reduce` 的 `acc` 初始值 `{}`：
- * 空对象字面量推不出索引签名，`acc[t.key]` 遂隐式 any。修法是为每个 reduce
- * 显式标注累加器类型（`Record<QuestionType, ...>`），**不是**改写成 `as` 断言。
+ * 本文件迁移前的 5 条 noImplicitAny 分两类：
+ *   - **3 条**来自 3 个 `reduce` 的 `acc` 初始值 `{}`（:41/:49/:57 均为 TS7053，
+ *     空对象字面量推不出索引签名，`acc[t.key]` 遂隐式 any）
+ *   - **2 条**来自 `metaOf(key)`（参数 `key` 隐式 any → TS7006，连带一处 TS7053）
+ * 修法是用 `reduce<Partial<Record<QuestionType, T>>>((acc,t)=>…, {})` 显式给出
+ * 累加器泛型，种子写裸 `{}`，**不需要任何 `as` 断言**。
  */
 import type { QuestionType } from '../api/types.ts'
 
@@ -50,7 +53,6 @@ export const QUESTION_TYPES: ReadonlyArray<QuestionTypeMeta> = Object.freeze([
   { key: 'material', label: '材料', shortLabel: '材', fullLabel: '材料题', icon: 'i-lucide-layers', hasOptions: false, defaultScore: 0, defaultDifficulty: 2, order: 6 }
 ])
 
-/** 题型 key，按显示顺序 */
 /**
  * 题型 key，按显示顺序。
  *
@@ -76,31 +78,31 @@ export const CHILD_QUESTION_TYPES: ReadonlyArray<QuestionTypeMeta> = QUESTION_TY
  * 使 `QuestionEditor.vue` 的 `if (QUESTION_TYPE_MAP[type])` 变成恒真分支。
  *
  * 改成 `Partial` 后：
- * - 不需要任何 `as` 断言（种子直接写 `{}`）
+ * - 种子写裸 `{}` 即可（累加器泛型在 `reduce<>` 上给出），不需要 `as` 断言
  * - `metaOf` 的 `|| null` 从「手工补真相」变成诚实代码
  * - 真加新题型时不会让人误以为已经覆盖
  */
 export const QUESTION_TYPE_MAP: Readonly<Partial<Record<QuestionType, QuestionTypeMeta>>> = Object.freeze(
-  QUESTION_TYPES.reduce((acc, t) => {
+  QUESTION_TYPES.reduce<Partial<Record<QuestionType, QuestionTypeMeta>>>((acc, t) => {
     acc[t.key] = t
     return acc
-  }, {} as Partial<Record<QuestionType, QuestionTypeMeta>>)
+  }, {})
 )
 
 /** 兼容旧用法：key → 规范短名（导入解析/提示文案仍按这个取） */
 export const TYPE_LABELS: Readonly<Partial<Record<QuestionType, string>>> = Object.freeze(
-  QUESTION_TYPES.reduce((acc, t) => {
+  QUESTION_TYPES.reduce<Partial<Record<QuestionType, string>>>((acc, t) => {
     acc[t.key] = t.label
     return acc
-  }, {} as Partial<Record<QuestionType, string>>)
+  }, {})
 )
 
 /** key → 完整名（单选题等）：组卷配置面板、成绩单等需要完整字样的位置用它，别各写一份 */
 export const TYPE_FULL_LABELS: Readonly<Partial<Record<QuestionType, string>>> = Object.freeze(
-  QUESTION_TYPES.reduce((acc, t) => {
+  QUESTION_TYPES.reduce<Partial<Record<QuestionType, string>>>((acc, t) => {
     acc[t.key] = t.fullLabel
     return acc
-  }, {} as Partial<Record<QuestionType, string>>)
+  }, {})
 )
 
 /**

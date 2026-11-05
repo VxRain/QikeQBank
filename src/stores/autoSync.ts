@@ -127,7 +127,9 @@ export async function runSync({ reason = 'auto' }: { reason?: 'auto' | 'manual' 
     const cfg = await s3ConfigGet()
     if (!cfg?.configured) return { ok: false, skipped: 'unconfigured' }
     const res = await s3Pull()
-    // PLAN §323：拉取成功后必须重新加载题库与设置，否则界面还停在旧数据
+    // PLAN.md:382：拉取成功后必须重新加载题库与设置，否则界面还停在旧数据
+    // （原文：「apply / replace 成功后前端需重新 loadBanks() 与 hydrateFromDb()
+    //   —— stores 是缓存，DB 为准」）
     await loadBanks()
     await hydrateFromDb()
     autoSync.lastAt = Date.now()
