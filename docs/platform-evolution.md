@@ -2,8 +2,8 @@
 
 > 来源：产品方向评审（问：作为「个人统一聚合的学习平台」，还缺什么）
 > 版本：v1 · 2026-10-29
-> 状态：**草案**——本文档是方向与取舍的依据，**不构成实现契约**；任何表结构 / 同步契约变更以 `PLAN.md §3/§4/§7` 为准
-> 关联：**`PLAN.md §0 文档索引`**（台账入口）、`PLAN.md §3/§4/§7`（契约权威）、`docs/frontend-product-todo.md`（近期前端 TODO）；Schema 迁移草案见本文档 **附录 A**
+> 状态：**草案**——本文档是方向与取舍的依据，**不构成实现契约**；任何表结构 / 同步契约变更以代码为准（`src-tauri/src/db/schema.rs`、Rust `#[command]`、`src/api/types.ts`）
+> 关联：`PLAN.md`（待定事项 / 已否决 / 选型口径）、`docs/frontend-product-todo.md`（近期前端 TODO）；Schema 迁移草案见本文档 **附录 A**
 > 用法：§6 路线图按阶段排期；阶段内条目沿用 `PE-<阶段>-<序号>` 编号；每阶段结束复盘一次本文档。附录 A 是 v4 表结构草案，动 schema 前必读
 
 ---
@@ -114,7 +114,7 @@ banks ──┬── questions ──────────────┐
 
 ### 2.3 搜索的现实
 
-当前是 `plain_text LIKE '%x%'` 全表扫（`questions.rs:441/861`）。
+当前是 `plain_text LIKE '%x%'` 全表扫（`db/questions.rs` 的 `questions_list` / `import_questions`）。
 
 - 题目几百道时无感；笔记化之后（几百篇 × 几十块）会明显卡。
 - 方案：FTS5 **`trigram` tokenizer**（中文子串可用；`unicode61` 对中文不切词，不要用）。
@@ -260,7 +260,7 @@ MVP 边界：
 
 ### 6.2 任务表
 
-> 规模：S ≤ 0.5 人日 / M 1–2 / L 3–5 / XL > 5（同 `frontend-product-todo.md §0.2`）
+> 规模：S ≤ 0.5 人日 / M 1–2 / L 3–5 / XL > 5（全仓同一套）
 
 #### 阶段 A · 结构（1–2 周）
 
@@ -336,8 +336,7 @@ MVP 边界：
 
 每阶段结束必须同时满足，否则不进下一阶段：
 
-- [ ] `pnpm build` / `cargo test` / `pnpm lint`（0 警告）/ `node tools/smoke-test.mjs` 全绿
-- [ ] 新增表已完成四处同步（`schema.rs` / `smoke-test.mjs` / `migrate-dbjson.mjs` / `PLAN.md §3`）
+- [ ] 命令行门禁与新增表的逐字符同步**按 `AGENTS.md` 执行**（唯一常驻规范，本节不重复清单）
 - [ ] 新增实体已确认「进同步 / 不进同步」，无第三个选项
 - [ ] 旧库升级路径有单测（v3 库 → 新版本 → 数据完整）
 - [ ] 阶段新增的入口有「债务可见」或「关闭开关」
@@ -371,7 +370,7 @@ MVP 边界：
 | 手写 / 日程 / 番茄钟 / 白噪音 | 周边功能会稀释「聚合」的注意力，且都有更好的独立工具 |
 | 完整 SuperMemo IR 复刻 | 学习曲线劝退，80% 价值在 MVP 边界内（§3.3） |
 | 题库市场 / 社区 | 需要服务端 + 内容审核，与 §8 第一条同因 |
-| **以「便携 U 盘即走 / 小体积免安装」作为产品定位或论证前提** | 便携模式只是运行方式（数据落同级目录，避免污染 C 盘），不是定位。定位以 `PLAN.md §0.3` 为准；用错的定位推导出的取舍即使结论对，下一次也会推出错的结论 |
+| **以「便携 U 盘即走 / 小体积免安装」作为产品定位或论证前提** | 便携模式只是运行方式（数据落同级目录，避免污染 C 盘），不是定位。定位以 `PLAN.md`「选型口径」为准；用错的定位推导出的取舍即使结论对，下一次也会推出错的结论 |
 
 ---
 
@@ -415,8 +414,8 @@ MVP 边界：
 ## 附录 A：Schema v4 迁移草案（`cards` / `notes` / `blocks` / `concepts`）
 
 > 版本：v1 · 2026-10-29
-> 状态：**草案，未启用**。启用前 `PLAN.md §3` 仍以 v3 为唯一权威；本附录不得被任何代码引用。
-> 触发条件：§6.1 阶段 A 启动时，本附录走一次评审后**整体并入 PLAN.md §3**，随后按 §A.4 清单落地。
+> 状态：**草案，未启用**。启用前 `schema.rs::MIGRATIONS` 仍以 v3 为唯一权威；本附录不得被任何代码引用。
+> 触发条件：§6.1 阶段 A 启动时，本附录走一次评审后**整体并入 `schema.rs::MIGRATIONS`（并同步两 tools 脚本）**，随后按 §A.4 清单落地。
 
 ### A.0 目标与不变量
 
@@ -699,7 +698,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
 - 维护方式：应用层在写 `questions` / `blocks` / `notes` 的同一事务内 update（**不用触发器**——重建表迁移时会丢，且三段式 delete 拿不到旧值）。
 - 重建触发点（缺一不可）：① `init_schema`（升级后首次）② `rebuild_if_legacy`（它 DROP 了 questions，FTS 必须一起 drop）③ `apply_bundle` 提交后 ④ `replace_snapshot` 之后。
 - 自检：`SELECT count(*) FROM search_fts` 与 `SELECT count(*) FROM questions` 不一致即 rebuild。
-- **不进同步包**：bundle 键是硬编码白名单（`sync.rs:265`），新表不加进 push 就不会被同步；到达端重建。
+- **不进同步包**：bundle 键是硬编码白名单（`db/sync.rs::export_delta`），新表不加进 push 就不会被同步；到达端重建。
 
 ##### A.1.7.4 前置校验
 
@@ -862,27 +861,26 @@ DELETE FROM review_state;  -- 然后按 bundle.review_state 插入
 
 ---
 
-### A.4 四处逐字符同步清单
+### A.4 三处逐字符同步清单
 
-`AGENTS.md` 铁律：schema/DDL 唯一权威 = `PLAN.md §3`，且以下三处必须逐字符一致。v4 落地时**四处全部要改，缺一即失败**。
+`AGENTS.md` 铁律：schema/DDL 唯一权威 = `src-tauri/src/db/schema.rs::MIGRATIONS`，以下两处 tools 脚本必须与之逐字符一致。v4 落地时**三处全部要改，缺一即失败**。
 
 | # | 文件 | 改什么 |
 |---|---|---|
 | 1 | `src-tauri/src/db/schema.rs` | `MIGRATIONS` 追加 §A.1 全部 DDL；`SCHEMA_VERSION = "4"`；新增 `migrate_v3_to_v4()`；`rebuild_if_legacy` 改版本驱动 |
 | 2 | `tools/smoke-test.mjs` | `DDL` 常量（约 L42 起）追加同样 DDL |
 | 3 | `tools/migrate-dbjson.mjs` | `DDL` 常量（约 L36 起）追加同样 DDL |
-| 4 | `PLAN.md §3` | DDL 段、版本沿革说明、§A.3.3 双时钟语义描述 |
 
 **联动（非逐字符，但必须同步）**：
 
 | 位置 | 改动 |
 |---|---|
-| `PLAN.md §4/§7` | 新命令签名（`notes_*` / `blocks_*` / `cards_*` / `concepts_*` / `events_*`） |
+| Rust `#[command]` + `src/api/types.ts` | 新命令签名（`notes_*` / `blocks_*` / `cards_*` / `concepts_*` / `events_*`）与数据结构 |
 | `src-tauri/src/lib.rs` | `generate_handler!` 注册新命令 |
-| `src/api/*.js` | 新增 `notes.js` / `blocks.js` / `cards.js`；统一取 `.data` 信封 |
+| `src/api/*.ts` | 新增 `notes.ts` / `blocks.ts` / `cards.ts`；统一经 `bridge.unwrap<T>` 拆包 |
 | `src-tauri/src/db/sync.rs` | bundle 新键 + 合并分支 + `replace_snapshot` 的 DELETE 列表 |
 | `src-tauri/src/db/mod.rs` | 新模块声明与 `pub use` |
-| `PLAN.md §7` 导出格式 | 旧 JSON 导出/导入命令已移除（FE-P0-01），交换格式随数据保全方案重新设计；`notes` / `blocks` / `cards` 需纳入新设计 |
+| 交换格式 | 旧 JSON 导出/导入命令已移除，格式随数据保全方案重新设计；`notes` / `blocks` / `cards` 需纳入新设计 |
 
 ---
 
@@ -890,13 +888,7 @@ DELETE FROM review_state;  -- 然后按 bundle.review_state 插入
 
 #### A.5.1 必跑门禁
 
-```bash
-pnpm build
-cargo test --manifest-path src-tauri/Cargo.toml
-pnpm lint                       # clippy -D warnings，0 警告
-node tools/smoke-test.mjs
-pnpm test:unit
-```
+见 `AGENTS.md`（唯一常驻规范，本节不重复清单）。
 
 #### A.5.2 迁移专项测试（必须新增，不能只靠手测）
 
@@ -945,10 +937,10 @@ CREATE VIEW IF NOT EXISTS v_study_timeline AS
 
 | 文档 | 关系 |
 |---|---|
-| `PLAN.md` | **唯一契约权威**。本文档的任何 schema 设想在写进 PLAN 之前都不生效 |
+| `PLAN.md` | 待定事项 / 已否决 / 选型口径。本文档的任何 schema 设想在落进代码之前都不生效 |
 | 本文档 **附录 A** | §1/§2 的具体 DDL 与迁移步骤草案（原 `docs/schema-v4-draft.md`） |
-| `docs/frontend-product-todo.md` | 近期前端 TODO（P0–P2）。其中 `FE-P1-01 首页今日任务`、`FE-P0-08 命令面板`、`FE-P2-06 PDF/OCR/AI 辅助录入` 与本规划重叠，**实施时应以本规划的阶段顺序为准**，避免两处重复立项 |
-| `AGENTS.md` | 铁律（禁原生弹窗、视觉一致性、四方同步）对本文档所有条目同样适用 |
+| `docs/frontend-product-todo.md` | 近期前端 TODO（P0–P2）。与本规划重叠的条目（如 PDF/OCR/AI 辅助录入）**实施时以本规划的阶段顺序为准**，避免两处重复立项 |
+| `AGENTS.md` | 铁律（禁原生弹窗、视觉一致性、三方同步）对本文档所有条目同样适用 |
 
 ## 附录 C：变更记录
 
@@ -957,4 +949,4 @@ CREATE VIEW IF NOT EXISTS v_study_timeline AS
 | v1 | 2026-10-29 | 初稿：本体模型、三方向取舍、AI 分层与碰撞矩阵、A–E 路线图、七条 AI 红线 |
 | v1.1 | 2026-10-29 | 原 `docs/schema-v4-draft.md` 合并为附录 A（编号改为 A.0–A.6，内部 `§N` 引用同步改为 `§A.N`）；删除附录 A 内重复的变更记录，并入本表 |
 | v1.2 | 2026-10-29 | PE-A-01 落地（`review_state` 改增量推送）：§2.2 从「待修隐患」改为「已修 + 给 v4 的两条约定」，§6.2 阶段 A 加「状态」列并标 PE-A-01 完成 |
-| v1.3 | 2026-10-29 | 全文检索调研落地：A.1.7 按实测重写（外部内容表、`detail=full`、三段式写入、4 个 rebuild 触发点、中文 2 字词 96.8% 的缺口）；§10 Q2 改为三选一且判据改为「是否需要无网可用」；§8 新增「便携 U 盘即走」负面清单项；§6.2 PE-A-04 标为「调研完成·暂不实施」并附实测结论，是否实施看题库量级；定位口径以 `PLAN.md §0.3` 为准 |
+| v1.3 | 2026-10-29 | 全文检索调研落地：A.1.7 按实测重写（外部内容表、`detail=full`、三段式写入、4 个 rebuild 触发点、中文 2 字词 96.8% 的缺口）；§10 Q2 改为三选一且判据改为「是否需要无网可用」；§8 新增「便携 U 盘即走」负面清单项；§6.2 PE-A-04 标为「调研完成·暂不实施」并附实测结论，是否实施看题库量级；定位口径以 `PLAN.md`「选型口径」为准 |

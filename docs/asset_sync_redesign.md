@@ -30,7 +30,7 @@
 现在代码里图片被当成"必须同步到位的业务数据"（`s3_asset_download_pending` 是"待办"，
 必须搬完）。但它具备三个性质，说明它其实是一次 **HTTP 缓存填充**：
 
-1. **内容寻址**：key = sha，对象不可变（`assets.rs:30`，`s3/mod.rs:42`）；
+1. **内容寻址**：key = sha，对象不可变（`assets::asset_path_for` 的分片路径、`s3::asset_key` 的对象 key）；
 2. **幂等**：重复取同一个 sha 结果完全相同（`assets_put_bytes_impl` 已做去重）；
 3. **可丢弃**：本地丢了只需重新取（本地是副本，桶才是源）。
 
@@ -46,7 +46,7 @@
 
 ### A 层：传输 → 并发 worker + 文件先行 + 批量入库
 
-**现状**（`s3/sync.rs:1234` `pull_assets`）：单线程、阻塞 `ureq`、逐 sha
+**现状**（`s3::sync::pull_assets`）：单线程、阻塞 `ureq`、逐 sha
 `GET → sha256 → 写文件 → INSERT`，每条 INSERT 各自 autocommit，全程持有
 `Mutex<Connection>`。
 
@@ -78,7 +78,7 @@
 
 ### B 层：队列 → `asset_jobs` 表替代 `db_meta` 里的 JSON
 
-**现状**：`DOWNLOAD_PENDING_KEY` / `PENDING_ASSETS_KEY`（`s3/sync.rs:47,54`）是两个
+**现状**：`DOWNLOAD_PENDING_KEY` / `PENDING_ASSETS_KEY`（`s3::sync`）是两个
 `db_meta` 里的 JSON 数组。每次合并都 load→parse→serialize→写回**整串**。
 
 **实测**：待办 10 万条时 **46 ms/次**，文本 6.3 MB；200 个日志包 ≈ **1.23 GB 重复写**。
@@ -108,22 +108,22 @@ CREATE INDEX IF NOT EXISTS idx_asset_jobs_due ON asset_jobs(kind, state, next_tr
 
 ### C 层：manifest → 让"要取哪些图"随数据到达
 
-**现状**：接收方靠 `applied_log_asset_refs`（`s3/sync.rs:542`）**逐题 `fetch_question`
+**现状**：接收方靠 `applied_log_asset_refs`（`s3::sync`）**逐题 `fetch_question`
 回读本地库**再解析 JSON 求 refs。
 
 **实测**：56.6 µs/题 → 1000 题包 57 ms（可接受）；但 100 万题 base ≈ **57 s** 白花。
 
-**改法**：上传方**已经算好了** refs（`upload_assets`，`s3/sync.rs:626`），写进信封头：
+**改法**：上传方**已经算好了** refs（`s3::sync::upload_assets`），写进信封头：
 
 ```json
 {"k":"h","format":1,"device":"…","seq":42,"rows":880,
  "assets":["<sha>","<sha>", "…"]}
 ```
 
-- `wire::decode`（`wire.rs:117`）只读已知字段，未知字段原样保留 → **老/新版本互相兼容**。
+- `s3::wire::decode` 只读已知字段，未知字段原样保留 → **老/新版本互相兼容**。
 - 接收方：有 `assets` 就直接批量入 `asset_jobs`；没有（老对象）→ 回退到
   `applied_log_asset_refs`。回退路径保留一个版本周期后删除。
-- `compact`（`s3/sync.rs:1272`）生成的 base 同样带 manifest → **新设备不扫题目就知道要什么**。
+- `s3::sync::compact` 生成的 base 同样带 manifest → **新设备不扫题目就知道要什么**。
 
 **收益**：57 s/1M → 0；**并且 `seed_download_pending` 的全库扫描几乎不再需要**
 （仅升级老库时保留一次，8 s，一次性）。→ 设计稿要解决的那个问题，在这一层被顺手消灭。
@@ -139,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_asset_jobs_due ON asset_jobs(kind, state, next_tr
 
 | 时机 | 动作 |
 |---|---|
-| `assets_resolve` 未命中（`assets.rs:150`） | 入队 `priority=1`，**同步等一次单图 GET**（超时 2 s）→ 当前渲染的图立刻出来；失败显占位符 |
+| `assets_resolve` 未命中（`assets::assets_resolve`） | 入队 `priority=1`，**同步等一次单图 GET**（超时 2 s）→ 当前渲染的图立刻出来；失败显占位符 |
 | 进入题库 / 开始练习 | 该库最近 200 题引用的 sha 入队 `priority=0`（窗口预热） |
 | 用户点「下载全部图片」 | 全量入队，显示进度、可暂停（同一队列，只是 priority/批量不同） |
 | 默认 pull | **不再**自动全量下载，只入队 |
@@ -148,7 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_asset_jobs_due ON asset_jobs(kind, state, next_tr
 
 ### E 层：base 分片（规模必需，与图片无关但同属首次同步体验）
 
-**现状**：`compact` 导出**单个** gz 对象（`s3/sync.rs:1272`）。1M 题命名空间 ~2.1 GB
+**现状**：`s3::sync::compact` 导出**单个** gz 对象。1M 题命名空间 ~2.1 GB
 （实测库 2143 MB），gzip 后仍是数百 MB 单对象：无断点、无分片校验、单请求失败重来。
 
 **改法**：`base/<ts>-<device>/part-000.ndjson.gz …` + `manifest.json`（分片清单、
@@ -169,7 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_asset_jobs_due ON asset_jobs(kind, state, next_tr
 | GC | 8 s 扫描 + 删文件 | 不变（**继续全扫，不要索引**） | — |
 | base 单对象体积 | 数百 MB 无断点 | **< 200 MB/片，可续传** | E |
 
-验收方式：`bench_assets.rs` 已能测第 2/3/4/5/6 行；A、B 层落地后各加一个 case
+验收方式：`bench_assets.rs` 已能测上表「10 万图搬完」「图片本地开销」「每包待办更新」「1M base 的 refs 提取」「首次 seed 扫描」五行；A、B 层落地后各加一个 case
 （"批量提交后的 µs/图"、"队列合并 ms/包"），E 层加"分片 base 端到端 apply"。
 
 ---
@@ -178,12 +178,12 @@ CREATE INDEX IF NOT EXISTS idx_asset_jobs_due ON asset_jobs(kind, state, next_tr
 
 | 步 | 内容 | 改动点 | 工作量 | 立刻收益 |
 |---|---|---|---|---|
-| **P0-1** | `asset_jobs` 表替代两处 `db_meta` JSON；404 进 dead | `schema.rs`（DDL 4 处同步）、`s3/sync.rs:47-54,487-520,1062-1076` | 1 d | 46 ms→0.5 ms/包；1.23 GB→0；404 风暴消失 |
-| **P0-2** | `pull_assets` 拆成"取任务 / worker 写文件 / 批量入库" | `s3/sync.rs:1234`；新增 `s3/transfer.rs`（单线程版） | 0.5 d | 本地省 ~95 s/10 万图 |
-| **P0-3** | header 带 `assets` manifest（写 + 读 + 回退） | `s3/sync.rs:305-400`（push header）、`:1272`（compact）、`:542`（消费）、`wire.rs`（无改动） | 1 d | 省 57 s/1M base；种子扫描退出热路径 |
-| **P1** | worker 池并发 4–8 + 进度事件 + 分段持锁 + command 改 `async`/`spawn_blocking` | `s3/transfer.rs`、`s3/mod.rs:189-236`、`lib.rs`（event） | 2–3 d | 100 min→12 min；UI 不冻 |
-| **P2** | 首屏按需 + 窗口预热 + 显式全量按钮（含暂停/进度 UI） | `assets.rs:150`（miss 入队）、`s3/sync.rs`（pull 不再全量）、前端 `api/*.js` + 同步页 | 2 d | 首屏秒开 |
-| **P3** | base 分片 + 分片校验 + 断点续传 | `s3/sync.rs:1272`、`s3/wire.rs`、pull 的 base 分支 | 2–3 d | 首次同步可中断、可恢复 |
+| **P0-1** | `asset_jobs` 表替代两处 `db_meta` JSON；404 进 dead | `schema.rs`（DDL 三处同步）、`s3::sync` 里 `PENDING_ASSETS_KEY` / `DOWNLOAD_PENDING_KEY` 的读写点 | 1 d | 46 ms→0.5 ms/包；1.23 GB→0；404 风暴消失 |
+| **P0-2** | `pull_assets` 拆成"取任务 / worker 写文件 / 批量入库" | `s3::sync::pull_assets`；新增 `s3/transfer.rs`（单线程版） | 0.5 d | 本地省 ~95 s/10 万图 |
+| **P0-3** | header 带 `assets` manifest（写 + 读 + 回退） | `s3::sync::push`（header）、`s3::sync::compact`、`s3::sync::applied_log_asset_refs`（消费）、`s3::wire`（无改动） | 1 d | 省 57 s/1M base；种子扫描退出热路径 |
+| **P1** | worker 池并发 4–8 + 进度事件 + 分段持锁 + command 改 `async`/`spawn_blocking` | `s3/transfer.rs`、`s3/mod.rs`（`sync_s3_push` / `sync_s3_pull` + `lock_conn`）、`lib.rs`（event） | 2–3 d | 100 min→12 min；UI 不冻 |
+| **P2** | 首屏按需 + 窗口预热 + 显式全量按钮（含暂停/进度 UI） | `assets::assets_resolve`（miss 入队）、`s3::sync::pull`（不再全量）、前端 `api/*.ts` + 同步页 | 2 d | 首屏秒开 |
+| **P3** | base 分片 + 分片校验 + 断点续传 | `s3::sync::compact`、`s3::wire`、pull 的 base 分支 | 2–3 d | 首次同步可中断、可恢复 |
 | **P4** | （可选）反向查询：`question_assets` 按需物化 | 见 §5 | 1 d | 仅 UI 功能 |
 
 依赖：P0-2 与 P0-1 互不冲突（前者 IO、后者 schema）；P1 依赖 P0-2 的拆分层；

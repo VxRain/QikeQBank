@@ -10,7 +10,7 @@
 |---|---|
 | 外壳 | Tauri 2（WebView2，系统内置无 Chromium 打包） |
 | 前端 | Vue 3 + Vite 5 + Vue Router（hash 路由）+ Tiptap 3 + KaTeX + ts-fsrs |
-| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite），45 个命令 |
+| 后端 | Rust command 层（rusqlite bundled，无需系统 SQLite；命令清单见 `src-tauri/src/lib.rs` 的 `generate_handler!`） |
 | 存储 | SQLite3（WAL + 外键级联），默认 `%APPDATA%\com.qike.qbank\qbank.db`，`QKEBANK_DB` 环境变量可覆盖 |
 
 ## 功能
@@ -38,7 +38,7 @@
 - **冲突规则与本地合并核一致**：行级「更新时间更晚者胜出」；删除以墓碑时间戳对决（`deleted_at >= updated_at` 删除赢，否则编辑赢并淘汰墓碑）。
 - **图片不进 JSON**：题面只存 `asset:<sha256>` 引用，图片按内容寻址单独存放，天然幂等、可去重。
 - **只有一个「同步」动作**：上传与下载合并为「立即同步」（先推本地增量、再拉云端增量合并）；另保留「仅上传」给只想上行、不允许云端覆盖本机的场景。
-- **自动同步**（设置 → 云端同步 → 自动同步）：默认关闭，开启后启动 60 秒首次、之后按设定间隔（10～60 分钟，默认 30）在后台静默合并；考试中不打扰，失败静默重试（5 分钟起指数退避），连续失败 3 次才提示一次。
+- **自动同步**（设置 → 云端同步 → 自动同步）：默认关闭，开启后启动时静默合并一次，之后按设定间隔在后台合并；考试中不打扰，失败静默重试（指数退避），连续失败多次才提示一次。开关与间隔以设置页当前显示为准。
 - **多设备同时开启也安全**：每台设备一条只增不改的日志链 + 行级「更新时间更晚者胜出」，合并结果与推拉顺序无关；唯一真实代价是「两台设备同时修改同一条」时后写覆盖先写，合并后会在面板里提示「其中 N 条以云端为准」。
 - **密钥只在本机**：Access Key / Secret Key 存本地数据库的 `db_meta` 表，**不进同步包、不回传前端**，因此不会随同步上传到桶里。
 - **兼容性**：AWS S3、MinIO、Cloudflare R2、Backblaze B2 等 S3 协议端点。自建端点、IP、带端口地址请开启「路径风格（path-style）」。
@@ -65,7 +65,7 @@
 
 ### 错题本
 
-- **自动收录**：答错即在册，连续答对达阈值（默认 1 次，可配）才移出，中断重计
+- **自动收录**：答错即在册，连续答对达阈值（次数可在设置页调整）才移出，中断重计
 - **手动移除**：单题/批量移出（保留练习记录，统计不受影响），之后再答错自动重回
 - **错题详情**：展开查看上次答错记录（你的选择 vs 正确答案 / 每空对照 / 作答原文），材料子题自动定位
 
@@ -89,7 +89,7 @@
 ## 快速开始
 
 > **环境前提**：Node **≥ 22.18**（`engines` 已声明）+ pnpm。前端 `src/{api,stores,utils}` 用 `.ts` 书写，
-> 27 个单测文件直接加载 `src/*.ts`，依赖 Node 原生类型剥离；低于 22.18 跑 `pnpm test:unit` 会报
+> 单测文件直接加载 `src/*.ts`，依赖 Node 原生类型剥离；低于 22.18 跑 `pnpm test:unit` 会报
 > `ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension ".ts"`（不是代码坏了，是 Node 太旧）。
 > 另需 Rust stable（Tauri 2）。
 
@@ -126,7 +126,7 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 ## 数据模型（简）
 
 - `banks` — 题库（删库级联其下全部试题；至少保留一个库）
-- `questions` — id/type/difficulty/score/status/bank_id + 6 个 JSON 列（stem/options/answer/analysis/children/plain_text 检索全文）
+- `questions` — id/type/difficulty/score/status/bank_id + 富文本 JSON 列（stem/options/answer/analysis/children）+ 检索列 `plain_text`
 - `practice_records` — 作答流水（模式/分级/对错/耗时/明细/FSRS 日志快照）
 - `review_state` — FSRS 卡片状态（stability/difficulty/reps/lapses/state/due_at）
 - `wrong_dismiss` — 错题手动移出标记（删题级联清除）
@@ -134,16 +134,15 @@ node tools/migrate-dbjson.mjs <DB.json> <out.db>   # 旧 DB.json → SQLite 迁�
 
 题目正文为 ProseMirror/Tiptap **Blocks JSON**（段落/公式/图片/填空/材料子题），整体存 TEXT 列；搜索走聚合 `plain_text`，判分走 `answer.*` 绑定。删题经外键级联同步清除流水、复习状态与移出标记。
 
+表结构、索引与种子以 `src-tauri/src/db/schema.rs` 为准；上面只列常用几张，其余是同步日志与元信息表。
+
 ## 结构
 
 ```
-├── src/                    # Vue3 前端
-│   ├── api/                # bridge.ts(invoke 封装 + unwrap 泛型) questions.ts practice.ts banks.ts assets.ts types.ts(契约)
-│   ├── components/         # QuestionEditor / QuestionForm / TiptapDocEditor / QuestionPreview / ImportFileBox / S3SyncPanel / ui
-│   ├── stores/             # bank.ts（题库） settings.ts（FSRS 参数等） autoSync.ts（自动同步定时） ui.ts（弹层服务）
-│   ├── utils/              # fsrs.ts render.ts validate.ts normalize.ts parsePureText.ts image.ts
-│   └── views/              # Home / Banks / List / Form / Practice / Review / Wrong
-├── src-tauri/              # Rust：main/lib.rs + db/ 模块目录（45 个 command + FSRS 写入校验 + 统计 + 同步合并核/资产通道/S3 通道）
-│   └── src/db/             # 9 表 Schema / 迁移 / 单测（mod schema banks questions practice assets backup settings sync s3）
-└── tools/                  # migrate-dbjson.mjs / smoke-test.mjs / make-portable.mjs
+├── src/          # 前端（Vue3 + TS）：api 只做 IPC 拆包，stores 管状态，utils 纯逻辑，views/components 界面
+├── src-tauri/    # 后端（Rust + rusqlite）：db/ 一模块一文件，命令经 lib.rs 注册
+├── tools/        # 长期维护脚本：迁移 / 冒烟 / 便携打包 / e2e 驱动
+└── tests/        # node:test 单测：纯逻辑回归 + 接线守卫（零依赖）
 ```
+
+各目录内的文件清单用 `ls` 看（本文不抄，避免与代码脱节）。
