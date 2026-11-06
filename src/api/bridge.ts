@@ -3,13 +3,13 @@ import { getDeviceId } from '../utils/device.ts'
 import type { ApiEnvelope } from './types.ts'
 
 /**
- * Provider 接口（契约见 `PLAN.md:362` 起的 §7「前端模块契约」）：
+ * Provider 接口（前端侧唯一 IPC 出口）：
  * TauriProvider 为默认实现；HttpProvider / LocalProvider 以后填充
  * { invoke(name, args) } 签名并经 setProvider 切换。
  * src/api/*.ts 只调 cmd()/unwrap()，零改动。
  *
- * 注：早期这里写「同步地基 §10」，但那份文档在**全部历史提交中从未存在**
- * （只在 commit message 里出现过）， PLAN.md 也只到 §9，故改为可核验的指向。
+ * 注：不要在这里加业务逻辑——命令签名以 Rust `#[command]` 为准，
+ * 数据结构以 `src/api/types.ts` 为准。
  */
 export interface Provider {
   invoke(name: string, args: Record<string, unknown>): Promise<unknown>

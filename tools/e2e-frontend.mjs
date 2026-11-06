@@ -15,8 +15,8 @@
  *   tools/e2e/modules/<id>.js 每个页面一个模块，export default { id, label, owns, run }
  *   tools/e2e-frontend.mjs    本文件
  *
- * 新增模块 = modules/ 加文件 + 下面 MODULE_IDS 登记 + runner.js 记基准数 + 同步三处文档
- * （AGENTS.md / docs/frontend-product-todo.md §0.3 / PLAN.md §8，模块名必须逐字一致）。
+ * 新增模块 = modules/ 加文件 + 下面 MODULE_IDS 登记 + runner.js 记基准数 + package.json 加脚本。
+ * 模块名的权威就是本文件的 MODULE_IDS（`--list` 打印它），不要往文档里再抄一份。
  *
  * ── 用法 ──
  *   pnpm test:e2e                      全量（提交前 / 发版前）

@@ -65,7 +65,7 @@ pub(crate) fn resolve_default_bank(conn: &Connection) -> Result<String, String> 
     first.ok_or_else(|| "题库不存在，请先创建题库".into())
 }
 // ---------------------------------------------------------------------------
-// Commands (PLAN §4)
+// Commands
 // ---------------------------------------------------------------------------
 
 #[tauri::command]

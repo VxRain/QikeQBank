@@ -1,4 +1,4 @@
-//! SQLite DDL 权威（PLAN §3，与 tools/smoke-test.mjs、tools/migrate-dbjson.mjs 逐字符一致）
+//! SQLite DDL 权威（与 tools/smoke-test.mjs、tools/migrate-dbjson.mjs 逐字符一致；无文档副本）
 //! + 条件种子 + v3 守卫。
 //!
 //! 双时钟语义：业务时间（updated_at/answered_at/deleted_at/dismissed_at）只用于 LWW；
@@ -201,8 +201,7 @@ pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> Result
 }
 
 /// v3 守卫（绿地策略的自动化，非兼容迁移）：检测到旧版 schema（banks 表存在
-/// 但任一 v3 关键列缺失）→ 删表重建。未发版、库内均为测试数据（PLAN/docs
-/// 前提），重建优于崩溃；assets 表 schema 未变，予以保留（图片登记不丢）。
+/// 但任一 v3 关键列缺失）→ 删表重建。未发版、库内均为测试数据，重建优于崩溃；assets 表 schema 未变，予以保留（图片登记不丢）。
 pub(crate) fn rebuild_if_legacy(conn: &Connection) -> Result<(), String> {
     if !table_exists(conn, "banks")? {
         return Ok(()); // 全新库，直接走 DDL

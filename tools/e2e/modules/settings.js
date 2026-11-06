@@ -1,8 +1,8 @@
 /**
  * e2e 模块：settings（FE-P1-10）
  *
- * 由 tools/e2e-frontend.mjs 按 id 装载（模块名三处文档必须逐字一致：
- * AGENTS.md / docs/frontend-product-todo.md §0.3 / PLAN.md §8）。
+ * 由 tools/e2e-frontend.mjs 按 id 装载（id 清单见本文件导出与 MODULE_IDS，`--list` 可打印；
+ * 改 id 须同步 runner.js 的 MODULE_BASELINE 与 package.json 脚本）。
  *
  * 只放「浏览器才能证伪」的事：
  *   · 恢复默认真的弹应用内确认（不能是原生 confirm —— 那会立刻暴露套壳感）

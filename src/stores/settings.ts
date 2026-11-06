@@ -3,9 +3,8 @@ import { settingsGet, settingsSet } from '../api/settings.ts'
 import { leaveAfterOf } from '../utils/wrongRules.ts'
 
 // 应用设置：需同步的键进 SQLite（app_settings），纯本机偏好留 localStorage。
-// localStorage 仅作写透缓存，DB 为准（依据在 PLAN.md:402——「进库同步：fsrs.*（6 键）
-// + wrongLeaveAfterCorrect；留本机：…；localStorage 只做写透缓存」）。
-// 注：早期这里写「同步地基 §6」，但 PLAN 的 §6 是 review_stats，与此无关。
+// localStorage 仅作写透缓存，DB 为准：进库同步 fsrs.*（6 键）+ wrongLeaveAfterCorrect，
+// 其余偏好留本机。键分裂的权威是 `src-tauri/src/db/settings.rs`（前端 normalize* 做语义校验）。
 const KEY = 'qbank.settings.v1'
 // 与 stores/bank.ts 的 FILTER_KEY_PREFIX 必须是同一个字符串。
 // 为什么不直接 import clearBankFilters：bank.ts 已 import 本模块（读 rememberBankFilter），

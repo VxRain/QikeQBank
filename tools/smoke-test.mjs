@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * W4 · tools/smoke-test.mjs（迭代三：同步地基 v3）
- * 冒烟测试: 临时库（与 migrate-dbjson.mjs 相同的 §3.1 DDL + §3.2 种子）
+ * 冒烟测试: 临时库（与 migrate-dbjson.mjs 相同的 DDL + 种子）
  * → 插入 6 类最小合法题（带 bank_id）→ 验证：
  *   v1 原有 9 断言:
  *     ① count(*)=6
@@ -38,8 +38,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** PLAN.md §3.1 SQLite v3 表结构 —— 与 tools/migrate-dbjson.mjs 完全一致、与 PLAN 逐字符一致 */
-/** PLAN.md §3.1 SQLite v3 表结构 —— 唯一权威 DDL，禁止与 PLAN 有任何字符差异 */
+/** SQLite v3 表结构 —— 与 tools/migrate-dbjson.mjs、src-tauri/src/db/schema.rs::MIGRATIONS 逐字符一致 */
+/** 改一处即三处同步（schema.rs / 本文件 / migrate-dbjson.mjs），缺一即缺陷 */
 export const DDL = `CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS db_meta (
 export const SEED_EPOCH = '1970-01-01T00:00:00.000Z';
 
 /**
- * PLAN.md §3.2 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
+ * 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
  *   S1 条件种子默认库 —— delete_log 有 bank_default 墓碑则跳过（防复活）；
  *        业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）；
  *   S2 db_meta —— db_uuid / schema_version='3' / created_at / sync_clock（INSERT OR IGNORE）。
@@ -249,7 +249,7 @@ function main() {
     db.exec('PRAGMA foreign_keys=ON');
     db.exec('PRAGMA journal_mode=WAL');
     db.exec(DDL);
-    seedV3(db); // §3.2 种子 S1/S2（条件种子默认库 + db_meta）
+    seedV3(db); // 种子 S1/S2（条件种子默认库 + db_meta）
     console.log(`临时库: ${dbPath}`);
     console.log('插入 6 类最小合法题（带 bank_id=bank_default）…');
 

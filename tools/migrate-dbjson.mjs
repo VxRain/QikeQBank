@@ -5,14 +5,14 @@
  * 用法:
  *   node tools/migrate-dbjson.mjs <input-DB.json> <output.db> [--dry-run]
  *
- * 流程: 参数校验 → 打开/创建 output.db → 执行 PLAN.md §3.1 DDL（逐字符一致）
- *       → 执行 §3.2 种子 S1/S2（条件种子默认题库 + db_meta）
+ * 流程: 参数校验 → 打开/创建 output.db → 执行本文件 DDL（必须与 src-tauri/src/db/schema.rs::MIGRATIONS
+ *       逐字符一致）→ 执行种子 S1/S2（条件种子默认题库 + db_meta）
  *       → 读 input.questions 数组 → 逐题 INSERT（附 bank_id，源无 bank_id → 'bank_default'）
  *       → 打印总题数/各 type 计数/默认题库（bank_default）已就绪/写入路径。
  *
  * 依赖: Node ≥ 22.5 内置 node:sqlite（DatabaseSync，Node 24 实测可用）。
  *
- * 列映射（PLAN §3 注释: 键缺失即 null，前端容忍）:
+ * 列映射（DDL 注释: 键缺失即 null，前端容忍）:
  *   stem_json←stem  options_json←options  answer_json←answer
  *   analysis_json←analysis  children_json←children  score←score
  *   bank_id←bank_id（源无 bank_id → 一律 'bank_default'）
@@ -21,18 +21,18 @@
  *   - status     缺 → 省略列，由 DDL DEFAULT 'published' 兜底
  *   - plain_text 缺 → 省略列，由 DDL DEFAULT '' 兜底
  *   - created_at/updated_at 缺 → 补当前 ISO-8601 UTC（DDL NOT NULL 且无 DEFAULT，
- *     显式 NULL 会被 NOT NULL 拒绝；与 §4 questions_create“补 created_at/updated_at”约定一致）
- *   - synced_at 缺 → 补当前 ISO（v3 新列 NOT NULL 无 DEFAULT，对应 Rust 侧新列填充 §7.4）
+ *     显式 NULL 会被 NOT NULL 拒绝；与 questions_create“补 created_at/updated_at”约定一致）
+ *   - synced_at 缺 → 补当前 ISO（v3 新列 NOT NULL 无 DEFAULT，与 Rust 侧落库方 stamp 一致）
  *   - 可空 JSON 列（options/answer/analysis/children）与 score 缺 → 存 NULL
- *   - id 缺 → 生成 q_<unixms>_<4hex>（同 §4 生成规则）
+ *   - id 缺 → 生成 q_<unixms>_<4hex>（与 Rust 侧生成规则一致）
  */
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** PLAN.md §3.1 SQLite v2 表结构 —— 唯一权威 DDL，禁止与 PLAN 有任何字符差异 */
-/** PLAN.md §3.1 SQLite v3 表结构 —— 唯一权威 DDL，禁止与 PLAN 有任何字符差异 */
+/** SQLite v2 表结构（历史副本，勿删：旧库迁移测试用） */
+/** SQLite v3 表结构 —— 与 src-tauri/src/db/schema.rs::MIGRATIONS 逐字符一致，改一处必须三处同步 */
 export const DDL = `CREATE TABLE IF NOT EXISTS banks (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS db_meta (
 export const SEED_EPOCH = '1970-01-01T00:00:00.000Z';
 
 /**
- * PLAN.md §3.2 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
+ * 种子（幂等，无 legacy 迁移；双脚本逻辑完全相同）：
  *   S1 条件种子默认库 —— delete_log 有 bank_default 墓碑则跳过（防复活）；
  *        业务时间硬编码 epoch（防新设备播种被 LWW 误判为新编辑）；
  *   S2 db_meta —— db_uuid / schema_version='3' / created_at / sync_clock（INSERT OR IGNORE）。
@@ -231,7 +231,7 @@ function main() {
     db.exec('PRAGMA foreign_keys=ON');
     db.exec('PRAGMA journal_mode=WAL');
     db.exec(DDL);
-    // 3. PLAN §3.2 种子：S1 条件种子默认题库 → S2 db_meta
+    // 3. 种子：S1 条件种子默认题库 → S2 db_meta
     seedV3(db);
   } catch (e) {
     console.error(`[migrate] 打开/初始化数据库失败（目录不存在？）: ${e.message}`);

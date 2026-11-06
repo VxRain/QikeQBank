@@ -1,8 +1,8 @@
 /**
  * e2e 模块：practice
  *
- * 由 tools/e2e-frontend.mjs 按 id 装载（模块名三处文档必须逐字一致：
- * AGENTS.md / docs/frontend-product-todo.md §0.3 / PLAN.md §8）。
+ * 由 tools/e2e-frontend.mjs 按 id 装载（id 清单见本文件导出与 MODULE_IDS，`--list` 可打印；
+ * 改 id 须同步 runner.js 的 MODULE_BASELINE 与 package.json 脚本）。
  * 每个模块在独立 browser context 里跑，mock 状态 / localStorage / 会话互不污染。
  *
  * ── 本模块只放「浏览器才能证伪」的事 ──
@@ -14,7 +14,7 @@
  *   ③ 同路由 query 变更：vue-router 不重新挂载组件，只有浏览器里能看到
  *      ——这条是这套 e2e 唯一抓到过的真缺陷（「点了弱项专练没反应」）
  *
- * 不启用假时钟：PLAN.md §8 记着 practice/exam 有 Date.now() 算用时，
+ * 不启用假时钟：practice/exam 有 Date.now() 算用时，
  * 装 clock 后 requestAnimationFrame 不跑，flush 的那一帧会一起卡住（实测会拖成 30s）。
  */
 import { flush, goto, waitUntil } from '../helpers.js'

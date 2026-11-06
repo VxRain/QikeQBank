@@ -1,8 +1,8 @@
 //! 文件与目录：导入模板（随包内嵌，缺失补发）/ 模板目录 / 数据根目录。
 //!
 //! **不含 JSON 备份导出/导入**：`export_dbjson` / `import_dbjson` / `save_text_file`
-//! 已随 FE-P0-01 移除（那套 v1/v2 契约格式不再适用），数据保全方案重新设计后再加，
-//! 见 PLAN §4「数据保全（未定）」与 docs/frontend-product-todo.md。
+//! 已移除（那套 v1/v2 契约格式不再适用），数据保全方案（本地快照 / 交换格式）未定，
+//! 定案前任何入口不得称「备份」。
 use super::{data_root, ok};
 use serde_json::{json, Value};
 use std::fs;

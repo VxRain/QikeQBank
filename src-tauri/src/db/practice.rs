@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use tauri::State;
 // ---------------------------------------------------------------------------
-// FSRS-6 调度状态（PLAN §5）：调度计算在前端（ts-fsrs），后端只做可信写入 + 范围校验。
+// FSRS-6 调度状态：调度计算在前端（src/utils/fsrs.ts，ts-fsrs），后端只做可信写入 + 范围校验。
 // state 口径与 ts-fsrs State 枚举一致：0=New 1=Learning 2=Review 3=Relearning。
 // ---------------------------------------------------------------------------
 #[derive(Debug, Clone, serde::Deserialize)]

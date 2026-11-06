@@ -1,7 +1,7 @@
 //! SQLite 持久层入口：连接/路径/通用助手 + 各领域子模块。
 //!
 //! 模块划分（按领域垂直切分）：
-//! - `schema`   DDL 权威（PLAN §3，与 tools/ 两脚本逐字符一致）+ 种子 + v3 守卫
+//! - `schema`   DDL 权威（与 tools/ 两脚本逐字符一致）+ 种子 + v3 守卫
 //! - `banks`    题库 CRUD
 //! - `questions` 题目 CRUD / 检索 / plain_text 聚合 / 批量导入
 //! - `practice` 刷题流水 / FSRS 复习状态 / 错题本 / 统计
@@ -283,7 +283,7 @@ mod tests {
         assert!(created["data"]["id"].is_string());
     }
 
-    // ================= 同步地基新测试（PLAN §7 / 方案 §12） =================
+    // ================= 同步地基测试 =================
 
     #[test]
     fn filters_by_bank_across_commands() {

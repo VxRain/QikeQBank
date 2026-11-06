@@ -53,7 +53,7 @@ pub(crate) fn settings_set_impl(conn: &mut Connection, items: &[SettingItem]) ->
         if key.is_empty() {
             return Err("setting key 不能为空".into());
         }
-        // 只做 JSON 合法性校验，语义校验归前端 normalize*（PLAN §6）
+        // 只做 JSON 合法性校验，语义校验归前端 normalize*
         serde_json::from_str::<Value>(&it.value_json)
             .map_err(|_| format!("invalid setting json for key: {key}"))?;
         // 本地显式写入：盲 UPSERT（与 import 同语义；同步通道另走 LWW）

@@ -53,7 +53,7 @@ pub(crate) fn question_alive(conn: &Connection, qid: &str) -> Result<bool, Strin
     .map(|o| o.unwrap_or(false))
 }
 
-/// 墓碑地平线（PLAN §8.2，公式锁定）：建库不足 90 天返回 None（从未 GC，
+/// 墓碑地平线（公式锁定，改动需先复测）：建库不足 90 天返回 None（从未 GC，
 /// 无需重拉），否则返回 now - 90d。禁止用 MIN(synced_at)（随数据分布漂移）。
 pub(crate) fn tombstone_floor(conn: &Connection) -> Result<Option<String>, String> {
     let created = db_meta_value(conn, "created_at")?;
@@ -273,7 +273,7 @@ pub(crate) fn export_delta_at(
 }
 
 // ---------------------------------------------------------------------------
-// 合并核：两阶段 apply（PLAN §9）
+// 合并核：两阶段 apply
 // ---------------------------------------------------------------------------
 
 /// 同步角色：决定 synced_at 处理与并列裁决方向（签名即防呆，两种拓扑各走各的）。
